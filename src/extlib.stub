@@ -1,0 +1,148 @@
+;; -*- scheme -*-
+(library (sagittarius) ;; redefine but no problem
+    (export identifier?
+	    id-name
+	    ;; sucks!!
+	    make-syntax-object
+	    make-syntax-case
+	    ;; generics
+	    make-generic
+	    register-generic
+	    generic-ref
+	    generic-set!
+	    retrieve-generic
+	    create-instance
+
+	    ;; closure
+	    closure? make-toplevel-closure
+
+	    ;; vector
+	    vector-copy
+
+	    ;; misc
+	    variable?
+
+	    ;; io
+	    port-closed? format write/ss
+
+	    ;; profiler
+	    profiler-start profiler-stop profiler-reset
+	    profiler-raw-result
+	    )
+    (import :null)
+
+  (define-cgen-stmt wrong-type-of-argument-violation
+    ((_ who msg got)
+     (dispatch
+      `(Sg_WrongTypeOfArgumentViolation ,who (Sg_MakeString ,msg SG_LITERAL_STRING) ,got '())))
+    ((_ who msg got irritants)
+     (dispatch
+      `(Sg_WrongTypeOfArgumentViolation ,who (Sg_MakeString ,msg SG_LITERAL_STRING) ,got ,irritants))))
+
+  ;; for library dependency
+  (define-c-proc identifier? (id) ::boolean
+    (result (or (SG_IDENTIFIERP id)
+		(SG_USER_DEFINED_SYNTXP id))))
+
+  (define-c-proc id-name (id) ::Object
+    (cond ((SG_IDENTIFIERP id)
+	   (result (SG_IDENTIFIER_NAME id)))
+	  ((SG_USER_DEFINED_SYNTXP id)
+	   (result (SG_SYNTAX_NAME id)))
+	  (else
+	   (wrong-type-of-argument-violation 'id-name
+					     "identifier"
+					     id))))
+
+  (define-c-proc make-syntax-object (datum) ::Object
+    (result (Sg_MakeSyntax datum #f TRUE)))
+
+  (define-c-proc make-syntax-case (literals patterns) ::Object
+    (result (Sg_MakeSyntaxCase literals patterns)))
+
+  ;; generics
+  (define-c-proc make-generic (name::Symbol printer ctr :rest fields) ::Object
+    (result (Sg_MakeGeneric name printer ctr fields)))
+  
+  (define-c-proc register-generic (name::Symbol g::Generic lib::Library) ::void
+    (Sg_RegisterGeneric name g lib))
+
+  (define-c-proc generic-ref (g name::Symbol) ::Object
+    (result (Sg_GenericRef g name)))
+
+  (define-c-proc generic-set! (g name::Symbol value) ::void
+    (Sg_GenericSet g name value))
+
+  (define-c-proc retrieve-generic (name::Symbol :optional (maybeLibrary #f)) ::Object
+    (result (Sg_RetrieveGeneric name maybeLibrary)))
+
+  (define-c-proc create-instance (g::Generic) ::Object
+    (result (Sg_CreateInstance g)))
+
+  ;; closure?
+  (define-c-proc closure? (cl) ::boolean
+    (result (SG_CLOSUREP cl)))
+
+  (define-c-proc make-toplevel-closure (cb::CodeBuilder) ::Object
+    ;; topleve closure should not have any free variables
+    (result (Sg_MakeClosure cb NULL)))
+
+  ;; vector
+  (define-c-proc vector-copy (vec::Vector :optional (start::fixnum 0)
+					            (end::fixnum -1)
+						    fill) ::Object
+    (result (Sg_VectorCopy vec start end fill)))
+
+  ;; misc
+  (define-c-proc variable? (o) ::boolean
+    (result (or (SG_SYMBOLP o)
+		(SG_IDENTIFIERP o))))
+  ;; io
+  (define-cgen-stmt check-output-port
+    ((_ name p)
+     (dispatch
+      `(unless (or (SG_OUTPORTP ,p)
+		   (SG_INOUTPORTP ,p))
+	 (wrong-type-of-argument-violation ',name
+					   "output port"
+					   ,p)))))
+  
+  (define-c-proc port-closed? (p::Port) ::boolean
+    (result (Sg_PortClosedP p)))
+
+  (define-c-proc write/ss (o :optional (p::Port (Sg_CurrentOutputPort))) ::void
+    (check-output-port write/ss p)
+    (Sg_Write o p SG_WRITE_SHARED))
+
+  (define-c-proc format (p :rest rest) ::Object
+    (cond ((SG_PORTP p)
+	   (let ((fmt::SgString* (SG_CAR rest))
+		 (objs (SG_CDR rest)))
+	     (Sg_Format p fmt objs FALSE)
+	     (result SG_UNDEF)))
+	  ((SG_BOOLP p)
+	   (let ((fmt::SgString* (SG_CAR rest))
+		 (objs (SG_CDR rest)))
+	     (if (SG_FALSEP p)
+		 (let ((out (Sg_MakeStringOutputPort 16)))
+		   (Sg_Format out fmt objs FALSE)
+		   (result (Sg_GetStringFromStringPort out)))
+		 (let ((out (Sg_CurrentOutputPort)))
+		   (Sg_Format out fmt objs FALSE)
+		   (result SG_UNDEF)))))
+	  ((SG_STRINGP p)
+	   (let ((out (Sg_MakeStringOutputPort 16)))
+	     (Sg_Format out p rest FALSE)
+	     (result (Sg_GetStringFromStringPort out))))))
+
+  ;; profiler
+  (define-c-proc profiler-start () ::void
+    (Sg_ProfilerStart))
+  (define-c-proc profiler-stop () ::fixnum
+    (result (Sg_ProfilerStop)))
+  (define-c-proc profiler-reset () ::void
+    (Sg_ProfilerReset))
+
+  (define-c-proc profiler-raw-result () ::Object
+    (result (Sg_ProfilerRawResult)))
+)
