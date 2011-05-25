@@ -61,7 +61,7 @@
 	(format #t "         (export compile compile-with-* compile-p1 compile-p2 compile-p3~%")
 	(format #t "                 ensure-library-name)~%")
 	(format #t "         (import null (core base) ~%")
-	(format #t "                      (for (core syntax-rules) expand)~%")
+	;;(format #t "                      (for (core syntax-rules) expand)~%")
 	(format #t "                      (core syntax-case)~%")
 	(format #t "                      (sagittarius)~%")
 	(format #t "                      (sagittarius vm)~%")
