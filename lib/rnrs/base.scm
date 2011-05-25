@@ -59,7 +59,6 @@
 	    (core base)
 	    (core arithmetic)
 	    (core misc)
-	    ;;(core syntax-rules)
 	    (core syntax))
 
   ;; from srfi-11 implentation
@@ -75,19 +74,15 @@
        (let-values "mktmp" ?b0 ?e0 () (?binding ...) ?tmps ?body))
 
       ((let-values "mktmp" () ?e0 ?args ?bindings ?tmps ?body)
-       (call-with-values
-	   (lambda () ?e0)
-	 (lambda ?args
-	   (let-values "bind" ?bindings ?tmps ?body))))
+       (receive ?args ?e0
+	 (let-values "bind" ?bindings ?tmps ?body)))
 
       ((let-values "mktmp" (?a . ?b) ?e0 (?arg ...) ?bindings (?tmp ...) ?body)
        (let-values "mktmp" ?b ?e0 (?arg ... x) ?bindings (?tmp ... (?a x)) ?body))
 
       ((let-values "mktmp" ?a ?e0 (?arg ...) ?bindings (?tmp ...) ?body)
-       (call-with-values
-	   (lambda () ?e0)
-	 (lambda (?arg ... . x)
-	   (let-values "bind" ?bindings (?tmp ... (?a x)) ?body))))))
+       (receive (?arg ... . x) ?e0
+	 (let-values "bind" ?bindings (?tmp ... (?a x)) ?body)))))
 
   (define-syntax let*-values
     (syntax-rules ()

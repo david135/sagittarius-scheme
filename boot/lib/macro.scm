@@ -174,31 +174,31 @@
 							    "a clause must be either (<pattern> <expression) or (<pattern> <fender> <expression)"
 							    clause))))
 			       rules)))
-	(values (extend-env newenv env)
-		`(.match-syntax-case ',literals
-				     ,expr
-				     ,@processes))))))
+	(let ((newenv (extend-env newenv env)))
+	  (values newenv
+		  `(.match-syntax-case ',literals
+				       ,newenv
+				       ,expr
+				       ,@processes)))))))
 
 (define match-ellipsis?
-  (lambda (expr pat lites)
+  (lambda (expr pat lites mac-env use-env)
     (or (null? expr)
         (and (pair? expr)
-             (match-pattern? (car expr) (car pat) lites)
-             (match-ellipsis? (cdr expr) pat lites)))))
+             (match-pattern? (car expr) (car pat) lites mac-env use-env)
+             (match-ellipsis? (cdr expr) pat lites mac-env use-env)))))
 
 (define match-ellipsis-n?
-  (lambda (expr pat n lites)
+  (lambda (expr pat n lites mac-env use-env)
     (or (= n 0)
         (and (pair? expr)
-             (match-pattern? (car expr) (car pat) lites)
-             (match-ellipsis-n? (cdr expr) pat (- n 1) lites)))))
+             (match-pattern? (car expr) (car pat) lites mac-env use-env)
+             (match-ellipsis-n? (cdr expr) pat (- n 1) lites mac-env use-env)))))
 
 (define match-pattern?
-  (lambda (expr pat lites)
+  (lambda (expr pat lites mac-env use-env)
     (define (compare a b)
-      (or (eq? a b)
-	  (eq? (identifier->symbol a)
-	       (identifier->symbol b))))
+      (identifier=? use-env a mac-env b))
     (cond ((bar? pat) #t)
           ((variable? pat)
            (cond ((id-memq pat lites)
@@ -209,20 +209,20 @@
           ((ellipsis-pair? pat)
            (if (and (null? (cddr pat)) (list? expr))
                (or (variable? (car pat))
-                   (match-ellipsis? expr pat lites))
+                   (match-ellipsis? expr pat lites mac-env use-env))
                (let ((n (- (count-pair expr) (count-pair (cddr pat)))))
                  (if (= n 0)
-                     (match-pattern? expr (cddr pat) lites)
+                     (match-pattern? expr (cddr pat) lites mac-env use-env)
                      (and (> n 0)
-                          (match-ellipsis-n? expr pat n lites)
-                          (match-pattern? (list-tail expr n) (cddr pat) lites))))))
+                          (match-ellipsis-n? expr pat n lites mac-env use-env)
+                          (match-pattern? (list-tail expr n) (cddr pat) lites mac-env use-env))))))
           ((pair? pat)
            (and (pair? expr)
-                (match-pattern? (car expr) (car pat) lites)
-                (match-pattern? (cdr expr) (cdr pat) lites)))
+                (match-pattern? (car expr) (car pat) lites mac-env use-env)
+                (match-pattern? (cdr expr) (cdr pat) lites mac-env use-env)))
           ((vector? pat)
            (and (vector? expr)
-                (match-pattern? (vector->list expr) (vector->list pat) lites)))
+                (match-pattern? (vector->list expr) (vector->list pat) lites mac-env use-env)))
           (else (equal? pat expr)))))
 
 (define collect-unique-ids ; exclude '...
@@ -310,7 +310,7 @@
 
 ;; this needs to be toplevel but how?
 (define match-syntax-case
-  (lambda (literals expr . process)
+  (lambda (literals mac-env expr . process)
     ;; TODO this might be still too naive
     (define p1env?
       (lambda (env)
@@ -327,10 +327,10 @@
 		 (p1env? (cddr expr)))
 	    (values #;(car expr) (wrap-syntax (car expr) (cadr expr) (make-eq-hashtable) #t)
 				 (cadr expr))
-	    (values expr #f))
+	    (values expr '()))
       (define match
 	(lambda (form pat)
-	  (and (match-pattern? form pat literals)
+	  (and (match-pattern? form pat literals mac-env use-env)
 	       (bind-pattern form pat literals '()))))
       ;; for now I don't consider renaming
       (let loop ((lst process))
@@ -381,7 +381,7 @@
 	(lambda (datum)
 	  (cond ((identifier? datum) datum)
 		((and (symbol? datum)
-		      use-env)
+		      (not (null? use-env)))
 		 (wrap-syntax datum use-env seen))
 		(else datum))))
 
@@ -424,9 +424,9 @@
 			  => (lambda (slot)
 			       (emit (cadr slot))))
 			 (else
-			  (if use-env
-			      (wrap-syntax lst use-env renamed-ids)
-			      lst))))
+			  (if (null? use-env)
+			      lst
+			      (wrap-syntax lst use-env renamed-ids)))))
 		  ((vector? lst)
 		   (list->vector (loop (vector->list lst))))
 		  ((pair? lst)
@@ -615,7 +615,7 @@
 		     (loop (cdr lst) (cons (car lst) acc))))))))
     (let ((seen (make-eq-hashtable))
 	  ;; creates dummy p1env
-	  (env  (if use-env use-env `#(,(vm-current-library) () #f #f))))
+	  (env  (if (null? use-env) `#(,(vm-current-library) () #f #f) use-env)))
       (receive (tmpl ranks vars)
 	  (adapt-to-rank-moved-vars template ranks (remove-duplicates vars))
 
@@ -783,7 +783,7 @@
 	    (assertion-violation (car form) "invalid syntax" form)
             (let* ((rule (car rules))
                    (pattern (car rule))
-                   (vars (and (match-pattern? form pattern lites)
+                   (vars (and (match-pattern? form pattern lites mac-env use-env)
                               (bind-pattern form pattern lites '()))))
               (if vars
                   (transcribe-compiled-templete (cdr rule) vars)
