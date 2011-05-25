@@ -42,6 +42,7 @@
   ;; load Vm procedures to run on scheme VM
   (load "lib/ext.scm")
   (load "lib/vm.scm")
+  (load "lib/macro.scm")
   )
  (sagittarius
   ;; sagittarius
@@ -1127,9 +1128,6 @@
 ;; syntax-case
 ;; I actually don't want to  do  this  but  since  I didn't  have  any  idea  to 
 ;; implement it without any specific object,  I've decided to make it like this.
-;; NB:
-;; SyntaxCase object contains pattern match result and template infomation.
-;; SyntaxObject retrieve SyntaxCase information from macro-envionment.
 (define-pass1-syntax (syntax-case form p1env) :null
   (smatch form
     ((- expr (literal ___) rule ___)
@@ -1150,6 +1148,12 @@
 			    tmpl
 			    p1env) p1env))
     (- (syntax-error "malformed syntax: expected exactly one datum" form))))
+
+(define-pass1-syntax (syntax-rules form p1env) :null
+  (smatch form
+    ((- (literal ___) rule ___)
+     (pass1 (compile-syntax-rules form literal rule p1env) p1env))
+    (- (syntax-error "malformed syntax-case" form))))
 
 ;;
 ;; define-syntax.

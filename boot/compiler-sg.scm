@@ -2,7 +2,6 @@
          (export compile compile-with-* compile-p1 compile-p2 compile-p3
                  ensure-library-name)
          (import null (core base) 
-                      (for (core syntax-rules) expand)
                       (core syntax-case)
                       (sagittarius)
                       (sagittarius vm)
@@ -1132,6 +1131,15 @@
   (- (syntax-error "malformed syntax: expected exactly one datum" form))))
 
 (define-pass1-syntax
+ (syntax-rules form p1env)
+ :null
+ (smatch
+  form
+  ((- (literal ___) rule ___)
+   (pass1 (compile-syntax-rules form literal rule p1env) p1env))
+  (- (syntax-error "malformed syntax-case" form))))
+
+(define-pass1-syntax
  (define-syntax form p1env)
  :null
  (check-toplevel form p1env)
@@ -2071,7 +2079,7 @@
  pass1/lookup-head
  (lambda
   (head p1env)
-  (and (variable? head) (p1env-lookup p1env head SYNTAX))))
+  (and (variable? head) (p1env-lookup p1env head LEXICAL))))
 
 (define
  pass1

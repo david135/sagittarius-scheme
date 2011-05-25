@@ -2,10 +2,10 @@
 ;; This file is a part of Sagittarius Scheme system.
 (library (core syntax-rules)
     (export syntax-rules 
-	    er-macro-transformer
-	    syntax-rules2)
+	    er-macro-transformer)
     (import (core)
 	    (sagittarius)
+	    (pp)
 	    (core base)
 	    (core errors)
 	    (core syntax-case)
@@ -15,7 +15,7 @@
   (define-syntax syntax-rules
     (er-macro-transformer
      (lambda (form rename compare)
-       (let ((literal (cadr form))
+       (let ((literal (unwrap-syntax (cadr form)))
 	     (clauses (cddr form)))
 	 `(,(rename 'er-macro-transformer)
 	   (,(rename 'lambda) (,(rename 'form) ,(rename 'rename) ,(rename 'compare))
