@@ -117,7 +117,7 @@
 ;; this must be in compiler.scm for global lambda let dynamic-wind
 ;; but for now
 (define compile-syntax-case
-(lambda (exp-name expr literals rules library env p1env)
+  (lambda (exp-name expr literals rules library env p1env)
     (let ((literals (unwrap-syntax literals)))
       (define parse-pattern
 	(lambda (pattern)
@@ -721,7 +721,7 @@
 		  (else tmpl))))
 	(if (and (= (safe-length tmpl) 2) (ellipsis? (car tmpl)))
 	    (expand-escaped-template (cadr tmpl) 0 vars)
-	  (expand-template tmpl 0 vars))))))
+	    (expand-template tmpl 0 vars))))))
 
 ;; procedures
 (define syntax->datum
@@ -764,6 +764,52 @@
 	      ;; TODO it might be wrong.
 	      `#(,(vm-current-library) () #f #f)))
 
+(define .transcribe-syntax-rules
+  (lambda (form use-env mac-env spec)
+
+    (define transcribe-compiled-templete
+      (lambda (spec vars)
+        (let ((template (car spec))
+              (ranks    (cadr spec)))
+	  (transcribe-template template ranks '() vars use-env #f))))
+
+    (or (pair? form)
+        (assertion-violation form "misplaced syntactic keyword" form))
+
+    (let ((lites (car spec))
+	  (rules (cdr spec)))
+      (let loop ((rules rules))
+        (if (null? rules)
+	    (assertion-violation (car form) "invalid syntax" form)
+            (let* ((rule (car rules))
+                   (pattern (car rule))
+                   (vars (and (match-pattern? form pattern lites)
+                              (bind-pattern form pattern lites '()))))
+              (if vars
+                  (transcribe-compiled-templete (cdr rule) vars)
+                  (loop (cdr rules)))))))))
+
+(define parse-syntax-rule
+  (lambda (lites clause)
+    (let ((pattern (car clause)) (template (cadr clause)))
+      (check-pattern pattern lites)
+      (let ((ranks (collect-vars-ranks pattern lites 0 '())))
+        ;;(check-template template ranks)
+        (values pattern template ranks)))))
+
+(define compile-syntax-rules
+  (lambda (form lites clauses env)
+    (let ((lites (unwrap-syntax lites))
+	  (clauses (unwrap-syntax clauses)))
+      `(lambda (x)
+	 (.transcribe-syntax-rules (car x) (cadr x) (cddr x)
+	  ',(cons lites
+		  (map (lambda (clause)
+			 (receive (pattern template ranks) (parse-syntax-rule lites clause)
+			   (list pattern template ranks)))
+		       clauses)))))))
+
+
 ;; toplevel variables
 (set-toplevel-variable! '.match-syntax-case match-syntax-case)
 (set-toplevel-variable! '.expand-syntax expand-syntax)
@@ -772,6 +818,7 @@
 (set-toplevel-variable! '.make-variable-transformer make-variable-transformer)
 (set-toplevel-variable! '.count-pair count-pair)
 (set-toplevel-variable! '.use-env #f)
+(set-toplevel-variable! '.transcribe-syntax-rules .transcribe-syntax-rules)
 
 ;;;; end of file
 ;; Local Variables:
