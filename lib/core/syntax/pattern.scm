@@ -135,7 +135,7 @@
 	      ((ellipsis-pair? pattern)
 	       (if (null? (cddr pattern))
 		   `(,_if (,_list? ,expr)
-			  ,(if (symbol? (car pattern))
+			  ,(if (variable? (car pattern))
 			       #t
 			       (do-list (car pattern) expr))
 			  ,(do-list-n pattern expr))

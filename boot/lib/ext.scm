@@ -12,6 +12,9 @@
 	s
 	(id-name s))))
 
+(define (id-name id)
+  (vector-ref id 1))
+
 ;; from chibi-scheme
 (define identifier=?
   (lambda (e1 id1 e2 id2)
