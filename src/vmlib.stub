@@ -271,19 +271,9 @@
 	  (when (SG_EQ name (SG_CAR vp))
 	    (return (SG_CDR vp)))
 	  ;; correct?
-	  (when (and (SG_IDENTIFIERP (SG_CAR vp))
-		     (SG_IDENTIFIERP oname))
-	    (let ((e1 (SG_IDENTIFIER_ENVS oname))
-		  (e2 (SG_IDENTIFIER_ENVS (SG_CAR vp)))
-		  (lam1 (Sg_Assq oname e1))
-		  (lam2 (Sg_Assq (SG_CAR vp) e2)))
-	      (unless (SG_FALSEP lam1)
-		(set! lam1 (SG_CDR lam1)))
-	      (unless (SG_FALSEP lam2)
-		(set! lam2 (SG_CDR lam2)))
-	      (if (and (SG_EQ oname (SG_CAR vp))
-		       (SG_EQ lam1 lam2))
-		  (return (SG_CDR vp)))))))
+	  (when (SG_IDENTIFIERP oname)
+	    (if (Sg_IdentifierEqP '() oname p1env (SG_CAR vp))
+		(return (SG_CDR vp))))))
       (if (SG_SYMBOLP name)
 	  (let ((lib (SG_VECTOR_ELEMENT p1env 0)))
 	    (result (Sg_MakeIdentifier (SG_SYMBOL name) '() (SG_LIBRARY lib))))
@@ -300,25 +290,14 @@
   ;; in compiler.scm), it needs to be changed as well.
   (define-c-proc p1env-pvar-lookup (p1env::Vector name) ::Object
     (let ((name_identp::int (SG_IDENTIFIERP name))
-	  (frames (SG_VECTOR_ELEMENT p1env 1))
-	  ;; for identifier=? we need a size 2 vector.
-	  (dummy_env (Sg_MakeVector 2 SG_UNDEF)))
-      (when name_identp
-	(set! (SG_VECTOR_ELEMENT dummy_env 0) (SG_IDENTIFIER_LIBRARY name))
-	(set! (SG_VECTOR_ELEMENT dummy_env 1) (SG_IDENTIFIER_ENVS name)))
+	  (frames (SG_VECTOR_ELEMENT p1env 1)))
       (dopairs (fp frames)
 	(unless (== (SG_CAAR fp) (SG_MAKE_INT 2))
 	  (continue))
 	(dolist (vp (SG_CDAR fp))
-	  (when (or (and name_identp
-			 ;; global id.
-			 (SG_NULLP (SG_IDENTIFIER_ENVS name))
-			 (SG_EQ (SG_IDENTIFIER_NAME name) (SG_CAR vp)))
-		    (and name_identp
-			 (Sg_IdentifierEqP p1env name
-					   dummy_env (SG_CAR vp)))
-		    (SG_EQ name (SG_CAR vp)))
-	    (return (SG_CDR vp)))))
+	  (when (SG_IDENTIFIERP name)
+	    (if (Sg_IdentifierEqP '() name p1env (SG_CAR vp))
+		(return (SG_CDR vp))))))
       ;; no variable found in p1env.
       (if (SG_SYMBOLP name)
 	  (let ((lib (SG_VECTOR_ELEMENT p1env 0)))

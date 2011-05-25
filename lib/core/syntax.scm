@@ -19,7 +19,6 @@
 	    (core syntax-case)
 	    (sagittarius))
 
-
   (define-syntax unsyntax
     (lambda (x)
       (syntax-violation (and (pair? x) (car x)) "misplaced auxiliary syntactic keyword" x)))
