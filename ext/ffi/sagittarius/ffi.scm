@@ -297,7 +297,7 @@
 	 ;; black magic ...
 	 #'(begin
 	     ;; if there are more than one struct in the same library,
-	     ;; and if one of them refere it, it cause unbound variable error.
+	     ;; and if one of them refers it, it cause unbound variable error.
 	     ;; to avoid it, we need to do this. ugly...
 	     (%insert-binding (vm-current-library)
 			      'name

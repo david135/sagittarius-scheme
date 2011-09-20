@@ -63,11 +63,11 @@ typedef struct SgContFrameRec
 {
   struct SgContFrameRec *prev; 	/* previous frame */
   int            size;		/* size of argument frame */
-  int            displaySize;	/* size of display closure */
   SgWord        *pc;		/* next PC */
-  SgObject       cl;		/* cl register value */
   SgObject       dc;		/* dc register value */
+  SgObject       cl;		/* cl register value */
   SgObject      *fp;		/* fp register value */
+  SgObject      *argp;		/* argp */
 } SgContFrame;
 
 #define CONT_FRAME_SIZE (sizeof(SgContFrame)/sizeof(SgObject))
@@ -174,6 +174,7 @@ struct SgVMRec
   SgObject  dc;			/* display closure */
   SgObject *fp;			/* frame pointer */
   SgObject *sp;			/* stack pointer */
+  SgObject *argp;		/* argument pointer */
 
   SgContFrame  *cont;     	/* saved continuation frame */
 
@@ -315,6 +316,7 @@ typedef enum {
 #define FP(vm)             (vm)->fp
 #define SP(vm)             (vm)->sp
 #define CONT(vm)           (vm)->cont
+#define ARGP(vm)           (vm)->argp
 
 #define INDEX(sp, n)        (*((sp) - (n) - 1))
 #define INDEX_SET(sp, n, v) (*((sp) - (n) - 1) = (v))
@@ -327,7 +329,7 @@ typedef enum {
 #define IN_STACK_P(ptr, vm)				\
   ((uintptr_t)((ptr) - vm->stack) < SG_VM_STACK_SIZE)
 
-#define SG_LET_FRAME_SIZE           2
+#define SG_LET_FRAME_SIZE           CONT_FRAME_SIZE
 #define SG_FRAME_SIZE               CONT_FRAME_SIZE
 
 
