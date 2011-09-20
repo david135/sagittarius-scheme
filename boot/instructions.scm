@@ -458,7 +458,11 @@
     (cond ((== rargc 0)
 	   (set! (SP vm) (- (SP vm) 1))
 	   (when val2
-	     (set! (SP vm) (shift_args (FP vm) nargc (SP vm))))
+	     (DISCARD_FRAME nargc)
+	     #;(let ((sp::SgObject* (SP vm)))
+	       (set! sp (shift_args (FP vm) nargc (SP vm)))
+	       (POP_CONT TRUE)
+	       (set! (SP vm) sp)))
 	   (set! (-> vm (arrayref callCode 0)) (MERGE_INSN_VALUE1 CALL nargc))
 	   (set! (PC vm) (-> vm callCode)))
 	  (else
@@ -466,7 +470,11 @@
 	   (dolist (v (SG_CDR (AC vm)))
 	     (PUSH (SP vm) v))
 	   (when val2
-	     (set! (SP vm) (shift_args (FP vm) (+ nargc rargc) (SP vm))))
+	     (DISCARD_FRAME (+ nargc rargc))
+	     #;(let ((sp::SgObject* (SP vm)))
+	       (set! sp (shift_args (FP vm) (+ nargc rargc) (SP vm)))
+	       (POP_CONT TRUE)
+	       (set! (SP vm) sp)))
 	   (set! (-> vm (arrayref callCode 0))
 		 (MERGE_INSN_VALUE1 CALL (+ nargc rargc)))
 	   (set! (PC vm) (-> vm callCode))))
@@ -586,8 +594,9 @@
 (define-inst LET_FRAME (1 0 #t)
   (INSN_VAL1 val1 c)
   (CHECK_STACK val1 vm)
-  (PUSH (SP vm) (DC vm))
-  (PUSH (SP vm) (FP vm)))
+  (PUSH_CONT vm NULL))
+  ;;(PUSH (SP vm) (DC vm))
+  ;;(PUSH (SP vm) (FP vm)))
 
 #|
       CASE(POP_LET_FRAME) {

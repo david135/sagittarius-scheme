@@ -662,7 +662,7 @@ CASE(APPLY) {
     if (rargc == 0    ) {
       SP(vm)=(SP(vm) - 1);
       if (val2) {
-        SP(vm)=shift_args(FP(vm), nargc, SP(vm));
+        DISCARD_FRAME(nargc);
       }
 ;
       vm->callCode[0]=MERGE_INSN_VALUE1(CALL, nargc);
@@ -680,7 +680,7 @@ CASE(APPLY) {
       }
 ;
       if (val2) {
-        SP(vm)=shift_args(FP(vm), (nargc + rargc), SP(vm));
+        DISCARD_FRAME((nargc + rargc));
       }
 ;
       vm->callCode[0]=MERGE_INSN_VALUE1(CALL, (nargc + rargc));
@@ -738,8 +738,7 @@ CASE(FRAME) {
 CASE(LET_FRAME) {
   INSN_VAL1(val1, c);
   CHECK_STACK(val1, vm);
-  PUSH(SP(vm), DC(vm));
-  PUSH(SP(vm), FP(vm));
+  PUSH_CONT(vm, NULL);
   NEXT;
 }
 
