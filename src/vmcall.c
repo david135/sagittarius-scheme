@@ -47,9 +47,10 @@
     PC(vm) = SG_SUBR_RETURN_CODE(AC(vm));
     SG_SUBR_RETURN_CODE(AC(vm))[0] = SG_WORD(RET);
     CL(vm) = AC(vm);
-    FP(vm) = SP(vm) - argc;
+    SP(vm) = ARGP(vm);
+    /* FP(vm) = SP(vm) - argc; */
     SG_PROF_COUNT_CALL(vm, AC(vm));
-    AC(vm) = SG_SUBR_FUNC(AC(vm))(SP(vm) - argc, argc, SG_SUBR_DATA(AC(vm)));
+    AC(vm) = SG_SUBR_FUNC(AC(vm))(ARGP(vm)/* SP(vm) - argc */, argc, SG_SUBR_DATA(AC(vm)));
   } else if (SG_CLOSUREP(AC(vm))) {
     SgClosure *c = SG_CLOSURE(AC(vm));
     SgCodeBuilder *cb = SG_CODE_BUILDER(c->code);
@@ -60,23 +61,24 @@
     PC(vm) = cb->code;
     if (cb->optional) {
       int extra = argc - required;
+      SgObject *sp;
       if (-1 == extra) {
-	SgObject *sp = unshift_args(SP(vm), 1);
+	sp = unshift_args(SP(vm), 1);
 	INDEX_SET(sp, 0, SG_NIL);
-	SP(vm) = sp;
+	ARGP(vm) = SP(vm) = sp;
 	FP(vm) = sp - required;
       } else if (extra >= 0) {
-	SgObject *sp;
 	INDEX_SET(SP(vm), extra, stack_to_pair_args(SP(vm), extra + 1));
 	sp = SP(vm) - extra;
+	ARGP(vm) = SP(vm) = sp;
 	FP(vm) = sp - required;
-	SP(vm) = sp;
       } else {
 	Sg_WrongNumberOfArgumentsViolation(SG_PROCEDURE_NAME(AC(vm)),
 					   required - 1, argc, SG_UNDEF);
       }
     } else if (required == argc) {
       FP(vm) = SP(vm) - argc;
+      ARGP(vm) = SP(vm);
     } else {
       SgObject args = SG_NIL;
       int i;
