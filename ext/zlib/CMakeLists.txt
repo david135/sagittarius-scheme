@@ -1,0 +1,57 @@
+# Sagittarius extensions -*- CMake -*-
+# 
+# Build file for zlib
+
+ADD_LIBRARY(sagittarius--zlib MODULE
+  zlib.c zlib_stub.c)
+
+INCLUDE(${CMAKE_CURRENT_SOURCE_DIR}/../addstub.cmake)
+ADD_STUBS(sagittarius--zlib
+  COMMAND ${GENSTUB}
+  FILES ${CMAKE_CURRENT_SOURCE_DIR}/zlib_stub.stub)
+
+#check if zlib is available
+INCLUDE(${CMAKE_ROOT}/Modules/FindZLIB.cmake)
+
+IF (NOT ${ZLIB_FOUND})
+#  IF (MSVC)
+#    # use DLL which is provied by zlib.net
+#  ELSE()
+    # well we need to compile it
+    FIND_FILE(HAS_ZLIB_ARCHIVE
+      NAMES zlib.tar.gz
+      PATHS ${CMAKE_CURRENT_SOURCE_DIR})
+    MESSAGE(STATUS "Looked for zlib.tar.gz: ${HAS_ZLIB_ARCHIVE}")
+    SET(USED_ZLIB_VERSION "zlib-1.2.5")
+    IF (NOT EXISTS ${HAS_ZLIB_ARCHIVE})
+      MESSAGE(STATUS "donwloading zlib")
+      FILE(
+  	DOWNLOAD "http://zlib.net/${USED_ZLIB_VERSION}.tar.gz"
+                 "${CMAKE_CURRENT_SOURCE_DIR}/zlib.tar.gz"
+  	SHOW_PROGRESS)
+      EXECUTE_PROCESS(COMMAND ${CMAKE_COMMAND} -E tar xzf
+	${CMAKE_CURRENT_SOURCE_DIR}/zlib.tar.gz
+	WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+	)
+      FILE(REMOVE ${CMAKE_CURRENT_SOURCE_DIR}/${USED_ZLIB_VERSION}/zconf.h)
+      MESSAGE(STATUS "unpacked zlib.tar.gz")
+    ENDIF()
+    # CMake add C_FLAGS to RC_FLAGS. how stupid it is, eh?
+    ADD_SUBDIRECTORY(${USED_ZLIB_VERSION} zlib)
+    INCLUDE_DIRECTORIES(${CMAKE_CURRENT_SOURCE_DIR}/${USED_ZLIB_VERSION})
+    # for zconf.h
+    INCLUDE_DIRECTORIES(${CMAKE_CURRENT_BINARY_DIR}/zlib)
+ENDIF()
+
+SET_TARGET_PROPERTIES(sagittarius--zlib PROPERTIES PREFIX "")
+TARGET_LINK_LIBRARIES(sagittarius--zlib sagittarius)
+IF (UNIX)
+  TARGET_LINK_LIBRARIES(sagittarius--zlib z)
+ELSE()
+  TARGET_LINK_LIBRARIES(sagittarius--zlib zlib)
+ENDIF()
+
+INSTALL(TARGETS sagittarius--zlib
+  DESTINATION ${SAGITTARIUS_DYNLIB_PATH})
+INSTALL(DIRECTORY rfc
+  DESTINATION ${SAGITTARIUS_SHARE_LIB_PATH})
