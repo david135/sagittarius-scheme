@@ -1,0 +1,818 @@
+;; -*- scheme -*-
+;; for Ypsilon
+#!compatible
+(library (sagittarius) ;; redefine but no problem
+    (export identifier?
+	    identifier=?
+	    id-name
+	    id-memq
+	    identifier->symbol
+	    ;; generics
+	    make-generic
+	    register-generic
+	    generic-ref
+	    generic-set!
+	    retrieve-generic
+	    create-instance
+
+	    ;; closure
+	    closure? make-toplevel-closure
+
+	    ;; list
+	    circular-list? dotted-list?
+	    reverse! acons append!
+
+	    ;; vector
+	    vector-copy
+
+	    ;; misc
+	    current-exception-handler
+	    parent-exception-handler
+	    variable? arity
+	    unbound undefined undefined?
+	    add-load-path load
+	    gensym unwrap-syntax wrap-syntax
+	    current-dynamic-environment
+	    add-dynamic-load-path
+	    load-dynamic-library
+	    sagittarius-version
+	    report-error
+	    ;; string
+	    string-scan
+	    ;; for srfi-13
+	    %maybe-substring
+
+	    ;; filesystem
+	    file-size-in-bytes
+	    file-regular?
+	    file-directory?
+	    file-symbolic-link?
+	    file-readable?
+	    file-writable?
+	    file-executable?
+	    file-stat-ctime
+	    file-stat-mtime
+	    create-symbolic-link
+	    create-hard-link
+	    rename-file
+	    delete-directory
+	    create-directory
+	    read-directory
+	    current-directory
+	    set-current-directory
+
+	    ;; hashtable
+	    hashtable-keys-list hashtable-values-list
+	    hashtable-values
+	    hashtable-type hashtable-compare hashtable-hasher
+	    ;; extra hashtable
+	    make-equal-hashtable make-string-hashtable
+
+	    ;; error
+	    ;; from Gauche
+	    with-error-handler
+
+	    ;; io
+	    port-closed? format write/ss read/ss
+	    make-codec port-info
+
+	    ;; profiler
+	    profiler-start profiler-stop profiler-reset
+	    profiler-raw-result
+	    disasm
+
+	    ;; keyword
+	    make-keyword
+	    keyword?
+
+	    ;; cache
+	    clean-cache
+	    ;; env
+	    getenv
+	    setenv
+	    getenv-alist
+
+	    ;; bytevector
+	    bytevector->integer
+	    integer->bytevector
+	    ;; env
+	    current-usage-env
+	    current-macro-env
+	    ;; time
+	    time-usage
+	    ;; cond-expand
+	    cond-features
+	    ;; record
+	    make-record-type
+	    record-type?
+	    record-type-rtd
+	    record-type-rcd
+	    ;; charset
+	    char-set? char-set char-set-copy
+	    char-set-contains?
+	    ;; internal use
+	    %char-set-equal?
+	    %char-set<=?
+	    %char-set-add-chars!
+	    %char-set-add-range!
+	    %char-set-add!
+	    %char-set-complement!
+	    %char-set-ranges
+
+	    ;; reader macro
+	    get-macro-character
+	    set-macro-character
+	    get-dispatch-macro-character
+	    set-dispatch-macro-character
+	    %insert-macro-character
+	    %insert-dispatch-macro-character
+	    read-delimited-list
+
+	    constant-literal?
+	    digit-value
+	    ;; weak pointers
+	    make-weak-vector
+	    weak-vector-length
+	    weak-vector-ref
+	    weak-vector-set!
+	    )
+    (import :null)
+  (decl-code
+   (.include <sagittarius/cache.h>))
+
+  (define-cgen-stmt assertion-violation
+    ((_ who msg)
+     (dispatch
+      `(begin
+	 (Sg_AssertionViolation ,who (Sg_MakeString ,msg SG_LITERAL_STRING) '())
+	 (return SG_UNDEF))))
+    ((_ who msg irritants)
+     (dispatch
+      `(begin
+	 (Sg_AssertionViolation ,who (Sg_MakeString ,msg SG_LITERAL_STRING) ,irritants)
+	 (return SG_UNDEF)))))
+
+  (define-cgen-stmt wrong-type-of-argument-violation
+    ((_ who msg got)
+     (dispatch
+      `(begin
+	 (Sg_WrongTypeOfArgumentViolation ,who (Sg_MakeString ,msg SG_LITERAL_STRING) ,got '())
+	 (result SG_UNDEF))))
+    ((_ who msg got irritants)
+     (dispatch
+      `(begin
+	 (Sg_WrongTypeOfArgumentViolation ,who (Sg_MakeString ,msg SG_LITERAL_STRING) ,got ,irritants)
+	 (result SG_UNDEF)))))
+
+  ;; for library dependency
+  (define-c-proc identifier=? (use_env x mac_env y) ::boolean
+    (result (Sg_IdentifierEqP use_env x mac_env y)))
+
+  (define-c-proc id-name (id) ::Object
+    (cond ((SG_IDENTIFIERP id)
+	   (result (SG_IDENTIFIER_NAME id)))
+	  ((SG_USER_DEFINED_SYNTXP id)
+	   (result (SG_SYNTAX_NAME id)))
+	  (else
+	   (wrong-type-of-argument-violation 'id-name
+					     "identifier"
+					     id))))
+
+  (define-c-proc identifier->symbol (id) ::Object
+    (unless (or (SG_SYMBOLP id)
+		(SG_IDENTIFIERP id))
+      (wrong-type-of-argument-violation 'identifier->symbol
+					"symbol or identifier"
+					id))
+    (if (SG_SYMBOLP id)
+	(result id)
+	(result (SG_IDENTIFIER_NAME id))))
+
+  (define-c-proc id-memq (id lst) ::Object
+    (if (SG_IDENTIFIERP id)
+	(result (Sg_Memq (SG_IDENTIFIER_NAME id) lst))
+	(result (Sg_Memq id lst))))
+
+  ;; generics
+  (define-c-proc make-generic (name::Symbol printer ctr :rest fields) ::Object
+    (result (Sg_MakeGeneric name printer ctr fields)))
+  
+  (define-c-proc register-generic (name::Symbol g::Generic lib::Library) ::void
+    (Sg_RegisterGeneric name g lib))
+
+  (define-c-proc generic-ref (g name::Symbol) ::Object
+    (result (Sg_GenericRef g name)))
+
+  (define-c-proc generic-set! (g name::Symbol value) ::void
+    (Sg_GenericSet g name value))
+
+  (define-c-proc retrieve-generic (name::Symbol :optional (maybeLibrary #f)) ::Object
+    (result (Sg_RetrieveGeneric name maybeLibrary)))
+
+  (define-c-proc create-instance (g::Generic) ::Object
+    (result (Sg_CreateInstance g)))
+
+  ;; closure?
+  (define-c-proc closure? (cl) ::boolean
+    (result (SG_CLOSUREP cl)))
+
+  (define-c-proc make-toplevel-closure (cb::CodeBuilder) ::Object
+    ;; topleve closure should not have any free variables
+    (result (Sg_MakeClosure cb NULL)))
+
+  ;; list
+  (define-c-proc dotted-list? (lst) ::boolean
+    (result (SG_DOTTED_LISTP lst)))
+
+  (define-c-proc circular-list? (lst) ::boolean
+    (result (SG_CIRCULAR_LISTP lst)))
+
+  (define-c-proc reverse! (lis) ::Object
+    (result (Sg_ReverseX lis)))
+
+  (define-c-proc acons (a b alist) ::Object
+    (result (Sg_Acons a b alist)))
+
+  (define-c-proc append! (:rest lst) ::Object
+    (let ((h '()) (t '()))
+      (dopairs (cp lst)
+	(when (and (not (SG_PAIRP (SG_CAR cp)))
+		   (SG_NULLP (SG_CDR cp)))
+	  (if (SG_NULLP h)
+	      (set! h (SG_CAR cp))
+	      (SG_SET_CDR t (SG_CAR cp)))
+	  (break))
+	(SG_APPEND h t (SG_CAR cp)))
+      (result h)))
+
+  ;; vector
+  (define-c-proc vector-copy (vec::Vector :optional (start::fixnum 0)
+					            (end::fixnum -1)
+						    fill) ::Object
+    (result (Sg_VectorCopy vec start end fill)))
+
+  (define-c-proc current-exception-handler (:optional handle) ::Object
+    (if (SG_UNBOUNDP handle)
+	(result (-> (Sg_VM) exceptionHandler))
+	(begin
+	  (set! (-> (Sg_VM) exceptionHandler) handle)
+	  (result SG_UNDEF))))
+
+  (define-c-proc parent-exception-handler (:optional handle) ::Object
+    (if (SG_UNBOUNDP handle)
+	(result (-> (Sg_VM) parentExHandler))
+	(begin
+	  (set! (-> (Sg_VM) parentExHandler) handle)
+	  (result SG_UNDEF))))
+
+  ;; misc
+  (define-c-proc variable? (o) ::boolean
+    (result (or (SG_SYMBOLP o)
+		(SG_IDENTIFIERP o))))
+
+  ;; arity returns pair of required and optional arguments count.
+  ;; returned pair is structured like this : (<required> . <optional>)
+  ;; <required> : # of required arguments
+  ;; <optional> : #t or #f
+  (define-c-proc arity (p::Procedure) ::Object
+    (let ((req::int (SG_PROCEDURE_REQUIRED p))
+	  (opt::int (SG_PROCEDURE_OPTIONAL p)))
+      (if (> opt 0)
+	  (result (Sg_Cons (SG_MAKE_INT req) #t))
+	  (result (Sg_Cons (SG_MAKE_INT req) #f)))))
+
+  (define-c-proc unbound () ::Object
+    (result SG_UNBOUND))
+
+  (define-c-proc undefined () ::Object
+    (result SG_UNDEF))
+
+  (define-c-proc undefined? (o) ::boolean
+    (result (SG_UNDEFP o)))
+
+  (define-c-proc add-load-path (path::String) ::Object
+    (result (Sg_AddLoadPath path)))
+
+  (define-c-proc load (path::String) ::Object
+    (result (Sg_VMLoad path)))
+
+  (define-c-proc gensym (:optional (prefix::String NULL)) ::Object
+    (result (Sg_Gensym prefix)))
+
+  (define-c-proc unwrap-syntax (form) ::Object
+    (result (Sg_UnwrapSyntax form)))
+
+  (define-c-proc wrap-syntax (form p1env::Vector :optional (seen NULL) (partialP #f)) ::Object
+    (result (Sg_WrapSyntax form p1env seen (not (SG_FALSEP partialP)))))
+
+  (define-c-proc current-dynamic-environment (:optional (other::HashTable SG_UNBOUND)) ::Object
+    (if (SG_UNBOUNDP other)
+	(result (-> (Sg_VM) parameters))
+	(begin
+	  (set! (-> (Sg_VM) parameters) other)
+	  (result SG_UNDEF))))
+
+  (define-c-proc add-dynamic-load-path (path::String) ::Object
+    (result (Sg_AddDynamicLoadPath path)))
+
+  (define-c-proc load-dynamic-library (name::String :optional init) ::Object
+    (result (Sg_DynLoad name init 0)))
+
+  (define-c-proc sagittarius-version () ::Object
+    (result (Sg_MakeString (UC SAGITTARIUS_VERSION) SG_LITERAL_STRING)))
+
+  (define-c-proc report-error (e) ::void
+    (Sg_ReportError e))
+
+  ;; filesystem
+  (define-c-proc file-size-in-bytes (path::String) ::Object
+    (let ((size (Sg_FileSize path)))
+      (if (SG_UNDEFP size)
+	  (Sg_AssertionViolation procedureName
+				 (Sg_GetLastErrorMessage)
+				 path))
+      (result size)))
+  
+  (define-c-proc file-regular? (path::String) ::boolean
+    (result (Sg_FileRegularP path)))
+
+  (define-c-proc file-directory? (path::String) ::boolean
+    (result (Sg_DirectoryP path)))
+
+  (define-c-proc file-symbolic-link? (path::String) ::boolean
+    (result (Sg_FileSymbolicLinkP path)))
+
+  (define-c-proc file-readable? (path::String) ::boolean
+    (result (Sg_FileReadableP path)))
+
+  (define-c-proc file-writable? (path::String) ::boolean
+    (result (Sg_FileWritableP path)))
+
+  (define-c-proc file-executable? (path::String) ::boolean
+    (result (Sg_FileExecutableP path)))
+
+  (define-c-proc file-stat-ctime (path::String) ::Object
+    (let ((tm (Sg_FileChangeTime path)))
+      (if (SG_UNDEFP tm)
+	  (Sg_AssertionViolation procedureName
+				 (Sg_GetLastErrorMessage)
+				 path))
+      (result tm)))
+
+  (define-c-proc file-stat-mtime (path::String) ::Object
+    (let ((tm (Sg_FileModifyTime path)))
+      (if (SG_UNDEFP tm)
+	  (Sg_AssertionViolation procedureName
+				 (Sg_GetLastErrorMessage)
+				 path))
+      (result tm)))
+
+  (define-c-proc file-stat-atime (path::String) ::Object
+    (let ((tm (Sg_FileAccessTime path)))
+      (if (SG_UNDEFP tm)
+	  (Sg_AssertionViolation procedureName
+				 (Sg_GetLastErrorMessage)
+				 path))
+      (result tm)))
+
+  (define-c-proc create-symbolic-link (oldpath::String newpath::String) ::void
+    (unless (Sg_CreateSymbolicLink oldpath newpath)
+      (Sg_AssertionViolation procedureName
+			     (Sg_GetLastErrorMessage)
+			     (SG_LIST2 oldpath newpath))))
+
+  (define-c-proc rename-file (oldpath::String newpath::String) ::void
+    (unless (Sg_FileRename oldpath newpath)
+      (Sg_AssertionViolation procedureName
+			     (Sg_GetLastErrorMessage)
+			     (SG_LIST2 oldpath newpath))))
+
+  (define-c-proc delete-directory (path::String) ::void
+    (unless (Sg_DeleteFileOrDirectory path)
+      (Sg_AssertionViolation procedureName
+			     (Sg_GetLastErrorMessage)
+			     path)))
+
+  (define-c-proc create-directory (path::String) ::void
+    (unless (Sg_CreateDirectory path)
+      (Sg_AssertionViolation procedureName
+			     (Sg_GetLastErrorMessage)
+			     path)))
+
+  (define-c-proc read-directory (path::String) ::Object
+    (result (Sg_ReadDirectory path)))
+
+  ;; make this parameterizable
+  (define-c-proc current-directory (:optional (path::String NULL)) ::Object
+    (cond (path
+	   (Sg_SetCurrentDirectory path)
+	   (result SG_UNDEF))
+	  (else
+	   (result (Sg_CurrentDirectory)))))
+
+  (define-c-proc set-current-directory (path::String) ::void
+    (Sg_SetCurrentDirectory path))
+
+  ;; string
+  (define-c-proc string-scan (s1::String s2 :optional (mode 'index)) ::Object
+    (let ((rmode::int 0))
+      (cond ((SG_EQ mode 'index)   (set! rmode SG_STRING_SCAN_INDEX))
+	    ((SG_EQ mode 'before)  (set! rmode SG_STRING_SCAN_BEFORE))
+	    ((SG_EQ mode 'after)   (set! rmode SG_STRING_SCAN_AFTER))
+	    ((SG_EQ mode 'before*) (set! rmode SG_STRING_SCAN_BEFORE2))
+	    ((SG_EQ mode 'after*)  (set! rmode SG_STRING_SCAN_AFTER2))
+	    ((SG_EQ mode 'both)    (set! rmode SG_STRING_SCAN_BOTH))
+	    (else
+	     (assertion-violation 'string-scan
+				  "bad value in mode argument. it must be one of 'index, 'before, 'after, 'before*, 'after* or 'both"
+				  mode)))
+      (cond ((SG_STRINGP s2) (result (Sg_StringScan s1 (SG_STRING s2) rmode)))
+	    ((SG_CHARP s2)   (result (Sg_StringScanChar s1 (SG_CHAR_VALUE s2) rmode)))
+	    (else
+	     (wrong-type-of-argument-violation 'string-scan
+					       "string or char"
+					       s2
+					       (SG_LIST3 s1 s2 mode))))))
+
+  (define-c-proc %maybe-substring (s::String :optional (start::fixnum 0) (end::fixnum -1)) ::Object
+    (result (Sg_MaybeSubstring s start end)))
+
+  ;; hashtable
+  (define-c-proc make-equal-hashtable (:optional (k::fixnum 200)) ::Object
+    (result (Sg_MakeHashTableSimple SG_HASH_EQUAL k)))
+
+  (define-c-proc make-string-hashtable (:optional (k::fixnum 200)) ::Object
+    (result (Sg_MakeHashTableSimple SG_HASH_STRING k)))
+
+  (define-c-proc hashtable-keys-list (ht::HashTable) ::Object
+    (result (Sg_HashTableKeys ht)))
+
+  (define-c-proc  hashtable-values-list (ht::HashTable) ::Object
+    (result (Sg_HashTableValues ht)))
+
+  (define-c-proc hashtable-type (ht::HashTable) ::Object
+    (cond ((== (-> ht type) SG_HASH_EQ)
+	   (result 'eq))
+	  ((== (-> ht type) SG_HASH_EQV)
+	   (result 'eqv))
+	  ((== (-> ht type) SG_HASH_EQUAL)
+	   (result 'equal))
+	  ((== (-> ht type) SG_HASH_STRING)
+	   (result 'string))
+	  ((== (-> ht type) SG_HASH_GENERAL)
+	   (result 'general))
+	  (else
+	   (assertion-violation 'hashtable-type
+				"invalid hashtable type"
+				ht))))
+
+  (define-c-proc hashtable-compare (ht::HashTable) ::Object
+    (result (-> (SG_HASHTABLE_CORE ht) generalCompare)))
+
+  (define-c-proc hashtable-hasher (ht::HashTable) ::Object
+    (result (-> (SG_HASHTABLE_CORE ht) generalHasher)))
+
+  ;; just for consistancy
+  (define-c-proc hashtable-values (ht::HashTable) ::Object
+    (result (Sg_ListToVector (Sg_HashTableValues ht) 0 -1)))
+
+  ;; error
+  (define-c-proc with-error-handler (handler thunk) ::Object
+    (result (Sg_VMWithErrorHandler handler thunk)))
+
+  ;; io
+  (define-cgen-stmt check-input-port
+    ((_ name p)
+     (dispatch
+      `(unless (or (SG_INPORTP ,p)
+		   (SG_INOUTPORTP ,p))
+	 (wrong-type-of-argument-violation ',name
+					   "input port"
+					   ,p)))))
+  (define-cgen-stmt check-output-port
+    ((_ name p)
+     (dispatch
+      `(unless (or (SG_OUTPORTP ,p)
+		   (SG_INOUTPORTP ,p))
+	 (wrong-type-of-argument-violation ',name
+					   "output port"
+					   ,p)))))
+  
+  (define-c-proc port-closed? (p::Port) ::boolean
+    (result (Sg_PortClosedP p)))
+
+  (define-cgen-stmt check-port-open
+    ((_ name p)
+     (dispatch
+      `(when (Sg_PortClosedP ,p)
+	 (wrong-type-of-argument-violation ',name
+					   "opened port"
+					   ,p)))))
+
+  (define-c-proc write/ss (o :optional (p::Port (Sg_CurrentOutputPort))) ::void
+    (check-port-open write/ss p)
+    (check-output-port write/ss p)
+    (Sg_Write o p SG_WRITE_SHARED))
+
+  (define-c-proc read/ss (:optional (p::Port (Sg_CurrentInputPort))) ::Object
+    (check-port-open read/ss p)
+    (check-input-port read/ss p)
+    (result (Sg_Read p TRUE)))
+
+  (define-c-proc format (p :rest rest) ::Object
+    (cond ((SG_PORTP p)
+	   (check-port-open format p)
+	   (check-output-port format p)
+	   (let ((fmt::SgString* (SG_CAR rest))
+		 (objs (SG_CDR rest)))
+	     (Sg_Format p fmt objs FALSE)
+	     (result SG_UNDEF)))
+	  ((SG_BOOLP p)
+	   (let ((fmt::SgString* (SG_CAR rest))
+		 (objs (SG_CDR rest)))
+	     (if (SG_FALSEP p)
+		 (let ((out (Sg_MakeStringOutputPort 16)))
+		   (Sg_Format out fmt objs FALSE)
+		   (result (Sg_GetStringFromStringPort out)))
+		 (let ((out (Sg_CurrentOutputPort)))
+		   (Sg_Format out fmt objs FALSE)
+		   (result SG_UNDEF)))))
+	  ((SG_STRINGP p)
+	   (let ((out (Sg_MakeStringOutputPort 16)))
+	     (Sg_Format out p rest FALSE)
+	     (result (Sg_GetStringFromStringPort out))))))
+
+  (define-c-proc make-codec (name::Symbol g::Procedure p::Procedure data) ::Object
+    (result (Sg_MakeCustomCodecSimple name g p data)))
+
+  (define-c-proc port-info (p::Port) ::Object
+    (let ((file (Sg_FileName p))
+	  (line #f)
+	  (pos #f))
+      (when (SG_TEXTUAL_PORTP p)
+	(set! line (SG_MAKE_INT (Sg_LineNo p))))
+      (when (Sg_HasPortPosition p)
+	(set! pos (SG_MAKE_INT (Sg_PortPosition p))))
+      (result (SG_LIST3 file line pos))))
+
+  ;; profiler
+  (define-c-proc profiler-start () ::void
+    (Sg_ProfilerStart))
+  (define-c-proc profiler-stop () ::fixnum
+    (result (Sg_ProfilerStop)))
+  (define-c-proc profiler-reset () ::void
+    (Sg_ProfilerReset))
+
+  (define-c-proc profiler-raw-result () ::Object
+    (result (Sg_ProfilerRawResult)))
+
+  (define-c-proc disasm (c::Procedure) ::Object
+    (if (SG_CLOSUREP c)
+	(Sg_VMDumpCode (-> (SG_CLOSURE c) code))
+	(Sg_Printf (-> (Sg_VM) logPort) "subr %S" (SG_PROCEDURE_NAME c)))
+    (result SG_UNDEF))
+
+  ;; keyword
+  (define-c-proc make-keyword (key::Symbol) ::Object
+    (result (Sg_MakeKeyword (-> (SG_SYMBOL key) name))))
+
+  (define-c-proc keyword? (o) ::boolean
+    (result (SG_KEYWORDP o)))
+
+  ;; cache
+  (define-c-proc clean-cache (:optional (target #f)) ::void
+    (Sg_CleanCache target))
+
+  ;; getenv
+  (define-c-proc getenv (path::String) ::Object
+    (result (Sg_Getenv (SG_STRING_VALUE path))))
+
+  (define-c-proc setenv (key::String value) ::void
+    (let ((v::SgChar* NULL))
+      (cond ((SG_STRINGP value)
+	     (set! v (SG_STRING_VALUE value)))
+	    ((SG_FALSEP value)) ;; NULL
+	    (else
+	     (wrong-type-of-argument-violation 'setenv
+					       "string or #f"
+					       value)))
+      (Sg_Setenv (SG_STRING_VALUE key) v)))
+  
+  (define-c-proc getenv-alist () ::Object
+    (result (Sg_GetenvAlist)))
+
+  ;; bytevector
+  (define-c-proc bytevector->integer (bv::ByteVector :optional (start::fixnum 0) (end::fixnum -1)) ::Object
+    (result (Sg_ByteVectorToInteger bv start end)))
+
+  (define-c-proc integer->bytevector (n::number) ::Object
+    (unless (SG_REALP n)
+      (wrong-type-of-argument-violation 'integer->bytevector
+					"real number"
+					n))
+    (result (Sg_IntegerToByteVector n)))
+
+  (define-c-proc current-usage-env () ::Object
+    (result (-> (Sg_VM) usageEnv)))
+
+  (define-c-proc current-macro-env () ::Object
+    (result (-> (Sg_VM) macroEnv)))
+
+  ;; time
+  (define-c-proc time-usage () ::Object
+    (result (Sg_TimeUsage)))
+
+  (define-c-proc cond-features () ::Object
+    (result (Sg_CondFeatures)))
+
+  ;; record
+  (define-c-proc make-record-type (name::Symbol rtd rcd) ::Object
+    (result (Sg_MakeRecordType name rtd rcd)))
+
+  (define-c-proc record-type? (obj) ::boolean
+    (result (SG_RECORD_TYPEP obj)))
+
+  (define-c-proc record-type-rtd (rt::RecordType) ::Object
+    (result (SG_RECORD_TYPE_RTD rt)))
+
+  (define-c-proc record-type-rcd (rt::RecordType) ::Object
+    (result (SG_RECORD_TYPE_RCD rt)))
+
+  ;; charset
+  (define-c-proc char-set? (obj) ::boolean
+    (result (SG_CHAR_SET_P obj)))
+
+  (define-cgen-stmt char-set-add
+    ((_ cs chars)
+     (dispatch
+      `(dolist (ch ,chars)
+	 (unless (SG_CHARP ch)
+	   (wrong-type-of-argument-violation procedureName
+					     "character" ch))
+	 (Sg_CharSetAddRange ,cs (SG_CHAR_VALUE ch) (SG_CHAR_VALUE ch))))))
+
+  (define-c-proc char-set (:rest chars) ::Object
+    (let ((cs::SgCharSet* (SG_CHAR_SET (Sg_MakeEmptyCharSet))))
+      (char-set-add cs chars)
+      (result cs)))
+
+  (define-c-proc char-set-copy (cs::CharSet) ::Object
+    (result (Sg_CharSetCopy cs)))
+
+  (define-c-proc char-set-contains? (cs::CharSet ch) ::boolean
+    (unless (SG_CHARP ch)
+      (wrong-type-of-argument-violation procedureName
+					"character" ch))
+    (result (Sg_CharSetContains cs (SG_CHAR_VALUE ch))))
+
+  (define-c-proc %char-set-equal? (x::CharSet y::CharSet) ::boolean
+    (result (Sg_CharSetEq x y)))
+
+  (define-c-proc %char-set<=? (x::CharSet y::CharSet) ::boolean
+    (result (Sg_CharSetLe x y)))
+
+  (define-c-proc %char-set-add-chars! (cs::CharSet chars) ::Object
+    (char-set-add cs chars) (result cs))
+
+  (define-c-proc %char-set-add-range! (cs::CharSet from to) ::Object
+    (let ((f::long -1) (t::long -1))
+      (cond ((SG_INTP from) (set! f (SG_INT_VALUE from)))
+	    ((SG_CHARP from) (set! f (SG_CHAR_VALUE from))))
+      (when (< f 0)
+	(wrong-type-of-argument-violation procedureName
+					  "character or positive exact integer"
+					  from))
+      (when (> f SG_CHAR_MAX)
+	(assertion-violation procedureName
+			     "'from' argument out of range" from))
+      (cond ((SG_INTP to) (set! t (SG_INT_VALUE to)))
+	    ((SG_CHARP to) (set! t (SG_CHAR_VALUE to))))
+      (when (< t 0)
+	(wrong-type-of-argument-violation procedureName
+					  "character or positive exact integer"
+					  to))
+      (when (> t SG_CHAR_MAX)
+	(assertion-violation procedureName
+			     "'to' argument out of range" to))
+      (result (Sg_CharSetAddRange cs (SG_CHAR f) (SG_CHAR t)))))
+
+  (define-c-proc %char-set-add! (dst::CharSet src::CharSet) ::Object
+    (result (Sg_CharSetAdd dst src)))
+
+  (define-c-proc %char-set-complement! (cs::CharSet) ::Object
+    (result (Sg_CharSetComplement cs)))
+
+  (define-c-proc %char-set-ranges (cs::CharSet) ::Object
+    (result (Sg_CharSetRanges cs)))
+
+  (define-cgen-stmt check-char
+    ((_ name c)
+     (dispatch
+      `(unless (SG_CHARP ,c)
+	 (wrong-type-of-argument-violation ',name "char" ,c)))))
+
+  (define-c-proc get-macro-character (c) ::Object
+    (check-char get-macro-character c)
+    (result (Sg_GetMacroCharacter (SG_CHAR_VALUE c) (Sg_CurrentReadTable))))
+
+  (define-c-proc set-macro-character 
+    (c proc::Procedure :optional (non_termP #f))
+    ::void
+    (check-char set-macro-character c)
+    (Sg_SetMacroCharacter (SG_CHAR_VALUE c) proc
+			  (not (SG_FALSEP non_termP))
+			  (Sg_CurrentReadTable)))
+
+  (define-c-proc make-dispatch-macro-character (c :optional (non_termP #f))
+    ::boolean
+    (check-char make-dispatch-macro-character c)
+    (result (Sg_MakeDispatchMacroCharacter (SG_CHAR_VALUE c)
+					   (not (SG_FALSEP non_termP))
+					   (Sg_CurrentReadTable))))
+
+  (define-c-proc get-dispatch-macro-character (c subc) ::Object
+    (check-char get-dispatch-macro-character c)
+    (check-char get-dispatch-macro-character subc)
+    (result (Sg_GetDispatchMacroCharacter (SG_CHAR_VALUE c)
+					  (SG_CHAR_VALUE subc)
+					  (Sg_CurrentReadTable))))
+
+  (define-c-proc set-dispatch-macro-character (c subc proc::Procedure) ::void
+    (check-char set-dispatch-macro-character c)
+    (check-char set-dispatch-macro-character subc)
+    (Sg_SetDispatchMacroCharacter (SG_CHAR_VALUE c)
+				  (SG_CHAR_VALUE subc)
+				  proc (Sg_CurrentReadTable)))
+
+  ;; for (sagittarius reader) library's define-reader-macro related
+  (define-c-proc %insert-macro-character
+    (c proc::Procedure lib::Library :optional (non_termP #f))
+    ::void
+    (check-char set-dispatch-macro-character c)
+    (Sg_EnsureLibraryReadTable lib)
+    (Sg_SetMacroCharacter (SG_CHAR_VALUE c) proc
+			  (not (SG_FALSEP non_termP))
+			  (SG_LIBRARY_READTABLE lib)))
+
+  (define-c-proc %insert-dispatch-macro-character
+    (c subc proc::Procedure lib::Library :optional (non_termP #f))
+    ::void
+    (check-char set-dispatch-macro-character c)
+    (check-char set-dispatch-macro-character subc)
+    (Sg_EnsureLibraryReadTable lib)
+    (Sg_MakeDispatchMacroCharacter (SG_CHAR_VALUE c)
+				   (not (SG_FALSEP non_termP))
+				   (SG_LIBRARY_READTABLE lib))
+    (Sg_SetDispatchMacroCharacter (SG_CHAR_VALUE c)
+				  (SG_CHAR_VALUE subc)
+				  proc
+				  (SG_LIBRARY_READTABLE lib)))
+
+  (define-c-proc read-delimited-list (c :optional
+					(p::Port (Sg_CurrentInputPort))
+					(shareP #t))
+    ::Object
+    (check-char read-delimited-list c)
+    (return (Sg_ReadDelimitedList p
+				  (SG_CHAR_VALUE c)
+				  (not (SG_FALSEP shareP)))))
+
+  (define-c-proc constant-literal? (o) ::boolean
+    (result (Sg_ConstantLiteralP o)))
+
+  (define-c-proc digit-value (c) ::Object
+    (check-char digit-value c)
+    (return (Sg_DigitValue (SG_CHAR_VALUE c))))
+
+  (define-c-proc make-weak-vector (size::fixnum) ::Object
+    (result (Sg_MakeWeakVector size)))
+
+  (define-c-proc weak-vector-length (o) ::fixnum
+    (unless (SG_WEAK_VECTORP o)
+      (wrong-type-of-argument-violation 'weak-vector-length
+					"weak-vector" o))
+    (result (-> (SG_WEAK_VECTOR o) size)))
+
+  (define-c-proc weak-vector-ref (wvec k::fixnum :optional fallback) ::Object
+    (unless (SG_WEAK_VECTORP wvec)
+      (wrong-type-of-argument-violation 'weak-vector-ref
+					"weak-vector" wvec))
+    (cond ((or (< k 0) (>= k (-> (SG_WEAK_VECTOR wvec) size)))
+	   (if (SG_UNBOUNDP fallback)
+	       (assertion-violation 'weak-vector-ref
+				    "index out of range" 
+				    (SG_LIST2 wvec (SG_MAKE_INT k)))
+	       (result fallback)))
+	  (else
+	   (result (Sg_WeakVectorRef wvec k fallback)))))
+
+  (define-c-proc weak-vector-set! (wvec k::fixnum value) ::void
+    (unless (SG_WEAK_VECTORP wvec)
+      (wrong-type-of-argument-violation 'weak-vector-ref
+					"weak-vector" wvec))
+    (when (or (< k 0) (>= k (-> (SG_WEAK_VECTOR wvec) size)))
+      (assertion-violation 'weak-vector-ref
+			   "index out of range" 
+			   (SG_LIST2 wvec (SG_MAKE_INT k))))
+    (Sg_WeakVectorSet wvec k value))
+)
