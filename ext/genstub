@@ -1,0 +1,8 @@
+;; -*- scheme -*-
+(add-load-path "../sitelib")
+(add-load-path "../lib")
+
+(import (sagittarius cgen))
+(let ((files (cdr (command-line))))
+  (print "generating files:" files)
+  (for-each cgen files))
