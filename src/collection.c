@@ -1,8 +1,6 @@
-/* -*- mode: c; coding: utf-8; -*- */
-/*
- * process.h
+/* collection.c                                                 -*- coding: utf-8; -*-
  *
- *   Copyright (c) 2010  Takashi Kato <ktakashi@ymail.com>
+ *   Copyright (c) 2010-2011  Takashi Kato <ktakashi@ymail.com>
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -29,44 +27,26 @@
  *
  *  $Id: $
  */
-#include <sagittarius.h>
 #define LIBSAGITTARIUS_BODY
-#include <sagittarius/extend.h>
-#include "process.h"
+#include "sagittarius/collection.h"
 
-static void process_printer(SgObject self, SgPort *port, SgWriteContext *ctx)
-{
-  Sg_Printf(port, UC("#<process %S>"), SG_PROCESS(self)->name);
-}
+SG_DEFINE_ABSTRACT_CLASS(Sg_CollectionClass, SG_CLASS_DEFAULT_CPL);
+SG_DEFINE_ABSTRACT_CLASS(Sg_SequenceClass, SG_CLASS_COLLECTION_CPL);
+SG_DEFINE_ABSTRACT_CLASS(Sg_DictionaryClass, SG_CLASS_COLLECTION_CPL);
+SG_DEFINE_ABSTRACT_CLASS(Sg_OrderedDictionaryClass, Sg__OrderedDictionaryCPL+1);
 
-SG_DEFINE_BUILTIN_CLASS_SIMPLE(Sg_ProcessClass, process_printer);
+SgClass *Sg__OrderedDictionaryCPL[] = {
+  SG_CLASS_ORDERED_DICTIONARY,
+  SG_CLASS_SEQUENCE,
+  SG_CLASS_DICTIONARY,
+  SG_CLASS_COLLECTION,
+  SG_CLASS_TOP,
+  NULL,
+};
 
-static SgProcess* make_process(SgString *name, SgString *args)
-{
-  SgProcess *p = SG_NEW(SgProcess);
-  SG_SET_CLASS(p, SG_CLASS_PROCESS);
-  p->name = name;
-  p->args = args;
-  p->handle = 0;
-  p->in = SG_UNDEF;
-  p->out = SG_UNDEF;
-  p->err = SG_UNDEF;
-  return p;
-}
-
-#if defined(_MSC_VER)
-# include "win.c"
-#else
-# include "posix.c"
-#endif
-
-SG_CDECL_BEGIN
-extern void Sg__Init_sagittarius_process_impl();
-SG_CDECL_END
-
-SG_EXTENSION_ENTRY void Sg_Init_sagittarius__process()
-{
-  SG_INIT_EXTENSION(sagittarius__process);
-  init_process();
-  Sg__Init_sagittarius_process_impl();
-}
+SgClass *Sg__SequenceCPL[] = {
+  SG_CLASS_SEQUENCE,
+  SG_CLASS_COLLECTION,
+  SG_CLASS_TOP,
+  NULL,
+};
