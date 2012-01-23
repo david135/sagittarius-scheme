@@ -1,0 +1,207 @@
+;; -*- scheme -*-
+(library (sagittarius threads impl)
+    (export thread?
+	    make-thread
+	    thread-name
+	    thread-specific thread-specific-set!
+	    thread-state
+	    current-thread
+	    ;; TODO implement
+	    ;;thread-base-priority thread-base-priority-set!
+	    ;;thread-priority-boost thread-priority-boost-set!
+	    ;;thread-quantum thread-quantum-set!
+	    thread-start! thread-join! thread-yield! thread-sleep!
+	    thread-stop! thread-cont!
+	    thread-terminate!
+
+	    ;; mutex
+	    mutex? make-mutex
+	    mutex-name mutex-state
+	    mutex-specific mutex-specific-set!
+	    mutex-lock! mutex-unlock!
+
+	    ;; condition variable
+	    condition-variable? make-condition-variable
+	    condition-variable-name
+	    condition-variable-specific condition-variable-specific-set!
+	    condition-variable-signal! condition-variable-broadcast!
+
+	    ;; misc
+	    sys-nanosleep
+	    ;; exceptions
+	    ;; these are implemented in mutex.c
+	    ;;join-time-out-exception? abandoned-mutex-exception?
+	    ;;terminated-thread-exception? uncaught-exception?
+	    ;;uncaught-exception-reason
+	    )
+    (import :none)
+  #!compatible
+  (decl-code
+   (.include "threads.h"))
+
+  (define-cgen-stmt assertion-violation
+    ((_ who msg)
+     (dispatch
+      `(begin
+	 (Sg_AssertionViolation ,who (Sg_MakeString ,msg SG_LITERAL_STRING) '())
+	 (return SG_UNDEF))))
+    ((_ who msg irritants)
+     (dispatch
+      `(begin
+	 (Sg_AssertionViolation ,who (Sg_MakeString ,msg SG_LITERAL_STRING) ,irritants)
+	 (return SG_UNDEF)))))
+
+  (define-cgen-stmt wrong-type-of-argument-violation
+    ((_ who msg got)
+     (dispatch
+      `(begin
+	 (Sg_WrongTypeOfArgumentViolation ,who (Sg_MakeString ,msg SG_LITERAL_STRING) ,got '())
+	 (return SG_UNDEF))))
+    ((_ who msg got irritants)
+     (dispatch
+      `(begin
+	 (Sg_WrongTypeOfArgumentViolation ,who (Sg_MakeString ,msg SG_LITERAL_STRING) ,got ,irritants)
+	 (return SG_UNDEF)))))
+
+  ;; thread is VM
+  (define-c-proc thread? (obj) ::boolean
+    (result (SG_VMP obj)))
+
+  (define-c-proc make-thread (thunk::Procedure 
+			      :optional (name (Sg_Gensym (Sg_MakeString "thread-" SG_LITERAL_STRING))))
+    ::Object
+    (result (Sg_MakeThread thunk name)))
+
+  (define-c-proc thread-name (obj::VM) ::Object
+    (result (-> obj name)))
+
+  (define-c-proc thread-specific-set! (obj::VM value) ::void
+    (result (set! (-> obj specific) value)))
+
+  (define-c-proc thread-specific (obj::VM) ::Object
+    (result (-> obj specific)))
+
+  (define-c-proc thread-state (vm::VM) ::Object
+    (let ((state::int (-> vm threadState)))
+      (cond ((== SG_VM_NEW state) (result 'new))
+	    ((== SG_VM_RUNNABLE state) (result 'runnable))
+	    ((== SG_VM_STOPPED state) (result 'stopped))
+	    ((== SG_VM_TERMINATED state) (result 'terminated))
+	    (else (Sg_Error "[internal] thread state has invalid value: %d" state)
+		  (result SG_UNDEF)))))
+
+  (define-c-proc current-thread () ::Object
+    (result (Sg_VM)))
+
+  ;;(define-c-proc thread-base-priority (vm::VM) ::Object
+
+  (define-c-proc thread-start! (vm::VM) ::Object
+    (result (Sg_ThreadStart vm)))
+
+  (define-c-proc thread-join! (vm::VM :optional (timeout #f) timeoutval) ::Object
+    (result (Sg_ThreadJoin vm timeout timeoutval)))
+
+  (define-c-proc thread-yield! () ::void
+    (Sg_YieldCPU))
+
+  (define-c-proc thread-sleep! (time::number) ::void
+    (Sg_ThreadSleep time))
+
+  (define-c-proc thread-stop! (vm::VM :optional (timeout #f) timeoutval) ::Object
+    (result (Sg_ThreadStop vm timeout timeoutval)))
+
+  (define-c-proc thread-cont! (vm::VM) ::Object
+    (result (Sg_ThreadCont vm)))
+
+  (define-c-proc thread-terminate! (vm::VM) ::void
+    (Sg_ThreadTerminate vm))
+
+  (define-c-proc mutex? (o) ::boolean
+    (result (SG_MUTEX_P o)))
+
+  (define-cgen-stmt check-mutex
+    ((_ o name)
+     (dispatch
+      `(unless (SG_MUTEX_P ,o)
+	 (wrong-type-of-argument-violation
+	  ',name "mutex" ,o)))))
+
+  (define-c-proc make-mutex (:optional (name (Sg_Gensym (Sg_MakeString "mutex-" SG_LITERAL_STRING))))
+    ::Object
+    (result (Sg_MakeMutex name)))
+
+  (define-c-proc mutex-name (o) ::Object
+    (check-mutex o mutex-name)
+    (result (-> (SG_MUTEX o) name)))
+
+  (define-c-proc mutex-state (o) ::Object
+    (check-mutex o mutex-state)
+    (result (Sg_MutexState (SG_MUTEX o))))
+
+  (define-c-proc mutex-specific (o) ::Object
+    (check-mutex o mutex-specific)
+    (result (-> (SG_MUTEX o) specific)))
+
+  (define-c-proc mutex-specific-set! (o value) ::void
+    (check-mutex o mutex-specific-set!)
+    (set! (-> (SG_MUTEX o) specific) value))
+
+  (define-c-proc mutex-lock! (o :optional (timeout #f) thread) ::Object
+    (check-mutex o mutex-lock!)
+    (let ((owner::SgVM* NULL))
+      (cond ((SG_VMP thread) (set! owner (SG_VM thread)))
+	    ((SG_UNBOUNDP thread) (set! owner (Sg_VM)))
+	    ((not (SG_FALSEP thread))
+	     (wrong-type-of-argument-violation 'mutex-lock!
+					       "thread or #f"
+					       thread)))
+      (result (Sg_MutexLock (SG_MUTEX o) timeout owner))))
+
+  (define-c-proc mutex-unlock! (o :optional (cv #f) (timeout #f)) ::Object
+    (check-mutex o mutex-unlock!)
+    (let ((cond::SgConditionVariable* NULL))
+      (cond ((SG_CONDITION_VARIABLE_P cv) (set! cond (SG_CONDITION_VARIABLE cv)))
+	    ((not (SG_FALSEP cv))
+	     (wrong-type-of-argument-violation 'mutex-unlock!
+					       "condition variable or #f"
+					       cv)))
+    (result (Sg_MutexUnlock (SG_MUTEX o) cond timeout))))
+
+  (define-c-proc condition-variable? (o) ::boolean
+    (result (SG_CONDITION_VARIABLE_P o)))
+
+
+  (define-c-proc make-condition-variable (:optional (name (Sg_Gensym (Sg_MakeString "cv-" SG_LITERAL_STRING))))
+    ::Object
+    (result (Sg_MakeConditionVariable name)))
+
+  (define-cgen-stmt check-cv
+    ((_ o)
+     (dispatch
+      `(unless (SG_CONDITION_VARIABLE_P ,o)
+	 (wrong-type-of-argument-violation
+	  procedureName "condition variable" ,o)))))
+
+  (define-c-proc condition-variable-name (cv) ::Object
+    (check-cv cv)
+    (result (-> (SG_CONDITION_VARIABLE cv) name)))
+
+  (define-c-proc condition-variable-specific (cv) ::Object
+    (check-cv cv)
+    (result (-> (SG_CONDITION_VARIABLE cv) specific)))
+
+  (define-c-proc condition-variable-specific-set! (cv value) ::void
+    (check-cv cv)
+    (set! (-> (SG_CONDITION_VARIABLE cv) specific) value))
+
+  (define-c-proc condition-variable-signal! (cv) ::void
+    (check-cv cv)
+    (Sg_ConditionVariableSignal cv))
+
+  (define-c-proc condition-variable-broadcast! (cv) ::void
+    (check-cv cv)
+    (Sg_ConditionVariableBroadcast cv))
+
+  (define-c-proc sys-nanosleep (n::number) ::Object
+    (result (Sg_MakeInteger (Sg_SysNanosleep (Sg_GetDouble n)))))
+)
