@@ -1,0 +1,277 @@
+CMAKE_MINIMUM_REQUIRED(VERSION 2.8.4)
+PROJECT(Sagittarius)
+
+INCLUDE(${CMAKE_ROOT}/Modules/CheckIncludeFile.cmake)
+INCLUDE(${CMAKE_ROOT}/Modules/CheckFunctionExists.cmake)
+INCLUDE(${CMAKE_ROOT}/Modules/CheckTypeSize.cmake)
+INCLUDE(${CMAKE_ROOT}/Modules/CheckCSourceRuns.cmake)
+
+#ENABLE_TESTING()
+
+# basic info for project
+SET(SAGITTARIUS_NAME "sagittarius" CACHE STRING "Sagittarius PACKAGE_NAME")
+SET(SAGITTARIUS_BUGREPORT "ktakashi@ymail.com" CACHE STRING "bugreport mail address")
+
+# use boehm gc
+OPTION(USE_BOEHM_GC "use boehm gc" ON)
+OPTION(DEBUG_VERSION "debug version" ON)
+OPTION(SAGITTARIUS_PROFILE "profiler" ON)
+
+SET(INSTALL_PREFIX "/usr/local" CACHE PATH "Prefix prepended to install directories")
+SET(CMAKE_INSTALL_PREFIX ${INSTALL_PREFIX} CACHE INTERNAL "Prefix prepended to install directories" FORCE)
+
+#SET(SAGITTARIUS_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}"
+#  CACHE STRING "Sagittarius release version string")
+SET(SAGITTARIUS_VERSION "0.3.1" CACHE STRING "Sagittarius release version string" FORCE)
+
+IF(WIN32 AND NOT CYGWIN)
+  # On Windows platform, we resolve library path relatively.
+  # Diractory structure must be like this:
+  # <install dir>\sash.exe
+  #               sagittarius.dll
+  #              \lib
+  #              \sitelib
+  #              \modules
+  SET(SAGITTARIUS_SHARE_LIB_PATH
+    ${SAGITTARIUS_SHARE_LIB_PATH} "lib")
+  SET(SAGITTARIUS_SITE_LIB_PATH
+    ${SAGITTARIUS_SITE_LIB_PATH} "sitelib")
+  SET(SAGITTARIUS_DYNLIB_PATH
+    ${SAGITTARIUS_DYNLIB_PATH} "modules")
+  ADD_DEFINITIONS("-D_UNICODE -DUNICODE")
+ELSE()
+  SET(SAGITTARIUS_SHARE_LIB_PATH
+    ${SAGITTARIUS_SHARE_LIB_PATH}
+    "${CMAKE_INSTALL_PREFIX}/share/${SAGITTARIUS_NAME}/${SAGITTARIUS_VERSION}/lib")
+  SET(SAGITTARIUS_SITE_LIB_PATH 
+    ${SAGITTARIUS_SITE_LIB_PATH}
+    "${CMAKE_INSTALL_PREFIX}/share/${SAGITTARIUS_NAME}/sitelib")
+  SET(SAGITTARIUS_DYNLIB_PATH ${SAGITTARIUS_DYNLIB_PATH}
+    "${CMAKE_INSTALL_PREFIX}/lib/${SAGITTARIUS_NAME}/${SAGITTARIUS_VERSION}/lib")
+ENDIF()
+
+MARK_AS_ADVANCED(SAGITTARIUS_VERSION SAGITTARIUS_BUGREPORT
+  SAGITTARIUS_NAME SAGITTARIUS_SHARE_LIB_PATH SAGITTARIUS_LIB_PATH)
+
+IF(USE_BOEHM_GC)
+  #SET(GC_DEPENDS_TARGET false)
+  CHECK_INCLUDE_FILE(gc.h HAVE_GC_H)
+  SET(LINK_BOEHM_GC true)
+  IF(NOT HAVE_GC_H)
+    CHECK_INCLUDE_FILE(gc/gc.h HAVE_GC_GC_H)
+    IF(NOT HAVE_GC_GC_H)
+      # download boehm gc
+      # we need to use CMake conformed one, so the latest 7.2alpha6
+      IF (MSVC)
+	SET(USED_GC_VERSION "gc-7.2alpha6")
+      ELSE()
+	SET(USED_GC_VERSION "gc-7.1")
+      ENDIF()
+      FIND_FILE(HAS_BOEHM_GC_TAR
+	NAMES gc.tar.gz
+	PATHS ${CMAKE_CURRENT_SOURCE_DIR})
+      MESSAGE(STATUS "Checked Boehm GC archive file: ${HAS_BOEHM_GC_TAR}")
+      IF (NOT EXISTS ${HAS_BOEHM_GC_TAR})
+	FILE(
+	  DOWNLOAD "http://www.hpl.hp.com/personal/Hans_Boehm/gc/gc_source/${USED_GC_VERSION}.tar.gz"
+	           "${CMAKE_CURRENT_SOURCE_DIR}/gc.tar.gz"
+	  SHOW_PROGRESS)
+	EXECUTE_PROCESS(COMMAND ${CMAKE_COMMAND} -E tar xzf
+	  ${CMAKE_CURRENT_SOURCE_DIR}/gc.tar.gz
+	  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+	MESSAGE(STATUS "unpacked gc.tar.gz")
+      ENDIF()
+      IF (NOT MSVC)
+	MESSAGE(FATAL_ERROR "First install Boehm GC. Go to gc directory.")
+      ENDIF()
+
+      ADD_SUBDIRECTORY(${USED_GC_VERSION} build/gc)
+      INCLUDE_DIRECTORIES(${CMAKE_CURRENT_SOURCE_DIR}/${USED_GC_VERSION}/include)
+      SET(HAVE_GC_H 1)
+      SET(GC_DEPENDS_TARGET gcmt-dll)
+    ENDIF(NOT HAVE_GC_GC_H)
+  ELSE(NOT HAVE_GC_H)
+#    ADD_DEFINITIONS(-DUSE_BOEHM_GC)
+  ENDIF(NOT HAVE_GC_H)
+ENDIF(USE_BOEHM_GC)
+
+IF(SAGITTARIUS_PROFILE)
+  CHECK_INCLUDE_FILE(sys/time.h HAVE_SYS_TIME_H)
+  IF(NOT HAVE_SYS_TIME_H)
+    MESSAGE(WARNING "profiler is not supported")
+    SET(SAGITTARIUS_PROFILE OFF)
+  ENDIF()
+ENDIF()
+
+# compiler option for global
+IF(${CMAKE_SYSTEM_NAME} MATCHES Windows)
+  IF (MSVC)
+  ELSE()
+    MESSAGE(FATAL "On Windows Only MSVC is supported")
+  ENDIF()
+ELSEIF(CYGWIN)
+  # compiler must be gcc
+  #ADD_DEFINITIONS(-fwide-exec-charset=ucs-4le)
+  SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fwide-exec-charset=ucs-4le")
+  SET(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -fwide-exec-charset=ucs-4le")
+ELSE()
+ENDIF()
+
+
+IF(DEBUG_VERSION)
+  ADD_DEFINITIONS(-DDEBUG_VERSION)
+  SET(CMAKE_BUILD_TYPE Debug)
+ELSE()
+  SET(CMAKE_BUILD_TYPE Release)
+ENDIF()
+
+SET(SHLIB_SO_SUFFIX "${CMAKE_SHARED_LIBRARY_SUFFIX}")
+
+# headers
+CHECK_INCLUDE_FILE(alloca.h HAVE_ALLOCA_H)
+CHECK_INCLUDE_FILE(stdint.h HAVE_STDINT_H)
+CHECK_INCLUDE_FILE(stdlib.h HAVE_STDLIB_H)
+CHECK_INCLUDE_FILE(string.h HAVE_STRING_H)
+CHECK_INCLUDE_FILE(stdio.h  HAVE_STDIO_H)
+CHECK_INCLUDE_FILE(limits.h HAVE_LIMITS_H)
+CHECK_INCLUDE_FILE(stdarg.h HAVE_STDARG_H)
+CHECK_INCLUDE_FILE(setjmp.h HAVE_SETJMP_H)
+CHECK_INCLUDE_FILE(time.h   HAVE_TIME_H)
+CHECK_INCLUDE_FILE(signal.h HAVE_SIGNAL_H)
+CHECK_INCLUDE_FILE(dlfcn.h  HAVE_DLFCN_H)
+CHECK_INCLUDE_FILE(sched.h  HAVE_SCHED_H)
+CHECK_INCLUDE_FILE(io.h     HAVE_IO_H)
+
+# functions
+# alloca needs special treatment
+IF (HAVE_ALLOCA_H)
+  # for now it is simple as much as possible.
+  CHECK_C_SOURCE_RUNS("
+#include <alloca.h>
+int main()
+{
+  alloca(1);
+  return 0;
+}
+" HAVE_ALLOCA)
+ENDIF()
+
+#CHECK_FUNCTION_EXISTS(alloca HAVE_ALLOCA)
+CHECK_FUNCTION_EXISTS(sched_yield HAVE_SCHED_YIELD)
+CHECK_FUNCTION_EXISTS(nanosleep HAVE_NANOSLEEP)
+CHECK_FUNCTION_EXISTS(select HAVE_SELECT)
+CHECK_FUNCTION_EXISTS(clock_gettime HAVE_CLOCK_GETTIME)
+CHECK_FUNCTION_EXISTS(gettimeofday HAVE_GETTIMEOFDAY)
+
+# sizeofs
+CHECK_TYPE_SIZE(int SIZEOF_INT)
+CHECK_TYPE_SIZE(short SIZEOF_SHORT)
+CHECK_TYPE_SIZE(long SIZEOF_LONG)
+CHECK_TYPE_SIZE(int64_t SIZEOF___INT64)
+#CHECK_TYPE_SIZE(off_t SIZEOF_OFF_T)
+CHECK_TYPE_SIZE(void* SIZEOF_VOIDP)
+CHECK_TYPE_SIZE(float SIZEOF_FLOAT)
+CHECK_TYPE_SIZE(double SIZEOF_DOUBLE)
+CHECK_TYPE_SIZE(wchar_t SIZEOF_WCHAR_T)
+
+# platform name
+STRING(TOLOWER ${CMAKE_SYSTEM_NAME} SAGITTARIUS_PLATFORM)
+
+CONFIGURE_FILE(cmake/config-cmake.h.in ${PROJECT_SOURCE_DIR}/src/sagittarius/config.h)
+ADD_DEFINITIONS(-DHAVE_CONFIG_H)
+
+# TODO check if it's ok
+#SET(CMAKE_C_FLAGS "-W -Wall -O0 -g3 -gdwarf-2")
+if (NOT MSVC)
+  SET(CMAKE_C_FLAGS "-Wall -O3 ${CMAKE_C_FLAGS}")
+  SET(CMAKE_CXX_FLAGS "-Wall -O3 ${CMAKE_CXX_FLAGS}")
+endif()
+
+IF(MSVC)
+  ADD_DEFINITIONS(-DWIN32_LEAN_AND_MEAN)
+ENDIF()
+
+SET(SAGITTARIUS_INCLUDE_DIR ${SAGITTARIUS_INCLUDE_DIR} 
+  ${PROJECT_SOURCE_DIR}/src ${TAURUS_INCLUDE_DIR})
+
+# set runtime output directory
+SET(CMAKE_RUNTIME_OUTPUT_DIRECTORY
+  ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+  ${PROJECT_SOURCE_DIR}/build)
+
+IF (MSVC)
+  SET(CMAKE_LIBRARY_OUTPUT_DIRECTORY
+    ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}
+    ${PROJECT_SOURCE_DIR}/build/modules)
+ELSE()
+  SET(CMAKE_LIBRARY_OUTPUT_DIRECTORY
+    ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}
+    ${PROJECT_SOURCE_DIR}/build)
+ENDIF()
+
+SET(SAGITTARIUS_EXT_WORK_DIRECTORY
+  ${SAGITTARIUS_EXT_WORK_DIRECTORY}
+  ${PROJECT_SOURCE_DIR}/build/ext)
+
+ADD_SUBDIRECTORY(src build/src)
+ADD_SUBDIRECTORY(ext ${SAGITTARIUS_EXT_WORK_DIRECTORY})
+#ADD_SUBDIRECTORY(test build/test)
+
+INSTALL(DIRECTORY ${PROJECT_SOURCE_DIR}/lib
+  DESTINATION share/sagittarius/${SAGITTARIUS_VERSION})
+INSTALL(DIRECTORY ${PROJECT_SOURCE_DIR}/sitelib
+  DESTINATION share/sagittarius/)
+INSTALL(FILES ${PROJECT_SOURCE_DIR}/src/sagittarius.h
+  DESTINATION include/)
+INSTALL(DIRECTORY ${PROJECT_SOURCE_DIR}/src/sagittarius
+  DESTINATION include/)
+
+# uninstall target
+CONFIGURE_FILE(
+  "${CMAKE_CURRENT_SOURCE_DIR}/cmake_uninstall.cmake.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
+  IMMEDIATE @ONLY)
+
+ADD_CUSTOM_TARGET(uninstall
+    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake)
+
+ADD_CUSTOM_TARGET(test
+  COMMAND ${PROJECT_SOURCE_DIR}/build/sash run-test.scm)
+
+# make doc
+ADD_CUSTOM_TARGET(doc
+  COMMAND ${PROJECT_SOURCE_DIR}/build/sash
+  -L${PROJECT_SOURCE_DIR}/lib -L${PROJECT_SOURCE_DIR}/sitelib
+  -L${PROJECT_SOURCE_DIR}/ext/time -D${PROJECT_SOURCE_DIR}/build 
+  gendoc --output=sagittarius-ref.html
+  --style=lib/style.css --javascript=lib/tools.js sagittarius-ref.scrbl
+  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/doc)
+
+# for Cygwin rebase problem
+IF (CYGWIN)
+  CONFIGURE_FILE(
+    "${CMAKE_CURRENT_SOURCE_DIR}/rebase.sh.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/rebase.sh"
+    IMMEDIATE @ONLY)
+MESSAGE("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+MESSAGE("!!                        I M P O R T A N T                             !!")
+MESSAGE("!!                                                                      !!")
+MESSAGE("!! On Cygwin environment, you need to do more stuff before you install. !!")
+MESSAGE("!! Run 'make rebase' and you need to run 'rebaseall' with the following !!")
+MESSAGE("!! command line in this directory,  before  running  'make install' or  !!")
+MESSAGE("!! even 'make test'.                                                    !!")
+MESSAGE("!!                                                                      !!")
+MESSAGE("!!                 $ /bin/rebaseall -v -T dlls.txt                      !!")
+MESSAGE("!!                                                                      !!")
+MESSAGE("!! It must be run without running other Cygwin processes but ash.       !!")
+MESSAGE("!! (You must not even run bash.  Close all cygwin windows, open Windows !!")
+MESSAGE("!! command prompt, run \\cygwin\\bin\\ash (the actual path may differ      !!")
+MESSAGE("!! depending on how you install cygwin), cd to your build directory,    !!")
+MESSAGE("!! then run the above command.)                                         !!")
+MESSAGE("!! See http://www.tishler.net/jason/software/rebase/rebase-2.4.2.README !!")
+MESSAGE("!! for more details.                                                    !!")
+MESSAGE("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+
+ADD_CUSTOM_TARGET(rebase COMMAND /bin/sh rebase.sh)
+
+ENDIF()
