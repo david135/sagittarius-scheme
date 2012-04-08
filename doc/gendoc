@@ -1,0 +1,18 @@
+;; -*- mode: scheme; coding: utf-8 -*- 
+(import (rnrs)
+	(getopt)
+	(sagittarius document html))
+
+(define (main args)
+  (with-args args
+      ((output     (#\o "output") #t (current-output-port))
+       (style  	   (#\s "style") #t #f)
+       (javascript (#\j "javascript") #t #f)
+       . files)
+    (unless (file-exists? (car files))
+      (usage)
+      (exit -1))
+    (scribble-file->html (car files)
+			 :output output
+			 :style style
+			 :javascript javascript)))
