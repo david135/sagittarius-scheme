@@ -31,6 +31,7 @@
  */
 #define LIBSAGITTARIUS_BODY
 #include "sagittarius/pair.h"
+#include "sagittarius/core.h"
 #include "sagittarius/collection.h"
 #include "sagittarius/compare.h"
 #include "sagittarius/error.h"
@@ -54,7 +55,7 @@ SG_DEFINE_BUILTIN_CLASS(Sg_NullClass, NULL, NULL, NULL, NULL, list_cpl);
 static inline SgPair* make_pair()
 {
   SgPair *z = SG_NEW(SgPair);
-  z->constp = FALSE;
+  /* z->constp = FALSE; */
   return z;
 }
 
@@ -405,6 +406,53 @@ SgObject Sg_Assoc(SgObject obj, SgObject alist)
   return SG_FALSE;
 }
 */
+
+SgObject Sg_MakeAnnotatedPair(SgObject car, SgObject cdr)
+{
+  SgAnnotatedPair *ap = SG_NEW(SgAnnotatedPair);
+  ap->car = car;
+  ap->cdr = cdr;
+  ap->attributes = SG_NIL;
+  return SG_OBJ(ap);
+}
+SgObject Sg_PairAttr(SgObject pair)
+{
+  if (SG_ANNOTATED_PAIR_P(pair)) {
+    return SG_ANNOTATED_PAIR(pair)->attributes;
+  } else {
+    return SG_NIL;
+  }
+}
+SgObject Sg_PairAttrGet(SgObject pair, SgObject key, SgObject fallback)
+{
+  SgObject p;
+  if (!SG_ANNOTATED_PAIR_P(pair)) {
+    goto fallback;
+  }
+  p = Sg_Assq(key, SG_ANNOTATED_PAIR(pair)->attributes);
+  if (SG_PAIRP(p)) return SG_CDR(p);
+ fallback:
+  if (SG_UNBOUNDP(fallback)) {
+    Sg_Error(UC("No value associated with key %S in pair attributes of %S"),
+	     key, pair);
+  }
+  return fallback;
+}
+void Sg_PairAttrSet(SgObject pair, SgObject key, SgObject value)
+{
+  SgObject p;
+  if (!SG_ANNOTATED_PAIR_P(pair)) {
+    Sg_Error(UC("Cannot set pair attributes (%S) to non-annotated pair: %S"),
+	     key, pair);
+  }
+  p = Sg_Assq(key, SG_ANNOTATED_PAIR(pair)->attributes);
+  if (SG_PAIRP(p)) SG_SET_CDR(p, value);
+  else {
+    SG_ANNOTATED_PAIR(pair)->attributes = 
+      Sg_Acons(key, value, SG_ANNOTATED_PAIR(pair)->attributes);
+  }
+}
+
 
 /* from Ypsilon */
 static SgObject do_transpose(int shortest_len, int argc, SgObject args[])

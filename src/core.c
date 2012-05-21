@@ -254,6 +254,16 @@ void* Sg_GCBase(void *value)
 #endif
 }
 
+size_t Sg_GCSize(void *value)
+{
+#ifdef USE_BOEHM_GC
+  return GC_size(value);
+#else
+  /* for now do nothing */
+  return NULL;
+#endif
+}
+
 void finalizable()
 {
   SgVM *vm = Sg_VM();

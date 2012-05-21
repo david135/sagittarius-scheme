@@ -61,6 +61,7 @@
 #include "sagittarius/gloc.h"
 #include "sagittarius/weak.h"
 #include "sagittarius/thread.h"
+#include "sagittarius/builtin-symbols.h"
 
 static SgInternalMutex global_lock;
 
@@ -179,8 +180,8 @@ SgVM* Sg_NewVM(SgVM *proto, SgObject name)
   v->parentExHandler = SG_FALSE;
   v->exceptionHandler = DEFAULT_EXCEPTION_HANDLER;
 
-  v->sourceInfos = Sg_MakeWeakHashTableSimple(SG_HASH_EQ, SG_WEAK_BOTH,
-					      4000, SG_FALSE);
+  /* v->sourceInfos = Sg_MakeWeakHashTableSimple(SG_HASH_EQ, SG_WEAK_BOTH, */
+  /* 					      4000, SG_FALSE); */
   v->toplevelVariables = SG_NIL;
   v->commandLineArgs = SG_NIL;
 
@@ -358,8 +359,9 @@ static inline void report_error(SgObject exception)
 	} else {
 	  src = Sg_LastPair(tmp);
 	  src = SG_CDAR(src);
-	  info = Sg_WeakHashTableRef(SG_WEAK_HASHTABLE(vm->sourceInfos),
-				     src, SG_FALSE);
+	  /* info = Sg_WeakHashTableRef(SG_WEAK_HASHTABLE(vm->sourceInfos), */
+	  /* 			     src, SG_FALSE); */
+	  info = Sg_PairAttrGet(src, SG_SYMBOL_SOURCE_INFO, SG_FALSE);
 	  /* info = SG_SOURCE_INFO(src); */
 	}
 	if (SG_FALSEP(info) || !info) {

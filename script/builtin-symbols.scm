@@ -51,8 +51,16 @@
 (define (generate file-out header-out)
   (header header-out)
   (body   file-out))
-  
+
 (define (main args)
+  (cond-expand
+   (sagittarius
+    (print "generating builtin symbold")
+    (if (file-exists? c-header)
+	(delete-file c-header))
+    (if (file-exists? c-file)
+	(delete-file c-file)))
+   (else #t))
   (let ((c-file-out (open-output-file c-file))
 	(c-header-out (open-output-file c-header)))
     (generate c-file-out c-header-out)
@@ -114,18 +122,11 @@
     (replace              SG_SYMBOL_REPLACE)
     (ignore               SG_SYMBOL_IGNORE)
     (raise                SG_SYMBOL_RAISE)
+    (source-info          SG_SYMBOL_SOURCE_INFO)
+    (constant             SG_SYMBOL_CONSTANT)
     ;; add later
     ))
 
-(cond-expand
- (sagittarius
-  (print "generating builtin symbold")
-  (if (file-exists? c-header)
-      (delete-file c-header))
-  (if (file-exists? c-file)
-      (delete-file c-file))
-  (main (command-line)))
- (else #t))
 ;;;; end of file
 ;; Local Variables:
 ;; coding: utf-8-unix

@@ -618,11 +618,12 @@ static SgObject read_list(SgPort *port, SgChar closer, SgReadContext *ctx)
     SgVM *vm = Sg_VM();
     if (!SG_VM_IS_SET_FLAG(vm, SG_NO_DEBUG_INFO)) {
       SgObject info = Sg_FileName(port);
-      if (!SG_FALSEP(info)) {
-	Sg_WeakHashTableSet(SG_WEAK_HASHTABLE(vm->sourceInfos),
-			    r, Sg_Cons(info, SG_MAKE_INT(line)),
-			    0);
-      }
+	/* Sg_WeakHashTableSet(SG_WEAK_HASHTABLE(vm->sourceInfos), */
+	/* 		    r, Sg_Cons(info, SG_MAKE_INT(line)), */
+	/* 		    0); */
+      r = Sg_MakeAnnotatedPair(SG_CAR(r), SG_CDR(r));
+      Sg_PairAttrSet(r, SG_SYMBOL_SOURCE_INFO,
+		     Sg_Cons(info, SG_MAKE_INT(line)));
     }
   }
   return r;
@@ -1583,8 +1584,10 @@ int Sg_ConstantLiteralP(SgObject o)
 {
   SgObject e;
   if (SG_PAIRP(o)) {
-    /* simple check */
-    return SG_PAIR(o)->constp;
+    if (SG_ANNOTATED_PAIR_P(o)) {
+      return !SG_FALSEP(Sg_PairAttrGet(o, SG_SYMBOL_CONSTANT, SG_FALSE));
+    }
+    return FALSE;
   }
   e = Sg_HashTableRef(obtable, o, SG_UNBOUND);
   if (SG_UNBOUNDP(e)) return FALSE;
@@ -1607,10 +1610,11 @@ SgObject Sg_AddConstantLiteral(SgObject o)
       SG_BVECTOR_SET_LITERAL(o);
     }
     if (SG_PAIRP(o)) {
-      /* do the cdr parts. */
-      SG_PAIR(o)->constp = TRUE;
+      if (SG_ANNOTATED_PAIR_P(o)) {
+	Sg_PairAttrSet(o, SG_SYMBOL_CONSTANT, SG_TRUE);
+      }
       if (SG_PAIRP(SG_CDR(o))) {
-	SG_SET_CDR(o, Sg_AddConstantLiteral(SG_CDR(o)));
+      	SG_SET_CDR(o, Sg_AddConstantLiteral(SG_CDR(o)));
       }
     }
   } else {
