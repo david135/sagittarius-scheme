@@ -39,9 +39,22 @@ struct SgPairRec
 {
   SgObject car;
   SgObject cdr;
-  /* benchmark said set-ca/dr! is super slow. */
-  char     constp;
 };
+
+typedef struct SgAnnotatedPairRec
+{
+  SgObject car;
+  SgObject cdr;
+  /* 
+     GC_size returns unreliable value.
+   */
+  void *bogus[2];
+  /*
+    For source-info: (file . line)
+    For constant  #t
+   */
+  SgObject attributes;
+} SgAnnotatedPair;
 
 SG_CLASS_DECL(Sg_ListClass);
 SG_CLASS_DECL(Sg_PairClass);
@@ -53,6 +66,11 @@ SG_CLASS_DECL(Sg_NullClass);
 
 #define SG_PAIRP(obj) 	  	 (SG_HPTRP(obj)&&SG_HTAG(obj)!=0x7)
 #define SG_PAIR(obj)  	  	 ((SgPair*)obj)
+
+#define SG_ANNOTATED_PAIR_P(obj)					\
+  (SG_PAIRP(obj)&&Sg_GCBase(obj)&&Sg_GCSize(obj)>=sizeof(SgAnnotatedPair))
+#define SG_ANNOTATED_PAIR(obj)	((SgAnnotatedPair *)obj)
+
 #define SG_CAR(obj)   	  	 (SG_PAIR(obj)->car)
 #define SG_CDR(obj)   	  	 (SG_PAIR(obj)->cdr)
 #define SG_CAAR(obj)   	  	 (SG_CAR(SG_CAR(obj)))
@@ -142,6 +160,12 @@ SG_EXTERN SgObject Sg_Assq(SgObject obj, SgObject alist);
 SG_EXTERN SgObject Sg_Assv(SgObject obj, SgObject alist);
 /* for compatibility of SRFI-1*/
 /* SG_EXTERN SgObject Sg_Assoc(SgObject obj, SgObject alist); */
+
+SG_EXTERN SgObject Sg_MakeAnnotatedPair(SgObject car, SgObject cdr);
+SG_EXTERN SgObject Sg_PairAttr(SgObject pair);
+SG_EXTERN SgObject Sg_PairAttrGet(SgObject pair, SgObject key, 
+				  SgObject fallback);
+SG_EXTERN void     Sg_PairAttrSet(SgObject pair, SgObject key, SgObject value);
 
 SG_CDECL_END
 

@@ -4,29 +4,31 @@
 	    ;; source info
 	    source-info
 	    source-info-set!
+	    vm-source-infos
 	    )
     (import :none)
 
   (decl-code
    (.define "LIBSAGITTARIUS_BODY")
-   (.include <sagittarius.h>))
+   (.include <sagittarius.h>)
+   (.include <sagittarius/builtin-symbols.h>))
 
   (define-c-proc vm-dump-code (cb::<code-builder>) ::<top>
     (Sg_VMDumpCode cb)
     (result SG_UNDEF))
 
   (define-c-proc source-info (o) ::<top>
-    (if (SG_PTRP o)
-	(result (Sg_WeakHashTableRef 
-		 (SG_WEAK_HASHTABLE (-> (Sg_VM) sourceInfos)) o #f))
+    (if (SG_PAIRP o)
+	(result (Sg_PairAttrGet o SG_SYMBOL_SOURCE_INFO SG_FALSE))
 	(result SG_FALSE)))
 
   (define-c-proc source-info-set! (o i) 
-    (when (and (SG_PTRP o) (not (SG_FALSEP i)))
-      (let* ((vm::SgVM* (Sg_VM)))
-	(unless (SG_VM_IS_SET_FLAG vm SG_NO_DEBUG_INFO)
-	  (Sg_WeakHashTableSet (SG_WEAK_HASHTABLE (-> vm sourceInfos))
-			       o i 0))))
+    (when (and (SG_PAIRP o)
+	       (not (SG_FALSEP i)))
+      (unless (SG_ANNOTATED_PAIR_P o)
+	(set! o (Sg_MakeAnnotatedPair (SG_CAR o) (SG_CDR o))))
+      (Sg_PairAttrSet o SG_SYMBOL_SOURCE_INFO i))
     (result o))
+
 )
 

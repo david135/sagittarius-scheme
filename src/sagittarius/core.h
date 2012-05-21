@@ -56,6 +56,7 @@ SG_EXTERN void 	Sg_RegisterDL(void *data_start, void *data_end,
 SG_EXTERN void 	Sg_RegisterDisappearingLink(void **p, void *value);
 SG_EXTERN void 	Sg_UnregisterDisappearingLink(void **p);
 SG_EXTERN void* Sg_GCBase(void *value);
+SG_EXTERN size_t Sg_GCSize(void *value);
 
 /* experimental */
 SG_EXTERN void  Sg_AddGCRoots(void *start, void *end);

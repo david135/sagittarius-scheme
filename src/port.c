@@ -2434,6 +2434,8 @@ SgObject Sg_FileName(SgPort *port)
       if (SG_BINARY_PORT(bp)->type == SG_FILE_BINARY_PORT_TYPE) {
 	file = SG_BINARY_PORT(bp)->src.file;
       }
+    } else {
+      return SG_MAKE_STRING("(non file port)");
     }
   } else if (SG_BINARY_PORTP(port)) {
     if (SG_BINARY_PORT(port)->type == SG_FILE_BINARY_PORT_TYPE) {
