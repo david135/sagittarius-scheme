@@ -1,0 +1,6 @@
+;; -*- mode:scheme -*-
+(decl-code
+ (.include <sagittarius.h>)
+ (.define "LIBSAGITTARIUS_EXT_BODY")
+ (.include <sagittarius/extend.h>
+	   "$header$"))

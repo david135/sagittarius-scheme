@@ -1,0 +1,728 @@
+2012-06-14  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/bytevector.c (Sg_ByteVectorToInteger): improved
+	bytevector->integer performance.
+
+2012-06-12  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/null.stub (get-string-all): Fixed to read all string. Enbuged
+	when I added to buffer reader for string port.
+
+2012-06-11  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/rfc/x.509.scm (rfc): fixed typo.
+
+2012-06-07  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/text/csv.scm (text): fixed multiple line comments reading.
+
+2012-06-01  Takashi Kato  <ktakashi@ymail.com>
+
+	* boot/compiler.scm (and-let*): modified to rewrite initial expression
+	to avoid unbound variable exception after macro expansion.
+
+2012-05-30  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/port.c (file_look_ahead_u8): Fixed when EOF is read buffer index
+	was decreased and it causes infinite loop with combination of get-u8.
+
+2012-05-26  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/reader.c (read_hash_equal): fixed SEGV when reading #= with
+	read or get-datum.
+
+2012-05-18  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/unicode.c (utf8_reader): fixed utf8 treatment.
+
+	* src/reader.c (read_symbol_or_number): modified lexical syntax check in
+	R6RS mode not to raise io error when the first letter was geater than
+	0x7F.
+	(readtable): introduced CT_ILLEGAL to handle illegal control characters.
+
+2012-05-14  Takashi Kato  <ktakashi@ymail.com>
+
+	* ext/zlib/rfc/zlib.scm (open-inflating-input-port): fixed read!
+	procedure.
+
+	* src/port.c (Sg_MakeCustomBinaryPort): improved
+	custom_binary_put_u8_array performance.
+
+2012-05-12  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/port.c (get or read binary operations): fixed reckless label to
+	be allow to get custom port.
+
+2012-05-10  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/vmlib.stub (library-exported-set!): modified the behaviour to
+	append the export spec. now export syntax can be appeared multiple
+	times in one library.
+
+2012-05-07  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/extlib.stub (get-output-bytevector): fixed to reset buffer.
+
+	* src/port.c (Sg_SetPortPosition): fixed set port position.
+
+	* src/null.stub (null): modified bytevector-copy to take start and end
+	optional paraemeters.
+
+2012-05-04  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/rfc/x.509.scm (rfc x.509): fixed unbound variable error
+	calling make-basic-constrains.
+
+2012-05-03  Takashi Kato  <ktakashi@ymail.com>
+
+	* ext/socket/socket.c (socket_read_u8_all): fixed reading all binary
+	data from socket. Before it wasn't finish.
+
+2012-04-23  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/rsa/pkcs/%3a12/keystore.scm (load-keystore): fixed loading
+	certificates. it did not load any certificate before.
+
+	* src/port.c (port_cpl): fixed class hierachy of port.
+
+2012-04-20  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/rfc/base64.scm (base64-decode-string): modified to return
+	bytevector when optional transcoder was #f.
+
+2012-04-19  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/port.c (Sg_MakeByteArrayOutputPort): improved performance of
+	bytevector-output-port and string-output-port.
+
+2012-03-29  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/rfc/x.509.scm: added x509 utility library.
+
+2012-03-18  Takashi Kato  <ktakashi@ymail.com>
+
+	* boot/compiler.scm (define-library): added missing feature cond-expand.
+
+2012-03-12  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/sagittarius/mop/allocation.scm (sagittarius mop allocation):
+	added :allocation supported metaclass.
+
+2012-03-09  Takashi Kato  <ktakashi@ymail.com>
+
+	* ext/crypto/crypto/key.scm (crypto): added public/private key export
+	and import.
+
+	* sitelib/asn.1/types.scm (asn.1): <der-integer> fixed invalid
+	conversion when it got 0 as its value.
+
+2012-03-07  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/util/port.scm (util): added port-fold-right.
+
+	* src/clos.c (Sg_NoNextMethod): fixed infinite loop.
+
+2012-03-05  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/os/win/thread.c (Sg_InternalThreadStart): fixed thread-terminate! related error on Windows.
+
+2012-02-11  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/text/csv.scm (text csv): added csv parse library.
+
+	* src/extlib.stub (current-directory): fixed segv.
+
+2012-02-08  Takashi Kato  <ktakashi@ymail.com>
+
+	* boot/compiler.scm (and-let*): added and-let* as a builtin syntax.
+
+	* src/library.c (search_library): modified to use full path to save
+	cache file.
+
+	* src/vm.c (Sg_GetStackTrace): modified to get better stack trace.
+
+2012-02-05  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/null.stub (put-string put-byevector): fixed range check.
+
+2012-01-16  Takashi Kato  <ktakashi@ymail.com>
+
+	* ext/*/*_stub.c: removed extra module's generated stub files.
+
+	* ext/regex/regex2.c (unescape_char): fixed reading \xhh.
+	added \uhhhh and \Uhhhhhhhh.
+
+	* src/null.stub (quotient remainder modulo): modified to raise an
+	&assertion when divisor was 0.
+
+2012-01-14  Takashi Kato  <ktakashi@ymail.com>
+
+	* ext/crypto/random.c (Sg_MakePseudoRandom): separated pseudo random and
+	secure random
+
+2012-01-11  Takashi Kato  <ktakashi@ymail.com>
+
+	* boot/compiler.scm (include include-ci): implemented include related
+	syntax.
+
+2012-01-05  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/extlib.stub (weak-vector): supported weak vector.
+
+	* boot/compiler.scm (cond-expand): added builtin cond-expand.
+
+	* README.md: changed to Markdown format.
+
+2012-01-04  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/null.stub (list->string): it accepted non list object and
+	returned empty string.
+
+	* R7RS: added first support for R7RS libraries and syntax.
+
+	* boot/compiler.scm (case): adjusted case to R7RS '=> keyword.
+
+2012-01-03  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/shorten.scm (shorten): Added (shorten)library.
+
+	* src/hashtable.c (equal-hash): Fixed non stop problem when given object
+	contains too many shared objects.
+
+2011-12-30  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/sagittarius/control.scm (define-with-key):
+	rewrite define-with-key.
+
+2011-12-29  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/sagittarius/reader.scm (sagittarius reader):
+	added reader macro library.
+
+2011-11-23  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/null.stub (*.): fixed returning always 0.0.
+
+	* boot/compiler.scm (pass1/scan-inlinable): fixed mis marking for
+	constable and inlinable.
+
+2011-11-15  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/charset.c :
+	[Issue 4] Added builtin charset.
+
+	* src/treemap.c, src/rbtree.c :
+	[Issue 3] Added treemap interface and implementation.
+
+2011-11-13  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/library.c (Sg_ImportLibraryFullSpec):
+	[Issue 2] Fixed rename export.
+
+2011-11-11  Takashi Kato  <ktakashi@ymail.com>
+
+	* started Version 0.2.3.
+
+	* boot/lib/scmlib.scm (er-macro-transformer): fixed compare procedure.
+
+2011-11-10  Takashi Kato  <ktakashi@ymail.com>
+
+	* boot/compiler.scm (pass1/collect-inlinable!): added constable flag,
+	and fixed $gset was not treated properly.
+	(compile): added library constant fold.
+
+2011-11-09  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/extlib.stub (current-directory): made it as a parameter.
+
+	* boot/compiler.scm: added const inliner on pass2.
+
+	* src/null.stub (make-transcoder): Fixed native EOL style problem.
+
+	* CMakeLists.txt: Supported non Boehm GC installed platform.
+
+2011-11-08  Takashi Kato  <ktakashi@ymail.com>
+
+	* ext/zlib/rfc/zlib.scm (rfc zlib): (rfc zlib) library has been added.
+
+	* src/null.stub (get-bytevector-n!): fixed invalid range check.
+
+	* doc/rnrs/io/ports.scrbl: fixed reversed order argument list in
+	call-with-port.
+
+	* src/port.c (custom_close): fixed not calling close procedure of
+	custom port when the port was closed.
+
+2011-11-03  Takashi Kato  <ktakashi@ymail.com>
+
+	* lib/compat/r7rs.scm (compat r7rs): added R7RS compatibility library.
+	currently, only syntax-rules.
+
+	* sitelib/match.scm (match): fixed unbound variable match:error
+
+	* boot/lib/match_core.scm (match): fixed unbound variable 'faile-sym.
+
+2011-11-01  Takashi Kato  <ktakashi@ymail.com>
+
+	* boot/compiler.scm (global-eq?): fixed finding target library.
+
+	* sitelib/sagittarius/control.scm (define-with-key): fixed non-hygine
+	macro to hygine.
+
+2011-10-28  Takashi Kato  <ktakashi@ymail.com>
+
+	* boot/compiler.scm (let*-values): fixed wrong reference of compile time
+	environment. let*-values init form could refer formals.
+
+	* src/null.stub (delete-file): it did not raise error when deleting file
+	was failed. it's been fixed.
+
+2011-10-27  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/util/hashtables.scm (util hashtables): added hashtable utils.
+
+	* sitelib/scribble.scm (scribble): adapt scribble reader to bytevector.
+
+2011-10-26  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/library.c (rename_key): fixed rename import restriction.
+
+2011-10-21  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/util/list.scm: separated from (rfc http).
+
+	* test/tests/text/sxml/ssax.scm (ssax): ssax test case has been added.
+
+	* src/load.c (load): if target loading file had hash-bang, load did not
+	restore the previous mode. it's been fixed.
+
+	* src/library.c (import): rename import did not work. it's been fixed.
+
+2011-10-20  Takashi Kato  <ktakashi@ymail.com>
+
+	* boot/compiler.scm: fixed miscompiling when builtin test instruction had
+	let clause.
+
+	* sitelib/util/file.scm (util file): Gauche like file utility has been added.
+
+	* sitelib/util/port.scm (util port): Gauche like port utility has been added.
+
+	* sitelib/srfi/%3a38/with-shared-structure.scm (srfi-38): For portability,
+	this library has been added.
+
+2011-10-17  Takashi Kato  <ktakashi@ymail.com>
+
+	* boot/lib/macro.scm (expand-syntax): fixed replacing non equal identifiers.
+
+	* src/identifier.c (Sg_IdentifierEqP): fixed comparing identifiers.
+
+2011-09-08  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/library.c (import_parents): improved library system.
+
+2011-09-07  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/number.c (Sg_Sin): fixed when argument was not fixnum nor complex number
+	it just returned flonumise the argument.
+
+	* sitelib/srfi/%3a0/cond-expand.scm: cond-expand was supported.
+
+2011-09-06  Takashi Kato  <ktakashi@ymail.com>
+
+	* boot/compiler.scm (renv): made it not to use hashtable for cache.
+
+	* sitelib/srfi/%3a98.scm: supported srfi-98.
+
+	* boot/compiler.scm (pass2/lambda-lifting): added lambda lifting.
+
+	* src/vm.c (expand_stack): implemented stack expantion.
+
+2011-08-04  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/number.c (Sg_Mul): fixed bignum * 0 calculation. it returned bignum.
+
+2011-07-26  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/writer.c (write_symbol): fixed unneccessary case for escape symbol.
+
+2011-07-21  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/null.stub: fixed list-transpose+ SIGSEGV.
+
+2011-07-18  Takashi Kato  <ktakashi@ymail.com>
+
+	* ext/process/process.c: added process library.
+
+	* src/os/win/file.c: fixed windows dynamic load path.
+
+2011-07-17  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/sagittarius/file.h: current-directory and set-current-directory
+	have been added.
+
+2011-07-15  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/cache.c (read_library): fixed not imported library problem, when
+	a cache imports the same library twice.
+
+	* sitelib/srfi/%3a13.scm (srfi): added low level procedures to export spec.
+
+	* sitelib/text/sxml/helper.scm: fixed export problem.
+
+	* sitelib/text/parse.scm (text parse): fixed find-string-from-port?. It was
+	using kmp-restart-vector wrong way.
+
+	* src/exceptions.c (condition): fixed segmentation fault when given argument
+	contains (condition).
+
+2011-07-14  Takashi Kato  <ktakashi@ymail.com>
+
+	* ext/socket/socket.c: fixed read problem.
+
+2011-07-13  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/encoding/euc-jp.scm (encoding euc-jp): added euc-jp codec.
+
+	* src/null.stub: modified get-bytevector-* series for socket to read
+	bytes from textual ports.
+
+	* ext/regex/regex.c: fixed char_property matching, it always failed when
+	it reached last.
+
+2011-07-12  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/rfc/uri.scm (rfc uri): made uri record use keyword to
+	initialize values.
+
+	* sitelib/sagittarius/control.scm (sagittarius control): introduced
+	let-keywords and let-keywords*.
+
+2011-07-11  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/slib/queue.scm (slib queue): added slib queue.
+
+2011-07-10  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/reader.c (read): added #!/... style hash bang line reader.
+
+	* boot/compiler.scm (pass1/define): added (define <var>) form to
+	conform R6RS.
+
+2011-07-09  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/number.c (Sg_NumberToString): fixed displaying infinite complex
+	number.
+
+2011-07-08  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/cache.c (compiled cache): introduced compiled cache mechanism.
+	fixed cache structure.
+
+	* src/extlib.stub (sagittarius): added read-directory and clean-cache.
+
+2011-06-30  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/encoding/sjis.scm (encoding sjis): added sjis-codec.
+
+2011-06-29  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/codec.h: prepared for custom codec.
+
+2011-06-26  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/rfc/base64.scm (rfc base64): changed to use define-optional
+	instead of case-lambda.
+
+	* sitelib/rfc/quoted-printable.scm (rfc quoted-printable): introduced
+	(rfc quoted-printable) library.
+
+2011-06-23  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/rfc/uri.scm (rfc uri): added RFC3986 uttility library.
+
+	* src/null.stub (null): fixed get-line method.
+
+	* src/library.c (encode_string): added encoding method to convert
+	library name to path.
+
+	* ext/regex/regex.c: fixed some bugs.
+
+	* sitelib/srfi/%3a2/and-let%2a.scm (srfi :2 and-let*): added srfi-2.
+
+	* sitelib/text/parse.scm (text parse): addes parse input library.
+
+	* sitelib/rfc/%3a5322.scm (rfc :5322): added rfc 5322 utility library.
+
+2011-06-22  Takashi Kato  <ktakashi@ymail.com>
+
+	* ext/regex/sagittarius/regex.scm (sagittarius regex): introduced Java
+	compatible regular expression library.
+
+2011-06-17  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/null.stub, src/extlib.stub (display write newline write/ss format):
+	added open check and output port check.
+	
+2011-06-16  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/port.c (Sg_PseudoClosePort): fixed stupid bug.
+
+	* ext/socket/sagittarius/socket.scm (sagittarius socket): socket library
+	has been added.
+
+2011-06-08  Takashi Kato  <ktakashi@ymail.com>
+
+	* ext/time/time.c (sagittarius time): introduced first version of time
+	library.
+
+2011-06-07  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/match.scm (match): introduced Andrew Wright's match.
+
+	* autogen.sh: use sash instead of Ypsilon to generate stub
+
+2011-06-06  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/sagittarius/threads.scm (sagittarius threads): introduced first version
+	of multi threading library(not completed yet)
+
+	* lib/rnrs.scm, lib/rnrs/base.scm, lib/rnrs/syntax-case.scm (rnrs): removed
+	misc exports.
+
+	* src/load.c (Sg_DynLoad): implemented derive_dynload_initfn to derive
+	initialization function from dynamic libary name.
+
+2011-06-01  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/code.c (SG_INT_FITS_INSN_VALUE): fixed condition.
+
+	* lib/core/exceptions.scm (core): fixed exception when internal defines
+	are in guard body.
+
+	* src/weak.c: introduced weak hashtable.
+
+2011-05-30  Takashi Kato  <ktakashi@ymail.com>
+
+	* boot/compiler.scm (syntax-quote): introduced syntax-quote for
+	macro expansion.
+	(pass1/quasiquote): fixed mis porting.
+
+2011-05-24  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/srfi/%3a8/char-set.scm (srfi): srfi-8 has been added.
+
+	* sitelib/srfi/%3a14/char-set.scm (srfi): srfi-14 has been added.
+
+	* sitelib/srfi/%3a13/strings.scm (srfi): srfi-13 has been added.
+
+	* src/vm.c (insn SUBI): fixed calculation mis-order.
+
+2011-05-23  Takashi Kato  <ktakashi@ymail.com>
+
+	* CMakeLists.txt: fixed incorrect load path on cygwin.
+
+	* src/null.stub (rnrs): added exit
+
+	* src/core.c: added cleanup implementation(not completed yet)
+
+	* src/compare.c (equal?): fixed SIGSEGV when lhs was string and lhs
+	was not string.
+
+	* boot/compiler.scm (pass1/quasiquote): fixed when quasiquote got
+	identifire.
+
+	* src/library.c (rename import): fixed not imported bug.
+
+2011-05-19  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/rfc/base64.scm: added bytevector interface.
+
+	* src/null.stub (bytevector port): fixed get-u8 and lookahead-u8,
+	when a port reached EOF it returned -1, instead of EOF.
+
+	* boot/compiler.scm: implemented R6RS let-syntax letrec-syntax and
+	define-syntax.
+
+2011-05-18  Takashi Kato  <ktakashi@ymail.com>
+
+	* lib/rnrs/r5rs.scm (rnrs r5rs): added r5rs compatible files.
+
+	* src/null.stub (rnrs hashtables): added hashtable procedures.
+
+2011-05-17  Takashi Kato  <ktakashi@ymail.com>
+
+	* boot/lib/macro.scm (syntax-case): fixed renaming problem.
+
+	* boot/compiler.scm (pass1/body): refactored for internal macro.
+
+2011-05-12  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/library.c (library): implemented efficient import spec resolver.
+
+2011-05-11  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/null.stub (flonum): added flomun operations.
+
+	* sitelib/sagittarius/cgen/base.scm (cgen): fixed remainer proc.
+
+2011-05-10  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/null.stub, src/port.c (rnrs io ports): make it pass R6RS test
+	suite.
+	(fixnum): fixed fxodd? fxeven? fixnum-width, fxand, fxior and fxxor.
+
+2011-05-09  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/codec.c (latin-1-codec): added implementation.
+
+	* src/record.c (record): fixed record-generative?, record-predicate,
+	record-accessor and record-mutator.
+
+2011-05-07    <ktakashi@ymail.com>
+
+	* src/null.stub (rnrs base): fixed '/' error.
+
+2011-05-06  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/exceptions.c (rnrs conditions): added missing condition and fixed
+	some typos.
+
+	* boot/lib/scmlib.scm (list-sort vector-sort vector-sort!): deleted
+	duplicates.
+
+	* src/null.stub (utf16->string utf32->string): fixed endian detection.
+	(assoc): fixed typo (assc -> assoc)
+
+	* src/sagittarius/error.h, src/error.c: added implementation of
+	implementation-restriction-violation
+
+	* src/null.stub (null): added some fixnum arithmetic operations
+
+	* src/reader.c (read_prefixed_number): fixed mis-reading #i#xf/e case.
+
+2011-05-05  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/vm.c (eval): refactered evaluation routine.
+	(call/cc winders): fixed before thunk was not called.
+
+	* src/load.c, src/sagittarius/load.h: separate files from vm.h and vm.c
+
+2011-04-26  Takashi Kato  <ktakashi@ymail.com>
+
+	* boot/lib/macro.scm (syntax-case): fixed mis expansion when syntax
+	templates contained vectors.
+
+	* src/record.c (Sg_MakeRecordTypeDescriptor): fixed fields order.
+
+	* src/macro.c (unwrap_rec): fixed unwrapping vector.
+
+2011-04-22  Takashi Kato  <ktakashi@ymail.com>
+
+	* boot/lib/macro.scm (expand-syntax): fixed unbound variable error, when
+	evaluate (syntax ...) expression in non macro context.
+
+	* src/gloc.c, src/sagittarius/gloc.h (gloc): added gloc
+
+2011-04-21  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/sagittarius/misc.scm (sagittarius misc): added define-macro.
+
+	* sitelib/sagittarius/aspect.scm (sagittarius aspect): added point-cut.
+
+	* boot/compiler.scm (interesting-to-quasiquote?): fixed mis expanding
+	when macro returned wraped expression.
+
+	* boot/lib/macro.scm (core syntax-case): resolved free pattern variable
+	problem.
+
+	* src/identifier.c (Sg_WrapSyntax): fixed error when vector was given.
+
+2011-04-19  Takashi Kato  <ktakashi@ymail.com>
+
+	* sitelib/pp.scm: removed #<unknown> and added #<unspecified>
+
+2011-04-18  Takashi Kato  <ktakashi@ymail.com>
+
+	* boot/lib/macro.scm (syntax-case): Added syntax-case expander.
+	(syntax): Added syntax expander.
+
+2011-04-14  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/main.c (show_usage): added usage message.
+
+2011-04-13  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/port.c (Sg_GetStringFromStringPort): fixed retrieving string process.
+
+2011-04-12  Takashi Kato  <ktakashi@ymail.com>
+
+	* boot/lib/scmlib.scm (rnrs io simple): all (rnrs io simple) functions
+	are implemented.
+
+	* src/null.stub (rnrs io port): added custom ports.
+
+	* src/port.c (rnrs io port): added Sg_MakeCustomBinaryPort and
+	Sg_MakeCustomTextualPort for custom ports
+
+2011-04-11    <ktakashi@ymail.com>
+
+	* boot/lib/scmlib.scm (rnrs io port): implemented open-bytevector-output-port
+	(rnrs io port): added call-with-string/bytevector-output-port.
+
+	* src/null.stub (rnrs io port): implemented most of port functions.
+	custom ports are not implemented yet.
+
+2011-04-09    <ktakashi@ymail.com>
+
+	* sitelib/sagittarius/cgen/base.scm (sagittarius): modified arrayref to
+	output prettier C.
+
+	* src/null.stub (rnrs io port): added get-bytevector related and
+	get-string related functions
+
+2011-04-08  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/bytevector.c (Sg_ByteVectorToString): fixed over reading from
+	bytevector.
+
+	* src/null.stub (rnrs bytevectors): added utf32<->string functions.
+
+	* boot/lib/scmlib.scm (rnrs unicode): added string-ci related functions.
+	(rnrs bytevectors): added bytevector-uint related
+	functions.
+	(rnrs lists): added for-all etc.
+	(rnrs sorting): added sort functions.
+
+	* src/unicode.c (rnrs unicode): added string-normalize related functions.
+
+	* src/null.stub (rnrs io ports): added some port related functions.
+
+	* src/sagittarius/subr.h (argumentAsCodec): added check macro for codec.
+
+2011-04-07  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/codec.c (utf32): added utf-32 codec implementation.
+
+	* src/unicode.c (rnrs unicode): added string-**case function.
+
+2011-04-06  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/number.c, src/number.h (rationalize): added rationalize.
+
+	* src/unicode.c, src/unicode.h (rnrs unicode): added char related unicode function.
+
+2011-04-05  Takashi Kato  <ktakashi@ymail.com>
+
+	* src/null.stub (rnrs base): (rnrs base (6)) procedures are implemented.
+
+2011-04-04  Takashi Kato  <ktakashi@ymail.com>
+
+	* Sagittarius (Scheme function): added input/output port for file binary
+	port and transcoded textual port.
+
+	* Sagittarius (C function): fixed gc finalizer related bug.
+
+	* Sagittarius (C function): added weak hash table. (From Gauche)
+
+	* Sagittarius (C function): file binary in/out port supported buffer mode.
+
