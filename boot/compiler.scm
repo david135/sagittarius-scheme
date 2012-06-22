@@ -1173,8 +1173,7 @@
 				 (expand (cdr expr) 1)))
 		     (((? unquote? -) e1) e1)
 		     (((? unquote? -) . -)
-		      (syntax-error 'quasiquote
-				    "unquote appear in bad context" form expr))
+		      (syntax-error "unquote appear in bad context" form expr))
 		     (((? quasiquote? -) . -)
 		      (syntax-error 
 		       'quasiquote
@@ -1787,15 +1786,13 @@
   (smatch form
     ((_ arg specs . body)
      (pass1/let-keywords form arg specs body let. p1env))
-    (_ (syntax-error 'let-keywords
-		     "malformed let-keywords" form))))
+    (_ (syntax-error "malformed let-keywords" form))))
 
 (define-pass1-syntax (let-keywords* form p1env) :sagittarius
   (smatch form
     ((_ arg specs . body)
      (pass1/let-keywords form arg specs body let*. p1env))
-    (_ (syntax-error 'let-keywords
-		     "malformed let-keywords" form))))
+    (_ (syntax-error "malformed let-keywords" form))))
 
 (define-pass1-syntax (let form p1env) :null
   (smatch form
@@ -2098,7 +2095,8 @@
      ;; In that case it is better to convert it (set-car! (list a b) c).
      ;; So we first check if the 'op' has setter then convert it.
      ;; TODO: benchmark. I have no idea if this is fast enough to do.
-     ($call form (or (and-let* ((g (find-binding (p1env-library p1env)
+     ($call form (or (and-let* (( (variable? op) ) ;; for object-apply
+				(g (find-binding (p1env-library p1env)
 						 (variable-name op) #f))
 				(p (gloc-ref g))
 				(s (setter p))
@@ -4726,7 +4724,7 @@
 	;; closure to trunk cb.
 	(cb-emit-closure! cb CLOSURE lambda-cb
 			  ($lambda-name iform)
-			  nargs 
+			  ($lambda-args iform)
 			  (> ($lambda-option iform) 0)
 			  frlen
 			  (+ body-size frsiz nargs (pass3/frame-size))

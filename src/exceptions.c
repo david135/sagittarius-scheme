@@ -61,7 +61,7 @@ static SgObject condition_printer_rec(SgObject *args, int argc, void *data)
   SgTuple *t;
   int len;
 
-  if (argc != 2) {
+  if ((argc > 2 && !SG_NULLP(args[argc-1])) || argc < 1) {
     Sg_WrongNumberOfArgumentsBetweenViolation(SG_INTERN("condition-printer"),
 					      1, 2, argc, SG_NIL);
   }
@@ -70,7 +70,7 @@ static SgObject condition_printer_rec(SgObject *args, int argc, void *data)
       Sg_WrongTypeOfArgumentViolation(SG_INTERN("condition-printer"),
 				      SG_MAKE_STRING("port"), args[1], SG_NIL);
     }
-    p = SG_PORT(args[1]);
+    p = SG_PORT(SG_CAR(args[1]));
   } else {
     p = SG_PORT(Sg_CurrentOutputPort());
   }
@@ -91,7 +91,7 @@ static SgObject condition_printer_rec(SgObject *args, int argc, void *data)
   return SG_UNDEF;
 }
 
-static SG_DEFINE_SUBR(condition_printer_body, 1, 1, condition_printer_rec, SG_FALSE, NULL);
+static SG_DEFINE_SUBR(condition_printer_body, 1, 2, condition_printer_rec, SG_FALSE, NULL);
 
 SgObject Sg_Condition(SgObject components)
 {
@@ -227,6 +227,8 @@ static SgObject make_irritants_condition;
 static SgObject make_warning;
 static SgObject make_lexical_violation;
 static SgObject make_read_error;
+static SgObject make_error;
+static SgObject make_syntax_error;
 
 SgObject Sg_MakeNonContinuableViolation()
 {
@@ -270,6 +272,23 @@ SgObject Sg_MakeReaderCondition(SgObject msg)
 			       Sg_MakeMessageCondition(msg)));
 }
 
+SgObject Sg_MakeError(SgObject msg)
+{
+  return Sg_Condition(SG_LIST2(Sg_Apply0(make_error),
+			       Sg_MakeMessageCondition(msg)));
+}
+
+SgObject Sg_MakeSyntaxError(SgObject msg, SgObject form)
+{
+  SgObject subform = SG_FALSE;
+  if (SG_PAIRP(form) && SG_PAIRP(SG_CAR(form))) {
+    subform = SG_CDR(form);
+    form = SG_CAR(form);
+  }
+  return Sg_Condition(SG_LIST2(Sg_Apply2(make_syntax_error, form, subform),
+			       Sg_MakeMessageCondition(msg)));
+}
+
 static SgObject list_parents(SgObject rtd)
 {
   SgObject lst = SG_NIL;
@@ -287,9 +306,6 @@ static SgObject list_parents(SgObject rtd)
 SgObject Sg_DescribeCondition(SgObject con)
 {
   if (Sg_ConditionP(con)) {
-    /* SgGloc *g = Sg_FindBinding(SG_INTERN("(core errors)"), SG_INTERN("describe-condition"), SG_FALSE); */
-    /* SgObject proc = SG_GLOC_GET(g); */
-    /* return Sg_Apply1(proc, con); */
     SgObject out = Sg_MakeStringOutputPort(512);
     SgObject lst = Sg_SimpleConditions(con), cp;
     Sg_Printf(out, UC("  #<condition\n"));
@@ -319,14 +335,15 @@ SgObject Sg_DescribeCondition(SgObject con)
       } else if (count > 1) {
 	SgObject obj, args[1], lst;
 	int i = 0;;
+	Sg_Printf(out, UC("\n"));
 	SG_FOR_EACH(lst, fields) {
 	  SgObject acc = Sg_RecordAccessor(rtd, i++);
 	  args[0] = rec;
 	  obj = SG_SUBR_FUNC(acc)(args, 1, SG_SUBR_DATA(acc));
 	  if (SG_STRINGP(obj)) {
-	    Sg_Printf(out, UC("      %A: %A"), SG_CAR(lst), obj);
+	    Sg_Printf(out, UC("      %A: %A\n"), SG_CDAR(lst), obj);
 	  } else {
-	    Sg_Printf(out, UC("      %A: %S"), SG_CAR(lst), obj);
+	    Sg_Printf(out, UC("      %A: %S\n"), SG_CDAR(lst), obj);
 	  }
 	}
       }
@@ -463,6 +480,7 @@ void Sg__InitConsitions()
     /* error */
     INTERN_CONDITION_WITH_PARENT(&error, &serious, nullvec);
     INTERN_CTR_PRED(&error, make-error, error?);
+    make_error = ctr;
   }
   {
     /* violation */
@@ -514,6 +532,7 @@ void Sg__InitConsitions()
     INTERN_COND_ACCE(&syntax, syntax-violation-form);
     INTERN_ACCE(&syntax, &syntax-subform, 1);
     INTERN_COND_ACCE(&syntax, syntax-violation-subform);
+    make_syntax_error = ctr;
   }
   {
     /* undefined */
