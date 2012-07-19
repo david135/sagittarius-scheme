@@ -148,20 +148,20 @@ private:
   }
   // put the value to vm->ac or eax if noExternalCall is true
   // destination must indicate vm if noExternalCall is false.
-  void ac(const Xbyak::Reg32e &d, const Xbyak::Operand &v)
+  void ac(const Xbyak::Reg32e &vm, const Xbyak::Operand &v)
   {
     if (context_.noExternalCall) {
       mov(eax, v);
     } else {
-      mov(ptr[d + offsetof(SgVM, ac)], v);
+      mov(ptr[vm + offsetof(SgVM, ac)], v);
     }
   }
-  void ac(const Xbyak::Reg32e &d, const SgObject o)
+  void ac(const Xbyak::Reg32e &vm, const SgObject o)
   {
     if (context_.noExternalCall) {
       mov(eax, (intptr_t)o);
     } else {
-      mov(byte[d + offsetof(SgVM, ac)], (intptr_t)o);
+      mov(ptr[vm + offsetof(SgVM, ac)], (intptr_t)o);
     }
   }
   void vm_sp(const Xbyak::Reg32e &d, const Xbyak::Reg32e &vm)
@@ -180,10 +180,6 @@ private:
   {
     mov(d, ptr[vm + offsetof(SgVM, cont)]);
   }
-  void ref_ac(const Xbyak::Reg32e &vm)
-  {
-    ref_ac(eax, vm);
-  }
   void ref_ac(const Xbyak::Reg32e &d, const Xbyak::Reg32e &vm)
   {
     // if noExternalCall, eax is the previous instructions result.
@@ -201,7 +197,22 @@ private:
   }
 
   int compile_rec(SgWord *code, int size);
+
+  static void trace_impl(const char *msg)
+  {
+    SgVM *vm = Sg_VM();
+    fprintf(stderr, "%s(%p)\n", msg, vm->sp);
+  }
+  void trace(const char *msg)
+  {
+    push(eax);
+    push((uintptr_t)msg);
+    call((void*)JitCompiler::trace_impl);
+    pop(eax);
+    pop(eax);
+  }
 };
+
 
 /*
   Note:
@@ -226,8 +237,9 @@ int JitCompiler::compile_rec(SgWord *code, int size)
     // result such as PUSH.
     switch (insn) {
     case FRAME:
+      trace("enter FRAME");
+      // *newcont = (SgContFrame*)SP(vm);
       vm_sp(eax, ebx);
-      mov(eax, byte[eax]);	// *newcont = (SgContFrame*)SP(vm);
       // newcont->prev = vm->cont
       vm_cont(edx, ebx);
       mov(ptr[eax + offsetof(SgContFrame, prev)], edx);
@@ -248,39 +260,54 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       vm_sp(eax, ebx);
       lea(edx, ptr[eax + sizeof(SgContFrame)]);
       mov(ptr[ebx + offsetof(SgVM, sp)], edx);
+      trace("leave FRAME");
       break;
     case LREF_PUSH:
+      trace("enter LREF_PUSH");
       INSN_VAL1(val1, code[i]);
-      args(ecx);  // args
-      vm_sp(edx, ebx); // edx = vm->sp
-      mov(ecx, ptr[ecx + val1 * sizeof(void*)]);
-      mov(byte[edx], ecx);
+      args(eax);  // args
+      // ecx = arg_ref[val1]
+      mov(eax, ptr[eax + val1 * sizeof(void*)]);
+      trace("goto PUSH");
       // fall though
     case PUSH:
+      trace("enter PUSH");
+      vm_sp(edx, ebx); // edx = vm->sp
       // push argument to vm stack
+      mov(ptr[edx], eax);
+      // sp++
       add(edx, 1 * sizeof(void*));
-      mov(ptr[ebx + offsetof(SgVM, sp)], edx);
+      trace("leave PUSH");
       break;
     case LREF:
+      trace("enter LREF");
       INSN_VAL1(val1, code[i]);
       args(eax); // args
-      mov(edx, ptr[eax + val1 * sizeof(void*)]); // args[n] -> edx
-      ac(ebx, edx);
+      mov(eax, ptr[eax + val1 * sizeof(void*)]); // args[n] -> edx
+      ac(ebx, eax);
+      trace("leave LREF");
       break;
     case CONSTI:
+      trace("enter CONSTI");
       INSN_VAL1(val1, code[i]);
-      ac(ebx, SG_MAKE_INT(val1));
+      mov(eax, (uintptr_t)SG_MAKE_INT(val1));
+      ac(ebx, eax);
+      trace("leave CONSTI");
       break;
     case BNLE: {
       SgObject n = SG_OBJ(code[i+1]);
-      ac(ebx, eax); // eax = vm->ac
+      trace("enter BNLE");
+      ref_ac(eax, ebx); // eax = vm->ac
       push(eax);
       vm_stack_ref(eax, ebx, 0);
       push(eax);
       call((void*)Sg_NumLe);
       add(esp, 2 * sizeof(void*));
-      cmp(eax, 1);
+      // vm->sp--
+      vm_sp(edx, ebx);
+      sub(edx, 1 * sizeof(void*));
       std::string l = gen_label();
+      cmp(eax, 1);
       jne(l.c_str());
       // we don't set #f or #t to eax, it's useless
       // TODO if jump instruction
@@ -288,9 +315,11 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       L(l.c_str());
       j += compile_rec(code + i + 1 + SG_INT_VALUE(n), size - i);
       i += j;
+      trace("leave BNLE");
       break;
     }
     case ADD: {
+      trace("enter ADD");
       vm_stack_ref(eax, ebx, 0);
       lea(edx, ptr[eax - 1*sizeof(void*)]);
       mov(edx, ptr[ebx + offsetof(SgVM, sp)]);
@@ -298,14 +327,16 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       push(eax);
       push(edx);
       call((void*)Sg_Add);
-      ac(eax, ebx);
+      ac(ebx, eax);
       add(esp, 2*sizeof(void*));
+      trace("leave ADD");
       break;
     }
     case ADDI: {
+      trace("enter ADDI");
       INSN_VAL1(val1, code[i]);
       // TODO 64 bits
-      ref_ac(ebx);		// load vm->ac to eax
+      ref_ac(eax, ebx);		// load vm->ac to eax
       mov(edx, eax);
       // SG_INTP(vm->ac);
       and(edx, 3);
@@ -313,6 +344,7 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       std::string label = gen_label();
       std::string end_label = gen_label();
       je(label.c_str());
+      // ac != int
       push(eax);
       push((uintptr_t)SG_MAKE_INT(val1));
       call((void*)Sg_Add);
@@ -328,19 +360,24 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       add(esp, 1 * sizeof(void*));
       ac(ebx, eax);
       L(end_label.c_str());
+      trace("leave ADDI");
       break;
     }
     case GREF_CALL: {
+      trace("enter GREF_CALL");
       SgObject f = SG_OBJ(code[i+1]), o;
       INSN_VAL1(val1, code[i]);
       if (SG_IDENTIFIERP(f)) {
 	o = Sg_FindBinding(SG_IDENTIFIER_LIBRARY(f),
 			   SG_IDENTIFIER_NAME(f),
 			   SG_UNBOUND);
+
       } else {
-	// should be only here
-	o = SG_GLOC_GET(SG_GLOC(f));
+	o = f;
       }
+	// should be only here
+      o = SG_GLOC_GET(SG_GLOC(o));
+      
       // TODO more than one
       switch (val1) {
       case 0:
@@ -357,6 +394,7 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       default:
 	throw "not supported yet";
       }
+      trace("leave GREF_CALL");
       break;
     }
     case RET:
