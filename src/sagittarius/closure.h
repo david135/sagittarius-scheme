@@ -35,14 +35,25 @@
 #include "sagittariusdefs.h"
 #include "subr.h"
 
+#ifdef USE_JIT
+/* 
+   State for Jit compiler.
+ */
+typedef enum {
+  SG_NON_NATIVE,
+  SG_NATIVE,
+  SG_INVALID_FOR_NATIVE,
+} SgClosureState;
+#endif
+
 struct SgClosureRec
 {
   SgProcedure common;
   SgObject    code;		/* code builder */
-  int         size;		/* for display_closure */
-  /* SgObject   *mark; */	/* mark for frame pointer */
-  int         mark;
-  SgObject    prev;
+#ifdef USE_JIT
+  SgClosureState state;
+  SgObject    native;
+#endif
   SgObject    frees[1];
 };
 
@@ -53,6 +64,9 @@ struct SgClosureRec
 SG_CDECL_BEGIN
 
 SG_EXTERN SgObject Sg_MakeClosure(SgObject code, SgObject *frees);
+#ifdef USE_JIT
+SG_EXTERN int      Sg_JitCompileClosure(SgObject closure);
+#endif
 
 SG_CDECL_END
 

@@ -173,14 +173,26 @@
 
   if (proctype == SG_PROC_CLOSURE) {
     SgClosure * cl = SG_CLOSURE(AC(vm));
-    SgCodeBuilder *cb = SG_CODE_BUILDER(cl->code);
-    CHECK_STACK(cb->maxStack, vm);
-    ADJUST_ARGUMENT_FRAME(cl, argc);
-    CL(vm) = AC(vm);
-    PC(vm) = cb->code;
-    AC(vm) = SG_UNDEF;		/* make default return value #<unspecified> */
-    SG_PROF_COUNT_CALL(vm, CL(vm));
-    NEXT;
+#ifdef USE_JIT
+    if (cl->state == SG_NATIVE) {
+      ADJUST_ARGUMENT_FRAME(AC(vm), argc);
+      SG_PROF_COUNT_CALL(vm, AC(vm));
+      AC(vm) = SG_SUBR_FUNC(cl->native)(FP(vm), argc, vm);
+      if (TAIL_POS(vm)) RET_INSN();
+      NEXT;
+    } else {
+#endif
+      SgCodeBuilder *cb = SG_CODE_BUILDER(cl->code);
+      CHECK_STACK(cb->maxStack, vm);
+      ADJUST_ARGUMENT_FRAME(cl, argc);
+      CL(vm) = AC(vm);
+      PC(vm) = cb->code;
+      AC(vm) = SG_UNDEF; /* make default return value #<unspecified> */
+      SG_PROF_COUNT_CALL(vm, CL(vm));
+      NEXT;
+#ifdef USE_JIT
+    }
+#endif
   }
 
   if (proctype == SG_PROC_GENERIC) {

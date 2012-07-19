@@ -64,6 +64,7 @@
 
 	    ;; should this be here?
 	    gc
+	    jit-compile-closure!
 	    )
     (import :none)
   (decl-code
@@ -424,6 +425,8 @@
 
   (define-c-proc gc () ::<void> Sg_GC)
 
+  (define-c-proc jit-compile-closure! (c::<closure>) ::<boolean>
+    (result (Sg_JitCompileClosure c)))
   ;; call/pc
   (define-c-proc %call/pc (p::<procedure>)
     (result (Sg_VMCallPC p)))
