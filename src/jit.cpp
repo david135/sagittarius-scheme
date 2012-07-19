@@ -101,6 +101,8 @@ public:
   bool compile();
 
 private:
+  static const int VM_OFF = 16;
+  static const int ARGS_OFF = 8;
   // walk through the closure to detect possible
   // optimisation options.
   void walk()
@@ -140,11 +142,11 @@ private:
 
   void args(const Xbyak::Operand &d)
   {
-    stack_access(d, 8);
+    stack_access(d, ARGS_OFF);
   }
   void vm(const Xbyak::Operand &d)
   {
-    stack_access(d, 16);
+    stack_access(d, VM_OFF);
   }
   // put the value to vm->ac or eax if noExternalCall is true
   // destination must indicate vm if noExternalCall is false.
@@ -163,6 +165,14 @@ private:
     } else {
       mov(ptr[vm + offsetof(SgVM, ac)], (intptr_t)o);
     }
+  }
+  void vm_inc_sp()
+  {
+    add(ptr[ebp + VM_OFF + offsetof(SgVM, sp)], 1*sizeof(void*));
+  }
+  void vm_dec_sp()
+  {
+    sub(ptr[ebp + VM_OFF + offsetof(SgVM, sp)], 1*sizeof(void*));
   }
   void vm_sp(const Xbyak::Reg32e &d, const Xbyak::Reg32e &vm)
   {
@@ -201,7 +211,7 @@ private:
   static void trace_impl(const char *msg)
   {
     SgVM *vm = Sg_VM();
-    fprintf(stderr, "%s(%p)\n", msg, vm->sp);
+    fprintf(stderr, "%s(sp:%p *sp:%p)\n", msg, vm->sp, *vm->sp);
   }
   void trace(const char *msg)
   {
@@ -276,7 +286,7 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       // push argument to vm stack
       mov(ptr[edx], eax);
       // sp++
-      add(edx, 1 * sizeof(void*));
+      vm_inc_sp();
       trace("leave PUSH");
       break;
     case LREF:
@@ -304,8 +314,9 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       call((void*)Sg_NumLe);
       add(esp, 2 * sizeof(void*));
       // vm->sp--
-      vm_sp(edx, ebx);
-      sub(edx, 1 * sizeof(void*));
+      //vm_sp(edx, ebx);
+      //sub(edx, 1 * sizeof(void*));
+      vm_dec_sp();
       std::string l = gen_label();
       cmp(eax, 1);
       jne(l.c_str());
