@@ -381,7 +381,9 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       // TODO more than one
       switch (val1) {
       case 0:
+	push((uintptr_t)o);
 	call((void*)Sg_Apply0);
+	add(esp, 1 * sizeof(void*));
 	break;
       case 1:
 	// extract arguments from vm stack pointer
