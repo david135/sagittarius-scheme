@@ -178,7 +178,9 @@
       ADJUST_ARGUMENT_FRAME(AC(vm), argc);
       SG_PROF_COUNT_CALL(vm, AC(vm));
       AC(vm) = SG_SUBR_FUNC(cl->native)(FP(vm), argc, vm);
-      if (TAIL_POS(vm)) RET_INSN();
+      /* native compiled closure won't pop it's continuation frame
+         so we need to pop it manually here. */
+      POP_CONT();
       NEXT;
     } else {
 #endif
