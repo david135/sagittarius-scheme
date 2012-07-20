@@ -30,6 +30,7 @@
  *  $Id: $
  */
 #include <string>
+#include <map>
 #include <stdexcept>
 #include "xbyak/xbyak.h"
 #define LIBSAGITTARIUS_BODY
@@ -43,10 +44,12 @@
 #include "sagittarius/vm.h"
 
 //#define JIT_DEBUG
-
+typedef std::map<SgWord*, std::string> Labels;
 struct WalkContext
 {
   bool noExternalCall;		// not to access given VM.
+  Labels srcLabels;
+  Labels dstLabels;
   WalkContext() 
     : noExternalCall(true)
   {}
@@ -61,7 +64,16 @@ public:
 
 class DefaultWalker : public Walker
 {
+private:
+  int label_;
+  std::string gen_label()
+  {
+    char buf[20];
+    snprintf(buf, 20, "J%d", label_++);
+    return std::string(buf);
+  }
 public:
+  DefaultWalker() : label_(0) {}
   virtual void walk(SgClosure *closure, WalkContext &ctx);
 };
 
@@ -73,6 +85,15 @@ void DefaultWalker::walk(SgClosure *closure, WalkContext &ctx)
     Instruction insn = static_cast<Instruction>(INSN(code[i]));
     InsnInfo *info = Sg_LookupInsnName(insn);
     switch (INSN(code[i])) {
+    case JUMP:{
+      int n = SG_INT_VALUE(code[i+1]);
+      // store the position to lookup
+      std::string label = gen_label();
+      // set both from and to
+      ctx.srcLabels.insert(Labels::value_type(code+i, label));
+      ctx.dstLabels.insert(Labels::value_type(code+i+1+n, label));
+      break;
+    }
       // for now
     case GREF_CALL:
     case GREF_TAIL_CALL: {
@@ -97,7 +118,8 @@ void DefaultWalker::walk(SgClosure *closure, WalkContext &ctx)
       // so that the real compiler can simply compile it to native
       // call instruction instead of using Sg_Apply.
       // TODO generic?
-      if (!SG_EQ(closure, p) && SG_CLOSUREP(p)) {
+      if (!SG_EQ(closure, p) && SG_CLOSUREP(p) && 
+	  SG_CLOSURE(p)->state == SG_NON_NATIVE) {
 	// to make it easier, compile it here
 	int r = Sg_JitCompileClosure(p);
 	if (!r) {
@@ -387,13 +409,20 @@ int JitCompiler::compile_rec(SgWord *code, int size)
   for (i = 0; i < size;) {
     Instruction insn = static_cast<Instruction>(INSN(code[i]));
     InsnInfo *info = Sg_LookupInsnName(insn);
-    int val1;
+    int val1, val2;
     void *bnproc = NULL;
+    // emit jump destination label, if there is
+    Labels::iterator itr = context_.dstLabels.find(code+i);
+    if (itr != context_.dstLabels.end()) {
+      L(itr->second.c_str());
+    }
     // if it has some result. cf) some instruction does not have
     // result such as PUSH.
     switch (insn) {
       // we don't have to consider FRAME vm instruction
     case FRAME: break;
+      // ENTER vm instruction is more like for sanity...
+    case ENTER: break;
     case LREF_PUSH:
       trace("enter LREF_PUSH");
       INSN_VAL1(val1, code[i]);
@@ -423,6 +452,9 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       push_insn(edx, ecx);
       trace("leave CONSTI");
       break;
+    case BNNUME:
+      bnproc = (void *)Sg_NumEq;
+      goto bnnum_entry;
     case BNGE:
       bnproc = (void *)Sg_NumGe;
       goto bnnum_entry;
@@ -437,7 +469,7 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       goto bnnum_entry;
     bnnum_entry:
       {
-	SgObject n = SG_OBJ(code[i+1]);
+	int n = SG_INT_VALUE(code[i+1]);
 	trace("enter BNLE");
 	push(eax);
 	vm_stack_ref(edx, ebx, 0);
@@ -453,9 +485,9 @@ int JitCompiler::compile_rec(SgWord *code, int size)
 	jne(l.c_str(), (SG_INT_VALUE(n) < 5) ? T_AUTO : T_NEAR);
 	// we don't set #f or #t to eax, it's useless
 	// TODO if jump instruction
-	int j= compile_rec(code + i + 2, SG_INT_VALUE(n));
+	int j= compile_rec(code + i + 2, n);
 	L(l.c_str());
-	j += compile_rec(code + i + 1 + SG_INT_VALUE(n), size - i);
+	j += compile_rec(code + i + 1 + n, size - i - j);
 	i += j;
 	trace("leave BNLE");
 	break;
@@ -507,7 +539,6 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       retrive_next_gloc(o, SG_OBJ(code[i+1]));
       // for proper tail recursive, we can not consume c stack either.
       // so make this simple jump
-
       // manage vm->sp part
       vm_sp(edx, ebx);
       push(edx);
@@ -605,10 +636,39 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       trace("leave GREF_CALL");
       break;
     }
+    case SHIFTJ: {
+      trace("enter SHIFTJ");
+      INSN_VAL2(val1, val2, code[i]);
+      // TODO do we need this?
+      push(eax);
+      vm_sp(edx, ebx);
+      push(edx);
+      push((uintptr_t)val1);
+      vm_fp(ecx, ebx);
+      lea(ecx, ptr[ecx + val2*sizeof(void*)]);
+      push(ecx);
+      call((void*)JitCompiler::shift_args);
+      add(esp, 3 * sizeof(void*));
+      // vm->sp = eax
+      mov(ptr[ebx + offsetof(SgVM, sp)], eax);
+      pop(eax);
+      trace("leave SHIFTJ");
+      break;
+    }
+    case JUMP:
+      trace("enter JUMP");
+      itr = context_.srcLabels.find(code+i);
+      if (itr == context_.srcLabels.end()) {
+	// something wrong
+	throw std::runtime_error("JUMP does not have destination");
+      }
+      jmp(itr->second.c_str(), T_NEAR);
+      trace("leave JUMP");
+      break;
     case RET:
       trace("RETURN");
       epilogue();
-      return i;
+      return i+1;
     default:
       throw std::runtime_error(info->name);
     }
