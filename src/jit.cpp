@@ -180,12 +180,6 @@ private:
   void epilogue()
   {
     // only noExternalCall is false, we need to move
-    // vm->ac to eax
-    if (!context_.noExternalCall) {
-      // put vm->ac to eax
-      vm(edx);
-      mov(eax, ptr[edx + offsetof(SgVM, ac)]);
-    }
     pop(ebp);
     ret();
   }
@@ -213,32 +207,12 @@ private:
   {
     stack_access(d, VM_OFF);
   }
-  // put the value to vm->ac or eax if noExternalCall is true
-  // destination must indicate vm if noExternalCall is false.
-  void ac(const Xbyak::Reg32e &vm, const Xbyak::Operand &v)
-  {
-    if (context_.noExternalCall) {
-      mov(eax, v);
-    } else {
-      mov(ptr[vm + offsetof(SgVM, ac)], v);
-    }
-  }
-  void ac(const Xbyak::Reg32e &vm, const SgObject o)
-  {
-    if (context_.noExternalCall) {
-      mov(eax, (intptr_t)o);
-    } else {
-      mov(ptr[vm + offsetof(SgVM, ac)], (intptr_t)o);
-    }
-  }
+
   void add_offset(const Xbyak::Reg32e &vm, int offset)
   {
-    // in case, save eax and edx
-    push(eax);
-    vm_sp(eax, vm);
-    lea(eax, ptr[eax + offset]);
-    mov(ptr[ebx + offsetof(SgVM, sp)], eax);
-    pop(eax);
+    vm_sp(ecx, vm);
+    lea(ecx, ptr[ecx + offset]);
+    mov(ptr[ebx + offsetof(SgVM, sp)], ecx);
   }
   void vm_inc_sp(const Xbyak::Reg32e &vm)
   {
@@ -272,13 +246,6 @@ private:
   {
     mov(d, ptr[vm + offsetof(SgVM, cont)]);
   }
-  void ref_ac(const Xbyak::Reg32e &d, const Xbyak::Reg32e &vm)
-  {
-    // if noExternalCall, eax is the previous instructions result.
-    if (!context_.noExternalCall) {
-      mov(d, ptr[vm + offsetof(SgVM, ac)]); // vm->ac = eax
-    }
-  }
 
   std::string gen_label()
   {
@@ -297,26 +264,13 @@ private:
     for (int i = 0; i < nest_level; i++) {
       fputc(' ', stderr);
     }
-    fprintf(stderr, "%d: %s(sp:%p fp:%p ac:%p)\n",
-	    nest_level, msg, vm->sp, vm->fp, vm->ac);
+    fprintf(stderr, "%d: %s(sp:%p fp:%p ac:%p *sp:%p)\n",
+	    nest_level, msg, vm->sp, vm->fp, vm->ac, *(vm->sp-1));
   }
-  static void trace_frame_impl()
+  static void dump_eax_impl(void *eax)
   {
-    SgVM *vm = Sg_VM();
-    SgContFrame *c = CONT(vm);
-    // print cont frame
-    fprintf(stderr,
-	    "pc   %p\n"
-	    "cont %p\n"
-	    " prev %p\n"
-	    " size %d\n"
-	    " pc   %p\n"
-	    " cl   %p\n"
-	    " fp   %p\n"
-	    " env  %p\n\n",
-	    vm->pc, c, c->prev, c->size, c->pc, c->cl, c->fp, c->env);
+    fprintf(stderr, "eax: %p\n", eax);
   }
-
   static void inc_nest_impl(int off)
   {
     nest_level += off;
@@ -367,15 +321,14 @@ private:
     pop(eax);
 #endif
   }
-  void trace_frame()
+  void dump_eax()
   {
 #ifdef JIT_DEBUG
     push(eax);
-    call((void*)JitCompiler::trace_frame_impl);
+    call((void*)JitCompiler::dump_eax_impl);
     pop(eax);
 #endif
   }
-
   // instructions
   void consti_insn(SgWord *code, int i)
   {
@@ -383,18 +336,22 @@ private:
     trace("enter CONSTI");
     INSN_VAL1(val1, code[i]);
     mov(eax, (uintptr_t)SG_MAKE_INT(val1));
-    ac(ebx, eax);
     trace("leave CONSTI");
   }
-  void push_insn(SgWord *code, int i)
+  void push_insn()
   {
     trace("enter PUSH");
+    dump_eax();
     vm_sp(edx, ebx); // edx = vm->sp
+    push_insn(edx, eax);
+    trace("leave PUSH");
+  }
+  void push_insn(const Xbyak::Reg32e &sp, const Xbyak::Reg32e &r)
+  {
     // push argument to vm stack
-    mov(ptr[edx], eax);
+    mov(ptr[sp], r);
     // sp++
     vm_inc_sp(ebx);
-    trace("leave PUSH");
   }
 };
 #define retrive_next_gloc(o,d)						\
@@ -421,6 +378,8 @@ private:
 
   * if the closure does not call other procedure, then we don't use
     vm->ac to store the result, always eax (rare case).
+
+  * keep eax as clean as possible. we treat it the same as vm->ac.
  */
 int JitCompiler::compile_rec(SgWord *code, int size)
 {
@@ -430,66 +389,40 @@ int JitCompiler::compile_rec(SgWord *code, int size)
     InsnInfo *info = Sg_LookupInsnName(insn);
     int val1;
     void *bnproc = NULL;
-     // each instruction must put its result to ac(vm->ac or eax)
     // if it has some result. cf) some instruction does not have
     // result such as PUSH.
     switch (insn) {
-    case FRAME: {
-#if 0
-      // now we are using Sg_Apply, so we don't need frame.
-      trace("enter FRAME");
-      trace_frame();
-      SgObject n = SG_OBJ(code[i+1]);
-      // *newcont = (SgContFrame*)SP(vm);
-      vm_sp(eax, ebx);		// keep eax = vm->sp
-      // newcont->prev = vm->cont
-      vm_cont(edx, ebx);
-      mov(ptr[eax + offsetof(SgContFrame, prev)], edx);
-      // newcont->fp = vm->fp
-      vm_fp(edx, ebx);
-      mov(ptr[eax + offsetof(SgContFrame, fp)], edx);
-      // newcont->size = vm->sp - vm->fp
-      // fp = edx
-      mov(ecx, ptr[ebx + offsetof(SgVM, sp)]);
-      sub(ecx, edx);
-      mov(ptr[eax + offsetof(SgContFrame, size)], ecx);
-      // newcont->pc = next_pc
-      vm_pc(edx, ebx);
-      lea(edx, ptr[edx + SG_INT_VALUE(n)*sizeof(void*)]);
-      mov(ptr[eax + offsetof(SgContFrame, pc)], edx);
-      // newcont->cl = vm->cl;
-      vm_cl(ecx, ebx);
-      mov(ptr[eax + offsetof(SgContFrame, cl)], ecx);
-      // vm->cont = newcont
-      mov(ptr[ebx + offsetof(SgVM, cont)], eax);
-      // eax = vm->sp
-      // vm->sp += CONT_FRAME_SIZE
-      lea(edx, ptr[eax + sizeof(SgContFrame)]);
-      mov(ptr[ebx + offsetof(SgVM, sp)], edx);
-      trace_frame();
-      trace("leave FRAME");
-#endif
-      break;
-    }
+      // we don't have to consider FRAME vm instruction
+    case FRAME: break;
     case LREF_PUSH:
       trace("enter LREF_PUSH");
       INSN_VAL1(val1, code[i]);
-      args(eax);  // args
+      // keep eax clean, for heavy call
+      args(ecx);  // args
       // ecx = arg_ref[val1]
-      mov(eax, ptr[eax + val1 * sizeof(void*)]);
-      trace("goto PUSH");
-      // fall though
-    case PUSH: push_insn(code, i); break;
+      mov(ecx, ptr[ecx + val1 * sizeof(void*)]);
+      vm_sp(edx, ebx);
+      push_insn(edx, ecx);
+      trace("leave LREF_PUSH");
+      break;
+    case PUSH: push_insn(); break;
     case LREF:
       trace("enter LREF");
       INSN_VAL1(val1, code[i]);
       args(eax); // args
       mov(eax, ptr[eax + val1 * sizeof(void*)]); // args[n] -> edx
-      ac(ebx, eax);
       trace("leave LREF");
       break;
     case CONSTI: consti_insn(code, i); break;
-    case CONSTI_PUSH: consti_insn(code, i); push_insn(code, i); break;
+    case CONSTI_PUSH:
+      // the same as LREF_PUSH;
+      trace("enter CONSTI_PUSH");
+      INSN_VAL1(val1, code[i]);
+      mov(ecx, (uintptr_t)SG_MAKE_INT(val1));
+      vm_sp(edx, ebx);
+      push_insn(edx, ecx);
+      trace("leave CONSTI");
+      break;
     case BNGE:
       bnproc = (void *)Sg_NumGe;
       goto bnnum_entry;
@@ -506,10 +439,9 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       {
 	SgObject n = SG_OBJ(code[i+1]);
 	trace("enter BNLE");
-	ref_ac(eax, ebx); // eax = vm->ac
 	push(eax);
-	vm_stack_ref(eax, ebx, 0);
-	push(eax);
+	vm_stack_ref(edx, ebx, 0);
+	push(edx);
 	call(bnproc);
 	add(esp, 2 * sizeof(void*));
 	// vm->sp--
@@ -530,13 +462,11 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       }
     case ADD: {
       trace("enter ADD");
-      vm_stack_ref(eax, ebx, 0);
+      vm_stack_ref(edx, ebx, 0);
       vm_dec_sp(ebx);		// vm->sp--;
-      ref_ac(edx, ebx);
       push(eax);
       push(edx);
       call((void*)Sg_Add);
-      ac(ebx, eax);
       add(esp, 2*sizeof(void*));
       trace("leave ADD");
       break;
@@ -545,7 +475,6 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       trace("enter ADDI");
       INSN_VAL1(val1, code[i]);
       // TODO 64 bits
-      ref_ac(eax, ebx);		// load vm->ac to eax
       mov(edx, eax);
       // SG_INTP(vm->ac);
       and(edx, 3);
@@ -558,7 +487,6 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       push((uintptr_t)SG_MAKE_INT(val1));
       call((void*)Sg_Add);
       add(esp, 2 * sizeof(void*));
-      ac(ebx, eax);
       jmp(end_label.c_str());
       // for now...
       L(label.c_str());
@@ -567,7 +495,6 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       push(eax);
       call((void*)Sg_MakeInteger);
       add(esp, 1 * sizeof(void*));
-      ac(ebx, eax);
       L(end_label.c_str());
       trace("leave ADDI");
       break;
@@ -618,6 +545,7 @@ int JitCompiler::compile_rec(SgWord *code, int size)
 	// if a closure reaches here, it must be compiled already
 	// see walker.
 	SgObject p = SG_CLOSURE(o)->native;
+	//jmp((void*)((uintptr_t)SG_SUBR_FUNC(p) - prologue_size_), T_NEAR);
 	// pop it and let the prologue from the beginning.
 	pop(ebp);
 	jmp((void*)SG_SUBR_FUNC(p), T_NEAR);
@@ -668,7 +596,6 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       } else {
 	call(this_label_.c_str());
       }
-      ac(ebx, eax);
       add(esp, 3 * sizeof(void*));
       add_offset(ebx, -(val1 * sizeof(void*)));
       pop(edx);			// restore fp
