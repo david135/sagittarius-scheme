@@ -36,6 +36,7 @@
 #define LIBSAGITTARIUS_BODY
 #include "sagittarius/closure.h"
 #include "sagittarius/code.h"
+#include "sagittarius/core.h"
 #include "sagittarius/gloc.h"
 #include "sagittarius/identifier.h"
 #include "sagittarius/instruction.h"
@@ -701,6 +702,11 @@ bool JitCompiler::compile()
   return true;
 }
 
+static void jit_finelizer(SgObject z, void *data)
+{
+  Xbyak::AlignedFree((void *)SG_SUBR_FUNC(z));
+}
+
 int Sg_JitCompileClosure(SgObject closure)
 {
   Walker *walker = new DefaultWalker;
@@ -717,6 +723,7 @@ int Sg_JitCompileClosure(SgObject closure)
     if (SG_VM_LOG_LEVEL(vm, SG_DEBUG_LEVEL)) {
       compiler.dump();
     }
+    Sg_RegisterFinalizer(subr, jit_finelizer, NULL);
     SG_CLOSURE(closure)->native = subr;
     SG_CLOSURE(closure)->state = SG_NATIVE;
     delete walker;
