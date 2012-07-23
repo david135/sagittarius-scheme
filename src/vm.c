@@ -620,18 +620,7 @@ SgObject Sg_Environment(SgObject lib, SgObject spec)
 }
 
 static void print_frames(SgVM *vm);
-static void expand_stack(SgVM *vm);
-
-#define MOSTLY_FALSE(expr) expr
-
-/* TODO check stack expantion */
-#define CHECK_STACK(size, vm)					\
-  do {								\
-    if (MOSTLY_FALSE(SP(vm) >= (vm)->stackEnd - (size))) {	\
-      expand_stack(vm);						\
-      /* Sg_Panic("stack overflow"); */				\
-    }								\
-  } while (0)
+void expand_stack(SgVM *vm);
 
 #define C_CONT_MARK NULL
 
@@ -1211,7 +1200,7 @@ static void save_partial_cont(SgVM *vm)
   save_cont_rec(vm, TRUE);
 }
 
-static void expand_stack(SgVM *vm)
+void expand_stack(SgVM *vm)
 {
   SgObject *p;
 
@@ -1671,11 +1660,9 @@ static SG_DEFINE_SUBR(default_exception_handler_rec, 1, 0,
       PC(vm) = PC_TO_RETURN;						\
       CL(vm) = CONT(vm)->cl;						\
       CONT(vm) = CONT(vm)->prev;					\
-      /* (vm)->fpOffset = CALC_OFFSET(vm, 0); */			\
       AC(vm) = CALL_CCONT(after__, v__, data__);			\
     } else if (IN_STACK_P((SgObject*)CONT(vm), vm)) {			\
       SgContFrame *cont__ = CONT(vm);					\
-      /* FP(vm) = (SgObject*)cont__ - cont__->fp; */			\
       FP(vm) = cont__->fp;						\
       SP(vm) = FP(vm) + cont__->size;					\
       PC(vm) = cont__->pc;						\

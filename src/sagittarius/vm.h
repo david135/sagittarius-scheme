@@ -305,16 +305,25 @@ typedef enum {
 #define SP(vm)             (vm)->sp
 #define CONT(vm)           (vm)->cont
 
-#if 0
-#define CALC_OFFSET(vm, offset)  ((SgObject*)CONT(vm)-FP(vm))
-#else
-#define CALC_OFFSET(vm, offset) /* dummy */
-#endif
-
 #define INDEX(sp, n)        (*((sp) - (n) - 1))
 #define INDEX_SET(sp, n, v) (*((sp) - (n) - 1) = (v))
 #define PUSH(sp, o)         (*(sp)++ = (o))
 #define POP(sp)             (*(--(sp)))
+
+/* #ifdef __GNUC__ */
+#if 0
+#define MOSTLY_FALSE(expr) __builtin_expect(expr, FALSE)
+#else
+#define MOSTLY_FALSE(expr) expr
+#endif
+
+#define CHECK_STACK(size, vm)					\
+  do {								\
+    if (MOSTLY_FALSE(SP(vm) >= (vm)->stackEnd - (size))) {	\
+      expand_stack(vm);						\
+    }								\
+  } while (0)
+
 
 
 #define SG_CCONT_DATA_SIZE 6

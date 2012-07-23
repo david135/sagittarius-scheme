@@ -32,18 +32,21 @@
 #include <string>
 #include <map>
 #include <stdexcept>
+#include <stack>
 #include "xbyak/xbyak.h"
 #define LIBSAGITTARIUS_BODY
 #include "sagittarius/closure.h"
 #include "sagittarius/code.h"
+#include "sagittarius/error.h"
 #include "sagittarius/gloc.h"
 #include "sagittarius/identifier.h"
 #include "sagittarius/instruction.h"
 #include "sagittarius/library.h"
 #include "sagittarius/number.h"
+#include "sagittarius/pair.h"
 #include "sagittarius/vm.h"
 
-//#define JIT_DEBUG
+#define JIT_DEBUG
 typedef std::map<SgWord*, std::string> Labels;
 struct WalkContext
 {
@@ -111,8 +114,6 @@ void DefaultWalker::walk(SgClosure *closure, WalkContext &ctx)
       p = SG_GLOC_GET(SG_GLOC(p));
       if (!SG_PROCEDURE(p)) {
 	throw std::runtime_error("call instruction is calling non procedure object.");
-      } else if (SG_PROCEDURE_OPTIONAL(p) != 0) {
-	throw std::runtime_error("optional arguments are not supported yet.");
       }
       // if the calling procedure is a closure, then we compile this
       // so that the real compiler can simply compile it to native
@@ -145,7 +146,7 @@ class JitCompiler : public Xbyak::CodeGenerator
 {
 private:
   SgClosure * const closure_;
-  Walker * const walker_;
+  Walker & walker_;
   WalkContext context_;
   int label_;
   std::string this_label_;
@@ -153,11 +154,15 @@ private:
   std::string re_entry_label_;
   // need for tail call
   size_t prologue_size_;
+  std::stack<int> saved_argp;
+  int argp;
 public:
-  JitCompiler(SgClosure * const closure, Walker * const walker)
-    : closure_(closure)
+  JitCompiler(SgClosure * const closure, Walker & walker)
+    : CodeGenerator(256, Xbyak::AutoGrow)
+    , closure_(closure)
     , walker_(walker)
     , label_(0)
+    , argp(0)
   {}
   
   // compile the closure
@@ -182,7 +187,7 @@ private:
   // optimisation options.
   void walk()
   {
-    walker_->walk(closure_, context_);
+    walker_.walk(closure_, context_);
   }
   void prologue()
   {
@@ -192,6 +197,7 @@ private:
     L(this_label_.c_str());
     push(ebp);
     mov(ebp, esp);
+    push(ebx);
     vm(ebx);
     L(re_entry_label_.c_str());
     prologue_size_ = getSize();
@@ -199,9 +205,16 @@ private:
     dump_args();
 #endif
   }
+
+  void leave()
+  {
+    mov(esp, ebp);
+    pop(ebp);
+  }
+
   void epilogue()
   {
-    // only noExternalCall is false, we need to move
+    pop(ebx);
     pop(ebp);
     ret();
   }
@@ -389,6 +402,23 @@ private:
     }									\
     o = SG_GLOC_GET(SG_GLOC(o));					\
   } while (0)
+
+extern "C" void expand_stack(SgVM *vm);
+
+static void call_adjust_args(SgVM *vm, int argc, SgObject proc)
+{
+#undef APPLY_CALL
+#include "vm-args-adjust.c"
+  ADJUST_ARGUMENT_FRAME(proc, argc);
+}
+
+static void apply_adjust_args(SgVM *vm, int argc, SgObject proc)
+{
+#define APPLY_CALL
+#include "vm-args-adjust.c"
+  ADJUST_ARGUMENT_FRAME(proc, argc);
+}
+
   
 /*
   Note:
@@ -411,6 +441,9 @@ int JitCompiler::compile_rec(SgWord *code, int size)
     InsnInfo *info = Sg_LookupInsnName(insn);
     int val1, val2;
     void *bnproc = NULL;
+    // for gref_call
+    SgObject gproc = SG_FALSE;
+
     // emit jump destination label, if there is
     Labels::iterator itr = context_.dstLabels.find(code+i);
     if (itr != context_.dstLabels.end()) {
@@ -442,6 +475,23 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       mov(eax, ptr[eax + val1 * sizeof(void*)]); // args[n] -> edx
       trace("leave LREF");
       break;
+    case CONST: {
+      trace("enter CONST");
+      SgObject o = SG_OBJ(code[i+1]);
+      mov(eax, (uintptr_t)o);
+      trace("leave CONST");
+      break;
+    }
+    case CONST_PUSH: {
+      trace("enter CONST_PUSH");
+      SgObject o = SG_OBJ(code[i+1]);
+      // avoid to use eax.
+      mov(ecx, (uintptr_t)o);
+      vm_sp(edx, ebx);
+      push_insn(edx, ecx);
+      trace("leave CONST_PUSH");
+      break;
+    }
     case CONSTI: consti_insn(code, i); break;
     case CONSTI_PUSH:
       // the same as LREF_PUSH;
@@ -562,75 +612,99 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       mov(dword[ebp + ARGC_OFF], (uintptr_t)val1);
       // for now
       mov(ptr[ebp + VM_OFF], ebx);
+      // vm->cl = procedure
+      //mov(ptr[ebx + offsetof(SgVM, cl)], (uintptr_t)o);
       // ok emit jump
       if (SG_EQ(o, closure_)) {
 	// tail recursive self call
-	pop(ebp);
+	leave();
 	jmp(this_label_.c_str());
-	//jmp(re_entry_label_.c_str(), T_NEAR);
       } else if (SG_SUBRP(o)) {
-	// FIXME: how should we do this?
-	// can we just jmp?
-	throw std::runtime_error("tail recursive subr call");
+	jmp((void*)SG_SUBR_FUNC(o), T_NEAR);
       } else if (SG_CLOSUREP(o)) {
 	// if a closure reaches here, it must be compiled already
 	// see walker.
 	SgObject p = SG_CLOSURE(o)->native;
-	//jmp((void*)((uintptr_t)SG_SUBR_FUNC(p) - prologue_size_), T_NEAR);
-	// pop it and let the prologue from the beginning.
-	pop(ebp);
+	leave();
 	jmp((void*)SG_SUBR_FUNC(p), T_NEAR);
       } else {
 	throw std::runtime_error("non closure procedures are not supported yet.");
       }
-      //inc_nest(-1);
-      //trace("leave GREF_TAIL_CALL");
       break;
     }
-    case GREF_CALL: {
+    case GREF_CALL: 
       trace("enter GREF_CALL");
       inc_nest(1);
+      retrive_next_gloc(gproc, SG_OBJ(code[i+1]));
+//      if (SG_PROCEDURE_OPTIONAL(gproc) != 0) {
+//	throw std::runtime_error("optional argument is not supported yet.");
+//      }
+      goto call_entry;
+      break;
+    call_entry:
+    case CALL: {
       INSN_VAL1(val1, code[i]);
-      SgObject o;
-      retrive_next_gloc(o, SG_OBJ(code[i+1]));
-      if (SG_PROCEDURE_OPTIONAL(o) != 0) {
-	throw std::runtime_error("optional argument is not supported yet.");
-      }
-      // save fp
-      // TODO is this legal?
+      // save cl and fp
+      vm_cl(edx, ebx);
+      push(edx);
       vm_fp(edx, ebx);
       push(edx);
 
+      // adjust arguments
+      if (SG_FALSEP(gproc)) {
+	push(eax);		// save eax for later call
+	push(eax);
+      } else {
+	push((uintptr_t)gproc);
+      }
+      push((uintptr_t)val1);
+      push(ebx);		// vm
+      call((void*)call_adjust_args);
+      add(esp, 3 * sizeof(void*));
+      if (SG_FALSEP(gproc)) {
+	pop(eax);
+      }
+
+      // push arguments
       vm_sp(edx, ebx);
       void *proc = NULL;	// subr
-      if (SG_EQ(o, closure_)) {
-	push(ebx);
-	// proc must be label of this
-      } else if (SG_SUBRP(o)) {
-	// retrieve data and push
-	proc = (void*)SG_SUBR_FUNC(o);
-	push((uintptr_t)SG_SUBR_DATA(o));
-      } else if (SG_CLOSUREP(o)) {
-	push(ebx);
-	proc = (void *)SG_SUBR_FUNC(SG_CLOSURE(o)->native);
+      if (!SG_FALSEP(gproc)) {
+	if (SG_EQ(gproc, closure_)) {
+	  push(ebx);
+	  // proc must be label of this
+	} else if (SG_SUBRP(gproc)) {
+	  // retrieve data and push
+	  proc = (void*)SG_SUBR_FUNC(gproc);
+	  push((uintptr_t)SG_SUBR_DATA(gproc));
+	} else if (SG_CLOSUREP(gproc)) {
+	  push(ebx);
+	  proc = (void *)SG_SUBR_FUNC(SG_CLOSURE(gproc)->native);
+	} else {
+	  throw std::runtime_error("generic functions are not supported yet");
+	}
       } else {
-	throw std::runtime_error("generic functions are not supported yet");
+	// LREF or FREF call
+	push(ebx);
       }
       push(val1);		// argc
-      // calculate fp
-      lea(edx, ptr[edx - (val1 *sizeof(void*))]);
-      // set vm->fp
-      mov(ptr[ebx + offsetof(SgVM, fp)], edx);
+      vm_fp(edx, ebx);
       push(edx);		// args
-      if (proc) {
-	call(proc);
+      if (SG_FALSEP(gproc)) {
+	call(eax);
       } else {
-	call(this_label_.c_str());
+	if (proc) {
+	  call(proc);
+	} else {
+	  call(this_label_.c_str());
+	}
+	gproc = SG_FALSE;
       }
       add(esp, 3 * sizeof(void*));
       add_offset(ebx, -(val1 * sizeof(void*)));
       pop(edx);			// restore fp
       mov(ptr[ebx + offsetof(SgVM, fp)], edx);
+      pop(edx);			// restore cl
+      mov(ptr[ebx + offsetof(SgVM, cl)], edx);
 
       inc_nest(-1);
       trace("leave GREF_CALL");
@@ -669,6 +743,12 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       trace("RETURN");
       epilogue();
       return i+1;
+      // builtin procedures
+    case CAR:
+      push(eax);
+      call((void*)Sg_Car);
+      add(esp, 1*sizeof(void*));
+      break;
     default:
       throw std::runtime_error(info->name);
     }
@@ -697,17 +777,21 @@ bool JitCompiler::compile()
   } catch (const std::runtime_error& e) {
     fprintf(stderr, "%s\n", e.what());
     return false;
+  } catch (...) {
+    fprintf(stderr, "something wrong");
+    return false;
   }
   return true;
 }
 
 int Sg_JitCompileClosure(SgObject closure)
 {
-  Walker *walker = new DefaultWalker;
+  DefaultWalker walker;
   JitCompiler compiler(SG_CLOSURE(closure), walker);
   SgVM *vm = Sg_VM();
 
   if (compiler.compile()) {
+    compiler.ready();
     SgObject subr
       = Sg_MakeSubr(reinterpret_cast<SgSubrProc *>(compiler.getCode()),
 		    NULL,
@@ -719,10 +803,8 @@ int Sg_JitCompileClosure(SgObject closure)
     }
     SG_CLOSURE(closure)->native = subr;
     SG_CLOSURE(closure)->state = SG_NATIVE;
-    delete walker;
     return TRUE;
   }
   SG_CLOSURE(closure)->state = SG_INVALID_FOR_NATIVE;
-  delete walker;
   return FALSE;
 }
