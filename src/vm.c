@@ -1904,7 +1904,7 @@ static void print_frames(SgVM *vm)
   /* SgString *fmt   = SG_MAKE_STRING("+    o=~38,,,,39a +~%"); */
   SgString *clfmt = SG_MAKE_STRING("+   cl=~38,,,,39s +~%");
 
-  Sg_Printf(vm->logPort, UC(";; stack: 0x%x, cont: 0x%x\n"), stack, cont);
+  Sg_Printf(vm->logPort, UC(";; stack: 0x%x, cont: 0x%x, fp: 0x%x\n"), stack, cont, FP(vm));
   Sg_Printf(vm->logPort, UC(";; 0x%x +---------------------------------------------+ < sp\n"), sp);
   /* first we dump from top until cont frame. */
   while ((stack < current && current <= sp)) {
