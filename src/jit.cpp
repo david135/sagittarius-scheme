@@ -174,6 +174,44 @@ static void* convert_proc(SgObject proc)
   }
 }
 
+// push and pop cont
+static void push_cont(SgVM *vm, SgWord *code, int n)
+{
+  SgContFrame *newcont = (SgContFrame*)SP(vm);
+  newcont->prev = CONT(vm);
+  newcont->fp = FP(vm);
+  newcont->size = (int)(SP(vm) - FP(vm));
+  newcont->pc = code+n;
+  newcont->cl = CL(vm);
+  CONT(vm) = newcont;
+  SP(vm) += CONT_FRAME_SIZE;
+}
+
+static void pop_cont(SgVM *vm)
+{
+  if (IN_STACK_P((SgObject*)CONT(vm), vm)) {
+    SgContFrame *cont__ = CONT(vm);
+    FP(vm) = cont__->fp;
+    SP(vm) = FP(vm) + cont__->size;
+    PC(vm) = cont__->pc;
+    CL(vm) = cont__->cl;
+    CONT(vm) = cont__->prev;
+  } else {
+    int size__ = CONT(vm)->size;
+    FP(vm) = SP(vm) = vm->stack;
+    PC(vm) = CONT(vm)->pc;
+    CL(vm) = CONT(vm)->cl;
+    if (CONT(vm)->env && size__) {
+      SgObject *s__ = CONT(vm)->env, *d__ = SP(vm);
+      SP(vm) += size__;
+      while (size__-- > 0) {
+	*d__++ = *s__++;
+      }
+    }
+    CONT(vm) = CONT(vm)->prev;
+  }
+}
+
 struct JitAllocator : public Xbyak::Allocator
 {
   virtual uint8_t * alloc(size_t size)
@@ -260,8 +298,8 @@ private:
     mov(ebp, esp);
     push(ebx);
     scheme_vm(vm);
-    vm_cl(edx, vm); push(edx);
-    vm_fp(edx, vm); push(edx);
+    //vm_cl(edx, vm); push(edx);
+    //vm_fp(edx, vm); push(edx);
 #ifdef JIT_DEBUG
     dump_args();
 #endif
@@ -269,8 +307,13 @@ private:
 
   void epilogue()
   {
-    pop(edx); mov(ptr[vm + offsetof(SgVM, fp)], edx);
-    pop(edx); mov(ptr[vm + offsetof(SgVM, cl)], edx);
+    //pop(edx); mov(ptr[vm + offsetof(SgVM, fp)], edx);
+    //pop(edx); mov(ptr[vm + offsetof(SgVM, cl)], edx);
+    push(ac);
+    push(vm);
+    call((void*)pop_cont);
+    add(csp, 1 * sizeof(void*));
+    pop(ac);
     pop(ebx);
     pop(ebp);
     ret();
@@ -278,7 +321,7 @@ private:
   // common instructions
   void leave()
   {
-    pop(edx); pop(edx);
+    //pop(edx); pop(edx);
     pop(ebx);
     mov(esp, ebp);
     pop(ebp);
@@ -328,6 +371,13 @@ private:
 	tail
 	  ? jmp((void*)SG_SUBR_FUNC(proc), T_NEAR)
 	  : call((void*)SG_SUBR_FUNC(proc));
+	if (!tail) {
+	  push(ac);
+	  push(vm);
+	  call((void*)pop_cont);
+	  add(csp, 1 * sizeof(void*));
+	  pop(ac);
+	}
       } else if (SG_CLOSUREP(proc)) {
 	tail
 	  ? jmp((void*)SG_SUBR_FUNC(SG_CLOSURE(proc)->native), T_NEAR)
@@ -339,9 +389,9 @@ private:
     // avoid making size bigger.
     if (!tail) {
       add(csp, 3 * sizeof(void*));
-      vm_fp(edx, vm);
+      //vm_fp(edx, vm);
       //add_offset(vm, -(argc * sizeof(void*)));
-      mov(ptr[vm + offsetof(SgVM, sp)], edx);
+      //mov(ptr[vm + offsetof(SgVM, sp)], edx);
     }
   }
   void adjust_args(SgObject proc, uintptr_t argc, bool apply_p)
@@ -660,20 +710,6 @@ static SgObject prepare_apply(SgVM *vm, SgObject ac,
   return proc;
 }
 
-#if 0
-static void push_cont(SgVM *vm, SgWord *code, int n)
-{
-  SgContFrame *newcont = (SgContFrame*)SP(vm);
-  newcont->prev = CONT(vm);
-  newcont->fp = FP(vm);
-  newcont->size = (int)(SP(vm) - FP(vm));
-  newcont->pc = code+n;
-  newcont->cl = CL(vm);
-  CONT(vm) = newcont;
-  SP(vm) += CONT_FRAME_SIZE;
-}
-#endif
-
 /*
   Note:
   the generated native code will be called as subr with arguments
@@ -707,7 +743,6 @@ int JitCompiler::compile_rec(SgWord *code, int size)
     // result such as PUSH.
     switch (insn) {
     case FRAME: 
-#if 0
       // to make vm's stack compatible...
       trace("enter FRAME");
       push((uintptr_t)SG_INT_VALUE(code[i+1]));
@@ -716,7 +751,6 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       call((void*)push_cont);
       add(csp, 3 * sizeof(void*));
       trace("leave FRAME");
-#endif
       break;
       // ENTER vm instruction is more like for sanity...
     case ENTER: break;
@@ -935,13 +969,13 @@ int JitCompiler::compile_rec(SgWord *code, int size)
     }
     case GREF_CALL: 
       trace("enter GREF_CALL");
-      inc_nest(1);
       retrive_next_gloc(gproc, SG_OBJ(code[i+1]));
       goto call_entry;
       break;
     call_entry:
     case CALL: {
       INSN_VAL1(val1, code[i]);
+      if (!tail) inc_nest(1);
       // adjust arguments
       adjust_args(gproc, val1, false);
       scheme_call(gproc, tail);
@@ -986,8 +1020,8 @@ int JitCompiler::compile_rec(SgWord *code, int size)
     case SHIFTJ: {
       trace("enter SHIFTJ");
       INSN_VAL2(val1, val2, code[i]);
-      // TODO do we need this?
       push(ac);
+
       vm_sp(edx, vm);
       push(edx);
       push((uintptr_t)val1);
@@ -998,6 +1032,7 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       add(csp, 3 * sizeof(void*));
       // vm->sp = ac
       mov(ptr[vm + offsetof(SgVM, sp)], ac);
+
       pop(ac);
       trace("leave SHIFTJ");
       break;
@@ -1114,6 +1149,7 @@ int Sg_JitCompileClosure(SgObject closure)
 		    SG_PROCEDURE_REQUIRED(closure),
 		    SG_PROCEDURE_OPTIONAL(closure),
 		    SG_PROCEDURE_NAME(closure));
+    Sg_RegisterFinalizer(subr, jit_finelizer, NULL);
     /*
 #ifdef JIT_DEBUG
     Sg_Printf(SG_PORT(Sg_StandardErrorPort()), UC("%S:%d\n"), closure,
@@ -1121,11 +1157,11 @@ int Sg_JitCompileClosure(SgObject closure)
     compiler.dump_code();
 #endif
     */
-    SG_CLOSURE(closure)->native Sven= subr;
+    SG_CLOSURE(closure)->native = subr;
     SG_CLOSURE(closure)->state = SG_NATIVE;
     return TRUE;
   }
   SG_CLOSURE(closure)->state = SG_INVALID_FOR_NATIVE;
   return FALSE;
 }
-Sven
+
