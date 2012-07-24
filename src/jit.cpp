@@ -37,6 +37,7 @@
 #include "sagittarius/closure.h"
 #include "sagittarius/code.h"
 #include "sagittarius/error.h"
+#include "sagittarius/core.h"
 #include "sagittarius/gloc.h"
 #include "sagittarius/identifier.h"
 #include "sagittarius/instruction.h"
@@ -1095,6 +1096,10 @@ bool JitCompiler::compile()
 #include "sagittarius/writer.h"
 #include "sagittarius/port.h"
 #endif
+static void jit_finelizer(SgObject z, void *data)
+{
+  Xbyak::AlignedFree((void *)SG_SUBR_FUNC(z));
+}
 
 int Sg_JitCompileClosure(SgObject closure)
 {
@@ -1116,10 +1121,11 @@ int Sg_JitCompileClosure(SgObject closure)
     compiler.dump_code();
 #endif
     */
-    SG_CLOSURE(closure)->native = subr;
+    SG_CLOSURE(closure)->native Sven= subr;
     SG_CLOSURE(closure)->state = SG_NATIVE;
     return TRUE;
   }
   SG_CLOSURE(closure)->state = SG_INVALID_FOR_NATIVE;
   return FALSE;
 }
+Sven
