@@ -32,7 +32,6 @@
 #include <string>
 #include <map>
 #include <stdexcept>
-#include <stack>
 #include "xbyak/xbyak.h"
 #define LIBSAGITTARIUS_BODY
 #include "sagittarius/closure.h"
@@ -44,9 +43,11 @@
 #include "sagittarius/library.h"
 #include "sagittarius/number.h"
 #include "sagittarius/pair.h"
+#include "sagittarius/symbol.h"
+#include "sagittarius/string.h"
 #include "sagittarius/vm.h"
 
-#define JIT_DEBUG
+//#define JIT_DEBUG
 typedef std::map<SgWord*, std::string> Labels;
 struct WalkContext
 {
@@ -142,6 +143,48 @@ void DefaultWalker::walk(SgClosure *closure, WalkContext &ctx)
 static int nest_level = 0;
 #endif
 
+extern "C" void expand_stack(SgVM *vm);
+
+static int call_adjust_args(SgVM *vm, int argc, SgObject proc)
+{
+#undef APPLY_CALL
+#include "vm-args-adjust.c"
+  ADJUST_ARGUMENT_FRAME(proc, argc);
+  return argc;
+}
+
+static int apply_adjust_args(SgVM *vm, int argc, SgObject proc)
+{
+#define APPLY_CALL
+#include "vm-args-adjust.c"
+  ADJUST_ARGUMENT_FRAME(proc, argc);
+  return argc;
+}
+
+static void* convert_proc(SgObject proc)
+{
+  if (SG_SUBRP(proc)) {
+    return (void*)SG_SUBR_FUNC(proc);
+  } else if (SG_CLOSUREP(proc)) {
+    return (void*)SG_SUBR_FUNC(SG_CLOSURE(proc)->native);
+  } else {
+    Sg_Error(UC("not supported yet, %S"), proc);
+    return NULL;
+  }
+}
+
+struct JitAllocator : public Xbyak::Allocator
+{
+  virtual uint8_t * alloc(size_t size)
+  {
+    return reinterpret_cast<uint8_t*>(SG_MALLOC(size));
+  }
+  // do nothing
+  virtual void free(uint8_t *p) {}
+};
+
+static JitAllocator jit_allocator;
+
 class JitCompiler : public Xbyak::CodeGenerator
 {
 private:
@@ -150,19 +193,35 @@ private:
   WalkContext context_;
   int label_;
   std::string this_label_;
-  // for tail call
-  std::string re_entry_label_;
-  // need for tail call
-  size_t prologue_size_;
-  std::stack<int> saved_argp;
-  int argp;
+
+  // for my convenient and more readable code
+#ifdef XBYAK64
+  Xbyak::Reg64 vm;
+  Xbyak::Reg64 ac;
+  Xbyak::Reg64 csp;
+#elif  defined(XBYAK32)
+  Xbyak::Reg32 vm;		// ebx
+  Xbyak::Reg32 ac;		// eax
+  Xbyak::Reg32 csp;		// esp (c stack pointer)
+#else
+  #error "JIT not supported for this architecture"
+#endif
+
 public:
   JitCompiler(SgClosure * const closure, Walker & walker)
-    : CodeGenerator(256, Xbyak::AutoGrow)
+    : CodeGenerator(1024, Xbyak::AutoGrow, &jit_allocator)
     , closure_(closure)
     , walker_(walker)
     , label_(0)
-    , argp(0)
+#ifdef XBYAK64
+    , vm(rbx)
+    , ac(rax)
+    , csp(rsp)
+#elif  defined(XBYAK32)
+    , vm(ebx)
+    , ac(eax)
+    , csp(esp)
+#endif
   {}
   
   // compile the closure
@@ -173,6 +232,7 @@ private:
   static const int ARGC_OFF = 12;
   static const int ARGS_OFF = 8;
 
+public:
   // FIXME: the same as vm.c
   static SgObject* shift_args(SgObject *fp, int m, SgObject *sp)
   {
@@ -183,6 +243,7 @@ private:
     return f;
   }
 
+private:
   // walk through the closure to detect possible
   // optimisation options.
   void walk()
@@ -193,31 +254,133 @@ private:
   {
     // TODO 64 bits
     this_label_ = gen_label();
-    re_entry_label_ = gen_label();
     L(this_label_.c_str());
     push(ebp);
     mov(ebp, esp);
     push(ebx);
-    vm(ebx);
-    L(re_entry_label_.c_str());
-    prologue_size_ = getSize();
+    scheme_vm(vm);
+    vm_cl(edx, vm); push(edx);
+    vm_fp(edx, vm); push(edx);
 #ifdef JIT_DEBUG
     dump_args();
 #endif
   }
 
-  void leave()
-  {
-    mov(esp, ebp);
-    pop(ebp);
-  }
-
   void epilogue()
   {
+    pop(edx); mov(ptr[vm + offsetof(SgVM, fp)], edx);
+    pop(edx); mov(ptr[vm + offsetof(SgVM, cl)], edx);
     pop(ebx);
     pop(ebp);
     ret();
   }
+  // common instructions
+  void leave()
+  {
+    pop(edx); pop(edx);
+    pop(ebx);
+    mov(esp, ebp);
+    pop(ebp);
+  }
+  // calling C API for scheme
+  // All scheme procedures are proc(void**, int, void*) signature.
+  // Assume edx is argc returned from adjust_argument_frame.
+  void scheme_call(SgObject proc, bool tail)
+  {
+    if (SG_SUBRP(proc)) {
+      push((uintptr_t)SG_SUBR_DATA(proc));
+    } else {
+      push(vm);
+    }
+    push(edx);
+    // TODO 64 bit
+    vm_fp(ecx, vm);
+    push(ecx);
+
+    if (SG_FALSEP(proc)) {
+      // LREF call or apply call
+      // shcek if it's subr or not
+      push(ac);
+      call((void*)convert_proc);
+      add(csp, 1 * sizeof(void*));
+
+      if (tail) {
+	mov(ptr[ebp + ARGS_OFF], ecx);
+	mov(dword[ebp + ARGC_OFF], edx);
+	mov(ptr[ebp + VM_OFF], vm);
+	leave();
+      }
+      tail ? jmp(ac) : call(ac);
+    } else {
+      if (tail) {
+	mov(ptr[ebp + ARGS_OFF], ecx);
+	mov(dword[ebp + ARGC_OFF], edx);
+	mov(ptr[ebp + VM_OFF], vm);
+	leave();
+      }
+      if (SG_EQ(proc, closure_)) {
+	// self call.
+	tail
+	  ? jmp(this_label_.c_str(), T_NEAR)
+	  : call(this_label_.c_str());
+      } else if (SG_SUBRP(proc)) {
+	tail
+	  ? jmp((void*)SG_SUBR_FUNC(proc), T_NEAR)
+	  : call((void*)SG_SUBR_FUNC(proc));
+      } else if (SG_CLOSUREP(proc)) {
+	tail
+	  ? jmp((void*)SG_SUBR_FUNC(SG_CLOSURE(proc)->native), T_NEAR)
+	  : call((void*)SG_SUBR_FUNC(SG_CLOSURE(proc)->native));
+      } else {
+	throw std::runtime_error("generic methods are not supported yet");
+      }
+    }
+    // avoid making size bigger.
+    if (!tail) {
+      add(csp, 3 * sizeof(void*));
+      vm_fp(edx, vm);
+      //add_offset(vm, -(argc * sizeof(void*)));
+      mov(ptr[vm + offsetof(SgVM, sp)], edx);
+    }
+  }
+  void adjust_args(SgObject proc, uintptr_t argc, bool apply_p)
+  {
+    if (SG_FALSEP(proc)) {
+      push(ac);		// save ac for later call
+      push(ac);
+    } else {
+      push((uintptr_t)proc);
+    }
+    if (apply_p) {
+      // APPLY instruction set rargc to ecx and we need to check
+      // if it's zero or not
+      cmp(ecx, 0);
+      std::string l = gen_label();
+      std::string e = gen_label();
+      je(l.c_str());
+      // not zero add argc + 1;
+      push(argc+1);
+      jmp(e.c_str());
+      L(l.c_str());
+      push(argc);
+      L(e.c_str());
+    } else {
+      push(argc);
+    }
+    push(vm);
+    if (apply_p) {
+      call((void*)apply_adjust_args);
+    } else {
+      call((void*)call_adjust_args);
+    }
+    add(csp, 3 * sizeof(void*));
+    // result argc
+    mov(edx, ac);
+    if (SG_FALSEP(proc)) {
+      pop(ac);
+    }
+  }
+
   void stack_access(const Xbyak::Operand &d, int offset)
   {
     mov(d, ptr[ebp + offset]);
@@ -238,7 +401,7 @@ private:
   {
     stack_access(d, ARGC_OFF);
   }
-  void vm(const Xbyak::Operand &d)
+  void scheme_vm(const Xbyak::Operand &d)
   {
     stack_access(d, VM_OFF);
   }
@@ -292,6 +455,8 @@ private:
   }
 
   int compile_rec(SgWord *code, int size);
+
+  // Debugging methods 
 #ifdef JIT_DEBUG
   static void trace_impl(const char *msg)
   {
@@ -322,63 +487,74 @@ private:
 
   void dump_args()
   {
-    push(eax);
+    push(ac);
     {
-      argc(eax);
-      push(eax);
-      args(eax);
-      push(eax);
+      argc(ac); push(ac);
+      args(ac); push(ac);
       call((void*)JitCompiler::dump_args_impl);
-      pop(eax);
-      pop(eax);
+      pop(ac);
+      pop(ac);
     }
-    pop(eax);
+    pop(ac);
   }
 #endif
   void inc_nest(int off)
   {
 #ifdef JIT_DEBUG
-    push(eax);
+    push(ac);
     push((uintptr_t)off);
     call((void*)JitCompiler::inc_nest_impl);
-    pop(eax);
-    pop(eax);
+    pop(ac);
+    pop(ac);
 #endif
   }
 
   void trace(const char *msg)
   {
 #ifdef JIT_DEBUG
-    push(eax);
+    push(ac);
     push((uintptr_t)msg);
     call((void*)JitCompiler::trace_impl);
-    pop(eax);
-    pop(eax);
+    pop(ac);
+    pop(ac);
 #endif
   }
   void dump_eax()
   {
 #ifdef JIT_DEBUG
-    push(eax);
+    push(ac);
     call((void*)JitCompiler::dump_eax_impl);
-    pop(eax);
+    pop(ac);
 #endif
   }
+public:
+  void dump_code()
+  {
+    fprintf(stderr, "#vu8(\n");
+    const uint8_t *p = getCode();
+    int size = getSize();
+    for (int i = 0; i < size; i++) {
+      fprintf(stderr, " #x%02x", p[i]);
+      if (((i+1) % 16) == 0) fprintf(stderr, "\n");
+    }
+    fprintf(stderr, ")\n");
+  }
+private:
   // instructions
   void consti_insn(SgWord *code, int i)
   {
     int val1;
     trace("enter CONSTI");
     INSN_VAL1(val1, code[i]);
-    mov(eax, (uintptr_t)SG_MAKE_INT(val1));
+    mov(ac, (uintptr_t)SG_MAKE_INT(val1));
     trace("leave CONSTI");
   }
   void push_insn()
   {
     trace("enter PUSH");
     dump_eax();
-    vm_sp(edx, ebx); // edx = vm->sp
-    push_insn(edx, eax);
+    vm_sp(edx, vm); // edx = vm->sp
+    push_insn(edx, ac);
     trace("leave PUSH");
   }
   void push_insn(const Xbyak::Reg32e &sp, const Xbyak::Reg32e &r)
@@ -386,7 +562,46 @@ private:
     // push argument to vm stack
     mov(ptr[sp], r);
     // sp++
-    vm_inc_sp(ebx);
+    vm_inc_sp(vm);
+  }
+
+  void lref_insn(SgWord code)
+  {
+    int val1;
+    INSN_VAL1(val1, code);
+    args(ac); // args
+    mov(ac, ptr[ac + val1 * sizeof(void*)]); // args[n] -> edx
+  }
+
+  // TODO not call c function.
+  void car_insn()
+  {
+    push(ac);
+    call((void*)Sg_Car);
+    add(csp, 1*sizeof(void*));
+  }
+  void cdr_insn()
+  {
+    push(ac);
+    call((void*)Sg_Cdr);
+    add(csp, 1*sizeof(void*));
+  }
+
+  void pairp_insn()
+  {
+    // TODO 64 bit
+    mov(edx, ac);
+    // set #f to eax
+    mov(ac, (uintptr_t)SG_FALSE);
+    test(dl, (uintptr_t)3);
+    std::string l = gen_label();
+    jne(l.c_str());
+    mov(edx, ptr[edx]);
+    and(edx, (uintptr_t)7);
+    cmp(edx, (uintptr_t)7);
+    mov(edx, (uintptr_t)SG_TRUE);
+    cmovne(ac, edx);
+    L(l.c_str());
   }
 };
 #define retrive_next_gloc(o,d)						\
@@ -402,24 +617,62 @@ private:
     }									\
     o = SG_GLOC_GET(SG_GLOC(o));					\
   } while (0)
-
-extern "C" void expand_stack(SgVM *vm);
-
-static void call_adjust_args(SgVM *vm, int argc, SgObject proc)
-{
-#undef APPLY_CALL
-#include "vm-args-adjust.c"
-  ADJUST_ARGUMENT_FRAME(proc, argc);
-}
-
-static void apply_adjust_args(SgVM *vm, int argc, SgObject proc)
-{
-#define APPLY_CALL
-#include "vm-args-adjust.c"
-  ADJUST_ARGUMENT_FRAME(proc, argc);
-}
-
   
+
+static SgObject list_fun(int n, SgObject ac, SgVM *vm)
+{
+  SgObject ret = SG_NIL;
+  n -= 1;
+  if (n > 0) {
+    ret = Sg_Cons(ac, ret);
+    for (int i = 0; i < n; i++) {
+      ret = Sg_Cons(INDEX(SP(vm), i), ret);
+    }
+    SP(vm) -= n;
+  }
+  return ret;
+}
+
+static SgObject prepare_apply(SgVM *vm, SgObject ac,
+			      int val1, int val2, int rargc)
+{
+  if (rargc < 0) {
+    Sg_AssertionViolation(SG_INTERN("apply"),
+			  SG_MAKE_STRING("improper list not allowed"),
+			  ac);
+  }
+  int nargc = val1 - 2;
+  SgObject proc = INDEX(SP(vm), nargc);
+  SgObject *fp = SP(vm) - (val1 - 1);
+  JitCompiler::shift_args(fp, nargc, SP(vm));
+  if (rargc == 0) {
+    SP(vm)--;
+    if (val2) {
+      SP(vm) = JitCompiler::shift_args(FP(vm), nargc, SP(vm));
+    }
+  } else {
+    INDEX_SET(SP(vm), 0, ac);
+    if (val2) {
+      SP(vm) = JitCompiler::shift_args(FP(vm), nargc+1, SP(vm));
+    }
+  }
+  return proc;
+}
+
+#if 0
+static void push_cont(SgVM *vm, SgWord *code, int n)
+{
+  SgContFrame *newcont = (SgContFrame*)SP(vm);
+  newcont->prev = CONT(vm);
+  newcont->fp = FP(vm);
+  newcont->size = (int)(SP(vm) - FP(vm));
+  newcont->pc = code+n;
+  newcont->cl = CL(vm);
+  CONT(vm) = newcont;
+  SP(vm) += CONT_FRAME_SIZE;
+}
+#endif
+
 /*
   Note:
   the generated native code will be called as subr with arguments
@@ -442,8 +695,8 @@ int JitCompiler::compile_rec(SgWord *code, int size)
     int val1, val2;
     void *bnproc = NULL;
     // for gref_call
-    SgObject gproc = SG_FALSE;
-
+    SgObject gproc = SG_FALSE, test_obj = SG_FALSE;
+    bool tail = false;
     // emit jump destination label, if there is
     Labels::iterator itr = context_.dstLabels.find(code+i);
     if (itr != context_.dstLabels.end()) {
@@ -452,18 +705,28 @@ int JitCompiler::compile_rec(SgWord *code, int size)
     // if it has some result. cf) some instruction does not have
     // result such as PUSH.
     switch (insn) {
-      // we don't have to consider FRAME vm instruction
-    case FRAME: break;
+    case FRAME: 
+#if 0
+      // to make vm's stack compatible...
+      trace("enter FRAME");
+      push((uintptr_t)SG_INT_VALUE(code[i+1]));
+      push((uintptr_t)(code+i));
+      push(vm);
+      call((void*)push_cont);
+      add(csp, 3 * sizeof(void*));
+      trace("leave FRAME");
+#endif
+      break;
       // ENTER vm instruction is more like for sanity...
     case ENTER: break;
     case LREF_PUSH:
       trace("enter LREF_PUSH");
       INSN_VAL1(val1, code[i]);
-      // keep eax clean, for heavy call
+      // keep ac clean, for heavy call
       args(ecx);  // args
       // ecx = arg_ref[val1]
       mov(ecx, ptr[ecx + val1 * sizeof(void*)]);
-      vm_sp(edx, ebx);
+      vm_sp(edx, vm);
       push_insn(edx, ecx);
       trace("leave LREF_PUSH");
       break;
@@ -471,23 +734,32 @@ int JitCompiler::compile_rec(SgWord *code, int size)
     case LREF:
       trace("enter LREF");
       INSN_VAL1(val1, code[i]);
-      args(eax); // args
-      mov(eax, ptr[eax + val1 * sizeof(void*)]); // args[n] -> edx
+      args(ac); // args
+      mov(ac, ptr[ac + val1 * sizeof(void*)]); // args[n] -> edx
       trace("leave LREF");
       break;
+    case GREF_PUSH: {
+      trace("enter GREF_PUSH");
+      SgObject o;
+      retrive_next_gloc(o, SG_OBJ(code[i+1]));
+      mov(ac, (uintptr_t)o);
+      push_insn();
+      trace("leave GREF_PUSH");
+      break;
+    }
     case CONST: {
       trace("enter CONST");
       SgObject o = SG_OBJ(code[i+1]);
-      mov(eax, (uintptr_t)o);
+      mov(ac, (uintptr_t)o);
       trace("leave CONST");
       break;
     }
     case CONST_PUSH: {
       trace("enter CONST_PUSH");
       SgObject o = SG_OBJ(code[i+1]);
-      // avoid to use eax.
+      // avoid to use ac.
       mov(ecx, (uintptr_t)o);
-      vm_sp(edx, ebx);
+      vm_sp(edx, vm);
       push_insn(edx, ecx);
       trace("leave CONST_PUSH");
       break;
@@ -498,58 +770,84 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       trace("enter CONSTI_PUSH");
       INSN_VAL1(val1, code[i]);
       mov(ecx, (uintptr_t)SG_MAKE_INT(val1));
-      vm_sp(edx, ebx);
+      vm_sp(edx, vm);
       push_insn(edx, ecx);
       trace("leave CONSTI");
       break;
     case BNNUME:
       bnproc = (void *)Sg_NumEq;
+      trace("enter BNNUME");
       goto bnnum_entry;
     case BNGE:
       bnproc = (void *)Sg_NumGe;
+      trace("enter BNGE");
       goto bnnum_entry;
     case BNGT:
       bnproc = (void *)Sg_NumGt;
+      trace("enter BNGT");
       goto bnnum_entry;
     case BNLE: 
       bnproc = (void *)Sg_NumLe;
+      trace("enter BNLE");
       goto bnnum_entry;
     case BNLT: 
       bnproc = (void *)Sg_NumLt;
+      trace("enter BNLT");
       goto bnnum_entry;
     bnnum_entry:
       {
 	int n = SG_INT_VALUE(code[i+1]);
-	trace("enter BNLE");
-	push(eax);
-	vm_stack_ref(edx, ebx, 0);
+	push(ac);
+	vm_stack_ref(edx, vm, 0);
 	push(edx);
 	call(bnproc);
-	add(esp, 2 * sizeof(void*));
+	add(csp, 2 * sizeof(void*));
 	// vm->sp--
-	vm_dec_sp(ebx);
+	vm_dec_sp(vm);
 	std::string l = gen_label();
-	cmp(eax, 1);
-	// FIXME: not all jmp shouldn't be T_SHORT but
-	// how much should we take?
-	jne(l.c_str(), (SG_INT_VALUE(n) < 5) ? T_AUTO : T_NEAR);
-	// we don't set #f or #t to eax, it's useless
+	cmp(ac, 1);
+	jne(l.c_str(), T_NEAR);
+	// we don't set #f or #t to ac, it's useless
 	// TODO if jump instruction
 	int j= compile_rec(code + i + 2, n);
 	L(l.c_str());
 	j += compile_rec(code + i + 1 + n, size - i - j);
 	i += j;
-	trace("leave BNLE");
+	trace("leave BNNUM");
+	break;
+      }
+    case TEST:
+      test_obj = SG_FALSE;
+      goto test_entry;
+    case BNNULL: 
+      test_obj = SG_NIL;
+      goto test_entry;
+    test_entry:
+      {
+	int n = SG_INT_VALUE(code[i+1]);
+	trace("enter BNNULL");
+	std::string l = gen_label();
+	cmp(ac, (uintptr_t)test_obj);
+	// FIXME: not all jmp shouldn't be T_SHORT but
+	// how much should we take?
+	jne(l.c_str(), T_NEAR);
+	// we don't set #f or #t to ac, it's useless
+	// TODO if jump instruction
+	int j= compile_rec(code + i + 2, n);
+	L(l.c_str());
+	j += compile_rec(code + i + 1 + n, size - i - j);
+	i += j;
+	trace("leave BNNULL");
 	break;
       }
     case ADD: {
       trace("enter ADD");
-      vm_stack_ref(edx, ebx, 0);
-      vm_dec_sp(ebx);		// vm->sp--;
-      push(eax);
+      vm_stack_ref(edx, vm, 0);
+      vm_dec_sp(vm);		// vm->sp--;
+      push(ac);
       push(edx);
       call((void*)Sg_Add);
-      add(esp, 2*sizeof(void*));
+      add(csp, 2*sizeof(void*));
       trace("leave ADD");
       break;
     }
@@ -557,7 +855,7 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       trace("enter ADDI");
       INSN_VAL1(val1, code[i]);
       // TODO 64 bits
-      mov(edx, eax);
+      mov(edx, ac);
       // SG_INTP(vm->ac);
       and(edx, 3);
       cmp(edx, 1);
@@ -565,18 +863,18 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       std::string end_label = gen_label();
       je(label.c_str());
       // ac != int
-      push(eax);
+      push(ac);
       push((uintptr_t)SG_MAKE_INT(val1));
       call((void*)Sg_Add);
-      add(esp, 2 * sizeof(void*));
+      add(csp, 2 * sizeof(void*));
       jmp(end_label.c_str());
       // for now...
       L(label.c_str());
-      sar(eax, 2);
-      add(eax, val1);
-      push(eax);
+      sar(ac, 2);
+      add(ac, val1);
+      push(ac);
       call((void*)Sg_MakeInteger);
-      add(esp, 1 * sizeof(void*));
+      add(csp, 1 * sizeof(void*));
       L(end_label.c_str());
       trace("leave ADDI");
       break;
@@ -585,147 +883,121 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       trace("enter GREF_TAIL_CALL");
       //inc_nest(1);
       INSN_VAL1(val1, code[i]);
-      SgObject o;
-      retrive_next_gloc(o, SG_OBJ(code[i+1]));
+      retrive_next_gloc(gproc, SG_OBJ(code[i+1]));
       // for proper tail recursive, we can not consume c stack either.
       // so make this simple jump
       // manage vm->sp part
-      vm_sp(edx, ebx);
+      vm_sp(edx, vm);
       push(edx);
       push((uintptr_t)val1);
-      vm_fp(ecx, ebx);
+      vm_fp(ecx, vm);
       push(ecx);
       call((void*)JitCompiler::shift_args);
-      add(esp, 3 * sizeof(void*));
-      // vm->sp = eax
-      mov(ptr[ebx + offsetof(SgVM, sp)], eax);
+      add(csp, 3 * sizeof(void*));
+      // vm->sp = ac
+      mov(ptr[vm + offsetof(SgVM, sp)], ac);
+      tail = true;
+      goto call_entry;
+#if 0
       // manage fp
-      lea(eax, ptr[eax - (val1 *sizeof(void*))]);
+      lea(ac, ptr[ac - (val1 *sizeof(void*))]);
       // set vm->fp
-      mov(ptr[ebx + offsetof(SgVM, fp)], eax);
-      vm_sp(edx, ebx);      
+      mov(ptr[vm + offsetof(SgVM, fp)], ac);
+      vm_sp(edx, vm);
       // now vm stack is ok next is re-use c-stack
       // args = vm->fp
       // argc = val1
       // data = vm or subr data
-      mov(ptr[ebp + ARGS_OFF], eax);
+      mov(ptr[ebp + ARGS_OFF], ac);
       mov(dword[ebp + ARGC_OFF], (uintptr_t)val1);
       // for now
-      mov(ptr[ebp + VM_OFF], ebx);
+      mov(ptr[ebp + VM_OFF], vm);
       // vm->cl = procedure
-      //mov(ptr[ebx + offsetof(SgVM, cl)], (uintptr_t)o);
+      //mov(ptr[vm + offsetof(SgVM, cl)], (uintptr_t)o);
       // ok emit jump
-      if (SG_EQ(o, closure_)) {
+      leave();
+      if (SG_EQ(gproc, closure_)) {
 	// tail recursive self call
-	leave();
 	jmp(this_label_.c_str());
-      } else if (SG_SUBRP(o)) {
-	jmp((void*)SG_SUBR_FUNC(o), T_NEAR);
-      } else if (SG_CLOSUREP(o)) {
+      } else if (SG_SUBRP(gproc)) {
+	jmp((void*)SG_SUBR_FUNC(gproc), T_NEAR);
+      } else if (SG_CLOSUREP(gproc)) {
 	// if a closure reaches here, it must be compiled already
 	// see walker.
-	SgObject p = SG_CLOSURE(o)->native;
-	leave();
+	SgObject p = SG_CLOSURE(gproc)->native;
 	jmp((void*)SG_SUBR_FUNC(p), T_NEAR);
       } else {
-	throw std::runtime_error("non closure procedures are not supported yet.");
+	throw std::runtime_error("generic functions are not supported yet.");
       }
       break;
+#endif
     }
     case GREF_CALL: 
       trace("enter GREF_CALL");
       inc_nest(1);
       retrive_next_gloc(gproc, SG_OBJ(code[i+1]));
-//      if (SG_PROCEDURE_OPTIONAL(gproc) != 0) {
-//	throw std::runtime_error("optional argument is not supported yet.");
-//      }
       goto call_entry;
       break;
     call_entry:
     case CALL: {
       INSN_VAL1(val1, code[i]);
-      // save cl and fp
-      vm_cl(edx, ebx);
-      push(edx);
-      vm_fp(edx, ebx);
-      push(edx);
-
       // adjust arguments
-      if (SG_FALSEP(gproc)) {
-	push(eax);		// save eax for later call
-	push(eax);
-      } else {
-	push((uintptr_t)gproc);
+      adjust_args(gproc, val1, false);
+      scheme_call(gproc, tail);
+      if (!tail) {
+	inc_nest(-1);
+	trace("leave CALL");
       }
-      push((uintptr_t)val1);
-      push(ebx);		// vm
-      call((void*)call_adjust_args);
-      add(esp, 3 * sizeof(void*));
-      if (SG_FALSEP(gproc)) {
-	pop(eax);
-      }
+      break;
+    }
+    case APPLY: {
+      trace("enter APPLY");
+      INSN_VAL2(val1, val2, code[i]);
+      push(ac);
+      call((void*)Sg_Length);
+      mov(ecx, ac);
+      pop(ac);
 
-      // push arguments
-      vm_sp(edx, ebx);
-      void *proc = NULL;	// subr
-      if (!SG_FALSEP(gproc)) {
-	if (SG_EQ(gproc, closure_)) {
-	  push(ebx);
-	  // proc must be label of this
-	} else if (SG_SUBRP(gproc)) {
-	  // retrieve data and push
-	  proc = (void*)SG_SUBR_FUNC(gproc);
-	  push((uintptr_t)SG_SUBR_DATA(gproc));
-	} else if (SG_CLOSUREP(gproc)) {
-	  push(ebx);
-	  proc = (void *)SG_SUBR_FUNC(SG_CLOSURE(gproc)->native);
-	} else {
-	  throw std::runtime_error("generic functions are not supported yet");
-	}
-      } else {
-	// LREF or FREF call
-	push(ebx);
+      push(ecx);		// rargc
+      {
+	push(val2);
+	push(val1);
+	push(ac);
+	push(vm);
+	call((void*)prepare_apply);
+	add(csp, 4 * sizeof(void*));
       }
-      push(val1);		// argc
-      vm_fp(edx, ebx);
-      push(edx);		// args
-      if (SG_FALSEP(gproc)) {
-	call(eax);
-      } else {
-	if (proc) {
-	  call(proc);
-	} else {
-	  call(this_label_.c_str());
-	}
-	gproc = SG_FALSE;
-      }
-      add(esp, 3 * sizeof(void*));
-      add_offset(ebx, -(val1 * sizeof(void*)));
-      pop(edx);			// restore fp
-      mov(ptr[ebx + offsetof(SgVM, fp)], edx);
-      pop(edx);			// restore cl
-      mov(ptr[ebx + offsetof(SgVM, cl)], edx);
+      pop(ecx);			// restore rargc
 
-      inc_nest(-1);
-      trace("leave GREF_CALL");
+      push(ac);			// save proc
+      push(ecx);		// save (save it for sanity)
+      {
+	adjust_args(SG_FALSE, val1 - 2, true);
+      }
+      // do not edit edx until scheme_call is called.
+      pop(ecx);
+      pop(ac);
+
+      scheme_call(SG_FALSE, val2);
+      trace("leave APPLY");
       break;
     }
     case SHIFTJ: {
       trace("enter SHIFTJ");
       INSN_VAL2(val1, val2, code[i]);
       // TODO do we need this?
-      push(eax);
-      vm_sp(edx, ebx);
+      push(ac);
+      vm_sp(edx, vm);
       push(edx);
       push((uintptr_t)val1);
-      vm_fp(ecx, ebx);
+      vm_fp(ecx, vm);
       lea(ecx, ptr[ecx + val2*sizeof(void*)]);
       push(ecx);
       call((void*)JitCompiler::shift_args);
-      add(esp, 3 * sizeof(void*));
-      // vm->sp = eax
-      mov(ptr[ebx + offsetof(SgVM, sp)], eax);
-      pop(eax);
+      add(csp, 3 * sizeof(void*));
+      // vm->sp = ac
+      mov(ptr[vm + offsetof(SgVM, sp)], ac);
+      pop(ac);
       trace("leave SHIFTJ");
       break;
     }
@@ -744,10 +1016,45 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       epilogue();
       return i+1;
       // builtin procedures
+    case PAIRP:
+      trace("enter PAIRP");
+      pairp_insn();
+      trace("leave PAIRP");
+      break;
+    case LIST:
+      trace("enter LIST");
+      INSN_VAL1(val1, code[i]);
+      push(vm);
+      push(ac);
+      push((uintptr_t)val1);
+      call((void*)list_fun);
+      add(csp, 3 * sizeof(void*));
+      trace("leave LIST");
+      break;
     case CAR:
-      push(eax);
-      call((void*)Sg_Car);
-      add(esp, 1*sizeof(void*));
+      trace("enter CAR");
+      car_insn();
+      trace("leave CAR");
+      break;
+    case LREF_CAR:
+      trace("enter LREF_CAR");
+      lref_insn(code[i]);
+      car_insn();
+      trace("leave LREF_CAR");
+      break;
+    case LREF_CAR_PUSH:
+      trace("enter LREF_CAR_PUSH");
+      lref_insn(code[i]);
+      car_insn();
+      push_insn();
+      trace("leave LREF_CAR_PUSH");
+      break;
+    case LREF_CDR_PUSH:
+      trace("enter LREF_CDR_PUSH");
+      lref_insn(code[i]);
+      cdr_insn();
+      push_insn();
+      trace("leave LREF_CDR_PUSH");
       break;
     default:
       throw std::runtime_error(info->name);
@@ -784,11 +1091,15 @@ bool JitCompiler::compile()
   return true;
 }
 
+#ifdef JIT_DEBUG
+#include "sagittarius/writer.h"
+#include "sagittarius/port.h"
+#endif
+
 int Sg_JitCompileClosure(SgObject closure)
 {
   DefaultWalker walker;
   JitCompiler compiler(SG_CLOSURE(closure), walker);
-  SgVM *vm = Sg_VM();
 
   if (compiler.compile()) {
     compiler.ready();
@@ -798,9 +1109,13 @@ int Sg_JitCompileClosure(SgObject closure)
 		    SG_PROCEDURE_REQUIRED(closure),
 		    SG_PROCEDURE_OPTIONAL(closure),
 		    SG_PROCEDURE_NAME(closure));
-    if (SG_VM_LOG_LEVEL(vm, SG_DEBUG_LEVEL)) {
-      compiler.dump();
-    }
+    /*
+#ifdef JIT_DEBUG
+    Sg_Printf(SG_PORT(Sg_StandardErrorPort()), UC("%S:%d\n"), closure,
+	      compiler.getSize());
+    compiler.dump_code();
+#endif
+    */
     SG_CLOSURE(closure)->native = subr;
     SG_CLOSURE(closure)->state = SG_NATIVE;
     return TRUE;

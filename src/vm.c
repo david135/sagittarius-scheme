@@ -656,14 +656,11 @@ void Sg_VMPushCC(SgCContinuationProc *after, void **data, int datasize)
     SgContFrame *newcont = (SgContFrame*)SP(vm);	\
     newcont->prev = CONT(vm);				\
     newcont->fp = FP(vm);				\
-    /* newcont->fp = (SgObject*)newcont - FP(vm); */	\
-    /* newcont->fp = vm->fpOffset; */			\
     newcont->size = (int)(SP(vm) - FP(vm));		\
     newcont->pc = next_pc;				\
     newcont->cl = CL(vm);				\
     CONT(vm) = newcont;					\
     SP(vm) += CONT_FRAME_SIZE;				\
-    /* FP(vm) = SP(vm);	*/				\
   } while (0)
 
 
