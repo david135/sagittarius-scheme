@@ -188,9 +188,10 @@ static void push_cont(SgVM *vm, SgWord *code, int n)
   PUSH_CONT(vm, code+n);
 }
 
-static void pop_cont(SgVM *vm)
+static SgObject pop_cont(SgObject r, SgVM *vm)
 {
   POP_CONT();
+  return r;
 }
 
 static SgObject maybe_pop_cont(SgObject r, SgVM *vm, int pop)
@@ -324,13 +325,10 @@ private:
 
   void pop_cont()
   {
+    push(vm);
     push(ac);
-    {
-      push(vm);
-      call((void*)::pop_cont);
-      add(csp, 1 * sizeof(void*));
-    }
-    pop(ac);
+    call((void*)::pop_cont);
+    add(csp, 2 * sizeof(void*));
   }
   // calling C API for scheme
   // All scheme procedures are proc(void**, int, void*) signature.
