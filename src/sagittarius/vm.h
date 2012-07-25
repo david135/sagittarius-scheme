@@ -317,15 +317,6 @@ typedef enum {
 #define MOSTLY_FALSE(expr) expr
 #endif
 
-#define CHECK_STACK(size, vm)					\
-  do {								\
-    if (MOSTLY_FALSE(SP(vm) >= (vm)->stackEnd - (size))) {	\
-      expand_stack(vm);						\
-    }								\
-  } while (0)
-
-
-
 #define SG_CCONT_DATA_SIZE 6
 
 #define IN_STACK_P(ptr, vm)				\

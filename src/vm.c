@@ -77,6 +77,9 @@ static pthread_key_t the_vm_key;
 static SgSubr default_exception_handler_rec;
 #define DEFAULT_EXCEPTION_HANDLER SG_OBJ(&default_exception_handler_rec)
 
+/* common macro and static functions for both vm and jit */
+#include "vm-common.c"
+
 static void box_print(SgObject obj, SgPort *port, SgWriteContext *ctx)
 {
   Sg_Printf(port, UC("#<box 0x%x>"), obj);
@@ -622,8 +625,6 @@ SgObject Sg_Environment(SgObject lib, SgObject spec)
 static void print_frames(SgVM *vm);
 void expand_stack(SgVM *vm);
 
-#define C_CONT_MARK NULL
-
 void Sg_VMPushCC(SgCContinuationProc *after, void **data, int datasize)
 {
   int i;
@@ -650,19 +651,6 @@ void Sg_VMPushCC(SgCContinuationProc *after, void **data, int datasize)
 }
 
 /* #define USE_LIGHT_WEIGHT_APPLY 1 */
-
-#define PUSH_CONT(vm, next_pc)				\
-  do {							\
-    SgContFrame *newcont = (SgContFrame*)SP(vm);	\
-    newcont->prev = CONT(vm);				\
-    newcont->fp = FP(vm);				\
-    newcont->size = (int)(SP(vm) - FP(vm));		\
-    newcont->pc = next_pc;				\
-    newcont->cl = CL(vm);				\
-    CONT(vm) = newcont;					\
-    SP(vm) += CONT_FRAME_SIZE;				\
-  } while (0)
-
 
 static SgWord apply_callN[2] = {
   MERGE_INSN_VALUE2(APPLY, 2, 1),
@@ -1216,10 +1204,6 @@ void expand_stack(SgVM *vm)
   for (p = SP(vm); p < vm->stackEnd; p++) *p = NULL;
 }
 
-static SgWord return_code[1] = {SG_WORD(RET)};
-
-#define PC_TO_RETURN return_code
-
 static SgObject throw_continuation_cc(SgObject, void **);
 
 static SgObject throw_continuation_body(SgObject handlers,
@@ -1634,52 +1618,6 @@ static SG_DEFINE_SUBR(default_exception_handler_rec, 1, 0,
 		      SG_FALSE, NULL);
 
 #define TAIL_POS(vm)  (*PC(vm) == RET)
-#define CALL_CCONT(p, v, d) p(v, d)
-
-#define POP_CONT()							\
-  do {									\
-    /* if (CONT(vm)->fp == NULL) { */					\
-    if (CONT(vm)->fp == C_CONT_MARK) {					\
-      void *data__[SG_CCONT_DATA_SIZE];					\
-      SgObject v__ = AC(vm);						\
-      SgCContinuationProc *after__;					\
-      void **d__ = data__;						\
-      void **s__ = (void**)((SgObject*)CONT(vm) + CONT_FRAME_SIZE);	\
-      int i__ = CONT(vm)->size;						\
-      while (i__-- > 0) {						\
-	*d__++ = *s__++;						\
-      }									\
-      after__ = ((SgCContinuationProc*)CONT(vm)->pc);			\
-      if (IN_STACK_P((SgObject*)CONT(vm), vm)) {			\
-	SP(vm) = (SgObject*)CONT(vm);					\
-      }									\
-      FP(vm) = SP(vm);							\
-      PC(vm) = PC_TO_RETURN;						\
-      CL(vm) = CONT(vm)->cl;						\
-      CONT(vm) = CONT(vm)->prev;					\
-      AC(vm) = CALL_CCONT(after__, v__, data__);			\
-    } else if (IN_STACK_P((SgObject*)CONT(vm), vm)) {			\
-      SgContFrame *cont__ = CONT(vm);					\
-      FP(vm) = cont__->fp;						\
-      SP(vm) = FP(vm) + cont__->size;					\
-      PC(vm) = cont__->pc;						\
-      CL(vm) = cont__->cl;						\
-      CONT(vm) = cont__->prev;						\
-    } else {								\
-      int size__ = CONT(vm)->size;					\
-      FP(vm) = SP(vm) = vm->stack;					\
-      PC(vm) = CONT(vm)->pc;						\
-      CL(vm) = CONT(vm)->cl;						\
-      if (CONT(vm)->env && size__) {					\
-	SgObject *s__ = CONT(vm)->env, *d__ = SP(vm);			\
-	SP(vm) += size__;						\
-	while (size__-- > 0) {						\
-	  *d__++ = *s__++;						\
-	}								\
-      }									\
-      CONT(vm) = CONT(vm)->prev;					\
-    }									\
-  } while (0)
 
 SgObject evaluate_safe(SgObject program, SgWord *code)
 {
@@ -1781,17 +1719,6 @@ void Sg_VMExecute(SgObject toplevel)
   ASSERT(SG_CODE_BUILDERP(toplevel));
   /* NB: compiled libraries don't need any frame. */
   evaluate_safe(theVM->closureForEvaluate, SG_CODE_BUILDER(toplevel)->code);
-}
-
-static inline SgObject* shift_args(SgObject *fp, int m, SgObject *sp)
-{
-  int i;
-  SgObject *f = fp + m;
-  for (i = m - 1; 0 <= i; i--) {
-    INDEX_SET(f, i, INDEX(sp, i));
-  }
-  /* memmove(fp, sp-m, m*sizeof(SgObject)); */
-  return f;
 }
 
 /* for call-next-method. is there not a better way? */
