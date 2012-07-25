@@ -227,10 +227,14 @@ private:
   Xbyak::Reg64 vm;
   Xbyak::Reg64 ac;
   Xbyak::Reg64 csp;
+  Xbyak::Reg64 argc;
+  Xbyak::Reg64 args;
 #elif  defined(XBYAK32)
   Xbyak::Reg32 vm;		// ebx
   Xbyak::Reg32 ac;		// eax
   Xbyak::Reg32 csp;		// esp (c stack pointer)
+  Xbyak::Reg32 argc;		// esi
+  Xbyak::Reg32 args;		// edi
 #else
   #error "JIT not supported for this architecture"
 #endif
@@ -249,6 +253,8 @@ public:
     , vm(ebx)
     , ac(eax)
     , csp(esp)
+    , argc(esi)
+    , args(edi)
 #endif
   {}
   
@@ -274,8 +280,12 @@ private:
     push(ebp);
     mov(ebp, esp);
     push(ebx);
+    push(esi);
+    push(edi);
 
     scheme_vm(vm);
+    set_args(args);
+    set_argc(argc);
 #ifdef JIT_DEBUG
     dump_args();
     dump_reg(ebx);
@@ -286,6 +296,8 @@ private:
   {
     this->pop_cont();
 
+    pop(edi);
+    pop(esi);
     pop(ebx);
     pop(ebp);
     ret();
@@ -299,6 +311,8 @@ private:
     mov(dword[ebp + ARGC_OFF], new_argc);
     mov(ptr[ebp + VM_OFF], vm);
 
+    pop(edi);
+    pop(esi);
     pop(ebx);
     mov(esp, ebp);
     pop(ebp);
@@ -330,15 +344,15 @@ private:
 
       vm_fp(ecx, vm);
       // TODO check subr and get data
-      leave(ecx, edx, vm);
+      leave(ecx, argc, vm);
       jmp(ac);
     } else {
       vm_fp(ecx, vm);
       if (SG_SUBRP(proc)) {
 	mov(ac, (uintptr_t)SG_SUBR_DATA(proc));
-	leave(ecx, edx, ac, true);
+	leave(ecx, argc, ac, true);
       } else {
-	leave(ecx, edx, vm);
+	leave(ecx, argc, vm);
       }
       if (SG_EQ(proc, closure_)) {
 	// TODO this case we can optimise not to pop the saved registers.
@@ -361,14 +375,16 @@ private:
     }
     // this check must be the first place(x86 call convention)
     if (SG_FALSEP(proc)) {
-      push(edx); push(ac);
+      //push(edx);
+      push(ac);
       {
 	push(ac);
 	call((void*)check_subr);
 	add(csp, 1 * sizeof(void*));
 	mov(ecx, ac);
       }
-      pop(ac); pop(edx);
+      pop(ac);
+      //pop(edx);
       // used for maybe_pop_cont
       push(ecx);
     }
@@ -377,7 +393,8 @@ private:
     } else {
       push(vm);
     }
-    push(edx);
+    //push(edx);
+    push(argc);
     // TODO 64 bit
     vm_fp(ecx, vm);
     push(ecx);
@@ -443,7 +460,8 @@ private:
     }
     add(csp, 3 * sizeof(void*));
     // result argc
-    mov(edx, ac);
+    //mov(edx, ac);
+    mov(this->argc, ac);
     if (SG_FALSEP(proc)) {
       pop(ac);
     }
@@ -668,8 +686,8 @@ private:
   {
     int val1;
     INSN_VAL1(val1, code);
-    vm_fp(ecx, vm);
-    mov(d, ptr[ecx + val1 * sizeof(void*)]);
+    //vm_fp(ecx, vm);
+    mov(d, ptr[args + val1 * sizeof(void*)]);
   }
 
   // TODO not call c function.
