@@ -86,12 +86,14 @@
     SgClosure * cl = SG_CLOSURE(AC(vm));
 #ifdef USE_JIT
     if (cl->state == SG_NATIVE) {
+      int tail_p = TAIL_POS(vm);
       ADJUST_ARGUMENT_FRAME(cl, argc);
       SG_PROF_COUNT_CALL(vm, cl);
       CL(vm) = cl;
       PC(vm) = PC_TO_RETURN;
       AC(vm) = SG_SUBR_FUNC(cl->native)(FP(vm), argc, vm);
-      if (TAIL_POS(vm)) RET_INSN();
+      /* if (tail_p) RET_INSN(); */
+      RET_INSN();
       NEXT;
     } else {
 #endif
