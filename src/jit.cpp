@@ -190,8 +190,9 @@ static void push_cont(SgVM *vm, SgWord *code, int n)
 
 static SgObject pop_cont(SgObject r, SgVM *vm)
 {
+  AC(vm) = r;
   POP_CONT();
-  return r;
+  return AC(vm);
 }
 
 static SgObject maybe_pop_cont(SgObject r, SgVM *vm, int pop)
@@ -296,7 +297,7 @@ private:
   void epilogue()
   {
     this->pop_cont();
-
+    trace("leaving (after pop_cont)");
     pop(edi);
     pop(esi);
     pop(ebx);
@@ -337,18 +338,44 @@ private:
   {
     if (SG_FALSEP(proc)) {
       push(ac);
+      call((void*)check_subr);
+      mov(edx, ac);
+      pop(ac);
+
+      push(edx);
+      push(ac);
       call((void*)convert_proc);
       add(csp, 1 * sizeof(void*));
+      pop(edx);
+      // ac is now callable procedure
 
+      // we need to check if the calling procedure is subr or not.
+      std::string e_l = gen_label();
       vm_fp(ecx, vm);
-      // TODO check subr and get data
+      cmp(edx, 1);		// i hope this is unlikely
+      je(e_l.c_str());
       leave(ecx, argc, vm);
       jmp(ac);
+      L(e_l.c_str());
+      // see NOTE (*1) below.
+      // TODO get subr data
+      push(vm);
+      push(argc);
+      push(ecx);
+      call(ac);
+      add(csp, 3 * sizeof(void*));
     } else {
       vm_fp(ecx, vm);
       if (SG_SUBRP(proc)) {
-	mov(ac, (uintptr_t)SG_SUBR_DATA(proc));
-	leave(ecx, argc, ac, true);
+	// NOTE (*1)
+	// if the calling procedure is subr, we can't make it tail call,
+	// otherwise the call does not pop continuation frame.
+	// unless we modify the saved eip, but it's too much I guess.
+	push((uintptr_t)SG_SUBR_DATA(proc));
+	push(argc);
+	push(ecx);
+	//mov(ac, (uintptr_t)SG_SUBR_DATA(proc));
+	//leave(ecx, argc, ac, true);
       } else {
 	leave(ecx, argc, vm);
       }
@@ -357,7 +384,9 @@ private:
 	// but later.
 	jmp(this_label_.c_str(), T_NEAR);
       } else if (SG_SUBRP(proc)) {
-	jmp((void*)SG_SUBR_FUNC(proc), T_NEAR);
+	//jmp((void*)SG_SUBR_FUNC(proc), T_NEAR);
+	call((void*)SG_SUBR_FUNC(proc));
+	add(csp, 3 * sizeof(void*));
       } else if (SG_CLOSUREP(proc)) {
 	jmp((void*)SG_SUBR_FUNC(SG_CLOSURE(proc)->native), T_NEAR);
       } else {
@@ -549,6 +578,15 @@ private:
 	    info->name,
 	    vm->sp, vm->fp, vm->ac, *(vm->sp-1));
   }
+  static void trace_impl(const char *msg)
+  {
+    SgVM *vm = Sg_VM();
+    for (int i = 0; i < nest_level*2; i++) {
+      fputc(' ', stderr);
+    }
+    fprintf(stderr, "%d: %s(sp:%p fp:%p ac:%p *sp:%p)\n",
+	    nest_level, msg, vm->sp, vm->fp, vm->ac, *(vm->sp-1));
+  }
   static void dump_eax_impl(void *eax)
   {
     fprintf(stderr, "reg: %p\n", eax);
@@ -615,6 +653,18 @@ private:
       push((uintptr_t)info);
       call((void*)JitCompiler::trace_enter_leave);
       pop(ac);
+      pop(ac);
+    }
+    pop(ac);
+#endif
+  }
+  void trace(const char * msg)
+  {
+#ifdef JIT_DEBUG
+    push(ac);
+    {
+      push((uintptr_t)msg);
+      call((void*)JitCompiler::trace_impl);
       pop(ac);
     }
     pop(ac);
