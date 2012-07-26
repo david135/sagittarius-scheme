@@ -1005,8 +1005,6 @@ int JitCompiler::compile_rec(SgWord *code, int size)
     case GREF_TAIL_CALL: {
       INSN_VAL1(val1, code[i]);
       retrive_next_gloc(gproc, SG_OBJ(code[i+1]));
-      // for proper tail recursive, we can not consume c stack either.
-      // so make this simple jump
       // manage vm->sp part
       vm_sp(edx, vm);
       push(edx);
@@ -1110,6 +1108,25 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       break;
     case CAR:
       car_insn();
+      break;
+    case CDR:
+      cdr_insn();
+      break;
+    case CAAR:
+      car_insn();
+      car_insn();
+      break;
+    case CADR:
+      cdr_insn();
+      car_insn();
+      break;
+    case CDAR:
+      car_insn();
+      cdr_insn();
+      break;
+    case CDDR:
+      cdr_insn();
+      cdr_insn();
       break;
     case LREF_CAR:
       lref_insn(code[i]);
