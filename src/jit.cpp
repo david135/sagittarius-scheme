@@ -80,12 +80,17 @@ private:
   }
 public:
   DefaultWalker() : label_(0) {}
-  virtual void walk(SgClosure *closure, WalkContext &ctx);
+  virtual void walk(SgClosure *closure, WalkContext &ctx)
+  {
+    walk(closure, SG_CODE_BUILDER(closure->code), ctx);
+  }
+private:
+  void walk(SgClosure *closure, SgCodeBuilder *cb, WalkContext &ctx);
 };
 
-void DefaultWalker::walk(SgClosure *closure, WalkContext &ctx)
+void DefaultWalker::walk(SgClosure *closure, SgCodeBuilder *cb,
+			 WalkContext &ctx)
 {
-  SgCodeBuilder *cb = SG_CODE_BUILDER(closure->code);
   SgWord *code = cb->code;
   for (int i = 0; i < cb->size;) {
     Instruction insn = static_cast<Instruction>(INSN(code[i]));
@@ -98,6 +103,16 @@ void DefaultWalker::walk(SgClosure *closure, WalkContext &ctx)
       // set both from and to
       ctx.srcLabels.insert(Labels::value_type(code+i, label));
       ctx.dstLabels.insert(Labels::value_type(code+i+1+n, label));
+      break;
+    }
+    case CLOSURE: {
+      // in case we can't compile internal closure, try to avoid the
+      // inconsistency.
+      SgObject ncb = SG_OBJ(code[i+1]);
+      WalkContext nctx;
+      // the real walking is done in runtime. so we can simply ignore the
+      // result, just check if it has an error.
+      walk(closure, SG_CODE_BUILDER(ncb), nctx);
       break;
     }
       // for now
@@ -396,6 +411,14 @@ private:
   }
   void scheme_call(SgObject proc, bool tail)
   {
+    if (SG_FALSEP(proc)) {
+      // put proc to cl
+      mov(ptr[vm + offsetof(SgVM, cl)], ac);
+    } else {
+      mov(edx, (uintptr_t)proc);
+      mov(ptr[vm + offsetof(SgVM, cl)], edx);
+    }
+
     if (tail) {
       scheme_tail_call(proc);
       return;
@@ -738,6 +761,19 @@ private:
     mov(d, ptr[args + val1 * sizeof(void*)]);
   }
 
+  void fref_insn(SgWord code)
+  {
+    fref_insn(code, ac);
+  }
+
+  void fref_insn(SgWord code, const Xbyak::Reg32e &d)
+  {
+    int val1;
+    INSN_VAL1(val1, code);
+    vm_cl(d, vm);
+    mov(d, ptr[d + offsetof(SgClosure, frees) + val1 * sizeof(void*)]);
+  }
+
   // TODO not call c function.
   void car_insn()
   {
@@ -870,13 +906,19 @@ int JitCompiler::compile_rec(SgWord *code, int size)
     case UNDEF: 
       mov(ac, (uintptr_t)SG_UNDEF);
       break;
+    case PUSH: push_insn(); break;
+    case LREF: lref_insn(code[i]); break;
     case LREF_PUSH:
       lref_insn(code[i], ecx);
       vm_sp(edx, vm);
       push_insn(edx, ecx);
       break;
-    case PUSH: push_insn(); break;
-    case LREF: lref_insn(code[i]); break;
+    case FREF: fref_insn(code[i]); break;
+    case FREF_PUSH:
+      fref_insn(code[i], ecx);
+      vm_sp(edx, vm);
+      push_insn(edx, ecx);
+      break;
     case GREF_PUSH: {
       SgObject o;
       retrive_next_gloc(o, SG_OBJ(code[i+1]));
@@ -967,6 +1009,26 @@ int JitCompiler::compile_rec(SgWord *code, int size)
 	i += j;
 	break;
       }
+    case CLOSURE: {
+      // closure instruction needs to create a closure with free variables,
+      // hence we need to make it in runtime and compile it in runtime!!
+      // Note: the code builder itself has been check by now. see walker.
+      SgObject cb = SG_OBJ(code[i+1]);
+      vm_sp(edx, vm);
+      // vm->sp -= SG_CODE_BUILDER_FREEC(cb);
+      lea(edx, ptr[edx - SG_CODE_BUILDER_FREEC(cb) * sizeof(void*)]);
+      mov(ptr[vm + offsetof(SgVM, sp)], edx);
+      push(edx);
+      push((uintptr_t)cb);
+      call((void*)Sg_MakeClosure);
+      // TODO we can avoid to emit some instruction here, if we reuse stack.
+      add(csp, 2 * sizeof(void*));
+      push(ac);
+      call((void*)Sg_JitCompileClosure);
+      // we can ignore the result, the closure is destructively compiled.
+      pop(ac);
+      break;
+    }
     case ADD: {
       vm_stack_ref(edx, vm, 0);
       vm_dec_sp(vm);		// vm->sp--;
