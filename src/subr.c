@@ -38,6 +38,7 @@
 #include "sagittarius/generic.h"
 #include "sagittarius/writer.h"
 #include "sagittarius/vm.h"
+#include "sagittarius/closure.h"
 
 static void proc_print(SgObject obj, SgPort *port, SgWriteContext *ctx)
 {
@@ -46,6 +47,10 @@ static void proc_print(SgObject obj, SgPort *port, SgWriteContext *ctx)
   else 
     Sg_Putuz(port, UC("#<closure "));
   Sg_Write(SG_PROCEDURE_NAME(obj), port, SG_WRITE_DISPLAY);
+  if (SG_PROCEDURE_TYPE(obj) == SG_PROC_CLOSURE &&
+      SG_CLOSURE(obj)->state == SG_NATIVE) {
+    Sg_Putuz(port, UC(" native"));
+  }
   Sg_Putc(port, '>');
 }
 SG_DEFINE_BUILTIN_CLASS_SIMPLE(Sg_ProcedureClass, proc_print);
