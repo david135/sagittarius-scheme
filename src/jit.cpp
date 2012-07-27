@@ -899,6 +899,38 @@ private:
     cmovne(ac, edx);
     L(l.c_str());
   }
+
+  void immediate_calc(SgWord code, void *func)
+  {
+    int val1;
+    INSN_VAL1(val1, code);
+    // TODO 64 bits
+    mov(edx, ac);
+    // SG_INTP(vm->ac);
+    and(edx, 3);
+    cmp(edx, 1);
+    std::string label = gen_label();
+    std::string end_label = gen_label();
+    je(label.c_str());
+    // ac != int
+    push(ac);
+    push((uintptr_t)SG_MAKE_INT(val1));
+    call(func);
+    add(csp, 2 * sizeof(void*));
+    jmp(end_label.c_str());
+    // immediate calc
+    L(label.c_str());
+    sar(ac, 2);
+    if (func != (void*)Sg_Add) {
+      neg(ac);
+    }
+    add(ac, val1);
+    push(ac);
+    call((void*)Sg_MakeInteger);
+    add(csp, 1 * sizeof(void*));
+    L(end_label.c_str());
+  }
+  
 };
 #define check_bound_object(o, dst)					\
   do {									\
@@ -980,7 +1012,7 @@ int JitCompiler::compile_rec(SgWord *code, int size)
     Instruction insn = static_cast<Instruction>(INSN(code[i]));
     InsnInfo *info = Sg_LookupInsnName(insn);
     int val1, val2;
-    void *bnproc = NULL;
+    void *bnproc = NULL, *calcproc = NULL;
     // for gref_call
     SgObject gproc = SG_FALSE, test_obj = SG_FALSE;
     bool tail = false, reverse = false;
@@ -1195,41 +1227,45 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       pop(ac);
       break;
     }
-    case ADD: {
+    case NEG:
+      push(ac);
+      call((void *)Sg_Negate);
+      add(csp, 1 * sizeof(void*));
+      break;
+    case ADD:
+      calcproc = (void *)Sg_Add;
+      goto calc_entry;
+    case SUB:
+      calcproc = (void *)Sg_Sub;
+      goto calc_entry;
+    case MUL:
+      calcproc = (void *)Sg_Mul;
+      goto calc_entry;
+    case DIV:
+      calcproc = (void *)Sg_Div;
+      // fall thought
+    calc_entry: 
       vm_stack_ref(edx, vm, 0);
       vm_dec_sp(vm);		// vm->sp--;
       push(ac);
       push(edx);
-      call((void*)Sg_Add);
+      call(calcproc);
       add(csp, 2*sizeof(void*));
       break;
-    }
-    case ADDI: {
+    case ADDI: immediate_calc(code[i], (void *)Sg_Add); break;
+    case SUBI: immediate_calc(code[i], (void *)Sg_Sub); break;
+    case MULI:
+      calcproc = (void *)Sg_Mul;
+      goto icalc_entry;
+    case DIVI:
+      calcproc = (void *)Sg_Div;
+    icalc_entry:
       INSN_VAL1(val1, code[i]);
-      // TODO 64 bits
-      mov(edx, ac);
-      // SG_INTP(vm->ac);
-      and(edx, 3);
-      cmp(edx, 1);
-      std::string label = gen_label();
-      std::string end_label = gen_label();
-      je(label.c_str());
-      // ac != int
       push(ac);
       push((uintptr_t)SG_MAKE_INT(val1));
-      call((void*)Sg_Add);
-      add(csp, 2 * sizeof(void*));
-      jmp(end_label.c_str());
-      // for now...
-      L(label.c_str());
-      sar(ac, 2);
-      add(ac, val1);
-      push(ac);
-      call((void*)Sg_MakeInteger);
-      add(csp, 1 * sizeof(void*));
-      L(end_label.c_str());
+      call(calcproc);
+      add(csp, 2*sizeof(void*));
       break;
-    }
     case GREF_TAIL_CALL: {
       retrive_next_gloc(gproc, SG_OBJ(code[i+1]));
       goto tail_call_entry;
