@@ -1460,13 +1460,13 @@ static int jit_compile_closure_rec(SgObject closure, SgObject set)
     SG_CLOSURE(closure)->native = subr;
     if (compiler.compile()) {
 #ifdef JIT_DUMP
-      Sg_Printf(SG_PORT(Sg_StandardErrorPort()), UC("%S:%d\n"), closure,
+      Sg_Printf(SG_PORT(Sg_StandardErrorPort()), UC("%S:[%p (%d -> %d)\n"),
+		closure,
+		compiler.getCode(),
+		SG_CODE_BUILDER(SG_CLOSURE(closure)->code)->size,
 		compiler.getSize());
       compiler.dump_code();
 #endif
-      printf("top %p:(%d -> %d)\n", compiler.getCode(), 
-	     SG_CODE_BUILDER(SG_CLOSURE(closure)->code)->size,
-	     compiler.getSize());
       SG_CLOSURE(closure)->state = SG_NATIVE;
       return TRUE;
     }
