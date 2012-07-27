@@ -233,20 +233,22 @@ static SgObject maybe_pop_cont(SgObject r, SgVM *vm, int pop)
   return r;
 }
 
-#if 0
 struct JitAllocator : public Xbyak::Allocator
 {
   virtual uint8_t * alloc(size_t size)
   {
-    return reinterpret_cast<uint8_t*>(SG_MALLOC(size));
+    return Xbyak::Allocator::alloc(size);
   }
-  // do nothing
+  // do nothing. let garbage collector do it
   virtual void free(uint8_t *p) {}
+
+  void collect(void *p)
+  {
+    Xbyak::Allocator::free((uint8_t *)p);
+  }
 };
 
 static JitAllocator jit_allocator;
-#endif
-static Xbyak::Allocator jit_allocator;
 
 class JitCompiler : public Xbyak::CodeGenerator
 {
@@ -276,15 +278,13 @@ private:
 
 public:
   JitCompiler(SgClosure * const closure, Walker & walker, SgObject sets)
-    : CodeGenerator(((SG_CODE_BUILDER(closure->code)->size > 512)
-		     ? ceil(SG_CODE_BUILDER(closure->code)->size / 512)
-		     : 1) *
+    : CodeGenerator(((SG_CODE_BUILDER(closure->code)->size * 20)/Xbyak::DEFAULT_MAX_CODE_SIZE + 1) *
 #ifdef JIT_DEBUG
-		    Xbyak::DEFAULT_MAX_CODE_SIZE * 4,
+		    Xbyak::DEFAULT_MAX_CODE_SIZE * 4
 #else
-		    Xbyak::DEFAULT_MAX_CODE_SIZE,
+		    Xbyak::DEFAULT_MAX_CODE_SIZE
 #endif
-		    0, &jit_allocator)
+		    ,0, &jit_allocator)
     , closure_(closure)
     , walker_(walker)
     , context_(sets)
@@ -832,6 +832,33 @@ private:
     mov(d, ptr[d + offsetof(SgClosure, frees) + val1 * sizeof(void*)]);
   }
 
+  void tail_call_insn(SgWord code)
+  {
+    int val1;
+    INSN_VAL1(val1, code);
+    // manage vm->sp part
+    vm_sp(edx, vm);
+    push(edx);
+    push((uintptr_t)val1);
+    vm_fp(ecx, vm);
+    push(ecx);
+    call((void*)::shift_args);
+    add(csp, 3 * sizeof(void*));
+    // vm->sp = ac
+    mov(ptr[vm + offsetof(SgVM, sp)], ac);
+  }
+
+  void local_call_insn(SgWord code, bool tail)
+  {
+    int val1;
+    INSN_VAL1(val1, code);
+    mov(ptr[vm + offsetof(SgVM, cl)], ac);
+    vm_sp(edx, vm);
+    lea(edx, ptr[edx - val1 * sizeof(void*)]);
+    mov(ptr[vm + offsetof(SgVM, fp)], edx);
+    scheme_call(SG_FALSE, tail);
+  }
+
   // TODO not call c function.
   void car_insn()
   {
@@ -1060,19 +1087,11 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       break;
     case GSET: {
       SgObject o = SG_OBJ(code[i+1]);
-      if (SG_GLOCP(o)) {
-	mov(edx, (uintptr_t)o);
-	mov(ptr[edx + offsetof(SgGloc, value)], ac);
-      } else {
-	SgObject oldval;
-	check_bound_object(o, oldval);
-	push((uintptr_t)SG_IDENTIFIER_LIBRARY(o));
-	push((uintptr_t)SG_IDENTIFIER_NAME(o));
-	push(ac);
-	call((void*)Sg_MakeBinding);
-	add(csp, 3 * sizeof(void*));
-	mov(ptr[code+1], ac);
+      if (!SG_GLOCP(o)) {
+	check_bound_object(o, o);
       }
+      mov(edx, (uintptr_t)o);
+      mov(ptr[edx + offsetof(SgGloc, value)], ac);
       mov(ac, (uintptr_t)SG_UNDEF);
       break;
     }
@@ -1233,26 +1252,22 @@ int JitCompiler::compile_rec(SgWord *code, int size)
     }
     case TAIL_CALL:
     tail_call_entry:
-      INSN_VAL1(val1, code[i]);
       // if it's not GREF_TAIL_CALL, then we need to save ac.
-      if (SG_FALSEP(gproc)) {
-	push(ac);
-      }
-      // manage vm->sp part
-      vm_sp(edx, vm);
-      push(edx);
-      push((uintptr_t)val1);
-      vm_fp(ecx, vm);
-      push(ecx);
-      call((void*)::shift_args);
-      add(csp, 3 * sizeof(void*));
-      // vm->sp = ac
-      mov(ptr[vm + offsetof(SgVM, sp)], ac);
-      if (SG_FALSEP(gproc)) {
-	pop(ac);
-      }
+      if (SG_FALSEP(gproc)) push(ac);
+      tail_call_insn(code[i]);
+      if (SG_FALSEP(gproc)) pop(ac);
       tail = true;
       goto call_entry;
+      break;
+    case LOCAL_TAIL_CALL:
+      if (SG_FALSEP(gproc)) push(ac);
+      tail_call_insn(code[i]);
+      if (SG_FALSEP(gproc)) pop(ac);
+      tail = true;
+      // fall through
+    case LOCAL_CALL:
+      // for vm local_call is mere jmp call so call tail_call.
+      local_call_insn(code[i], tail);
       break;
     case APPLY: {
       INSN_VAL2(val1, val2, code[i]);
@@ -1421,10 +1436,10 @@ bool JitCompiler::compile()
 #include "sagittarius/writer.h"
 #include "sagittarius/port.h"
 #endif
-static void jit_finelizer(SgObject z, void *data)
+static void jit_finalizer(SgObject z, void *data)
 {
   //puts("gong!");
-  Xbyak::AlignedFree((void *)SG_SUBR_FUNC(z));
+  jit_allocator.collect((void *)SG_SUBR_FUNC(z));
 }
 
 static int jit_compile_closure_rec(SgObject closure, SgObject set)
@@ -1441,7 +1456,7 @@ static int jit_compile_closure_rec(SgObject closure, SgObject set)
 		    SG_PROCEDURE_REQUIRED(closure),
 		    SG_PROCEDURE_OPTIONAL(closure),
 		    SG_PROCEDURE_NAME(closure));
-    Sg_RegisterFinalizer(subr, jit_finelizer, NULL);
+    Sg_RegisterFinalizer(subr, jit_finalizer, NULL);
     SG_CLOSURE(closure)->native = subr;
     if (compiler.compile()) {
 #ifdef JIT_DUMP
@@ -1449,7 +1464,9 @@ static int jit_compile_closure_rec(SgObject closure, SgObject set)
 		compiler.getSize());
       compiler.dump_code();
 #endif
-      //printf("top %p:%d\n", compiler.getCode(), compiler.getSize());
+      printf("top %p:(%d -> %d)\n", compiler.getCode(), 
+	     SG_CODE_BUILDER(SG_CLOSURE(closure)->code)->size,
+	     compiler.getSize());
       SG_CLOSURE(closure)->state = SG_NATIVE;
       return TRUE;
     }
