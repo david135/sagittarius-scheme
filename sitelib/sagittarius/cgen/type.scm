@@ -104,6 +104,7 @@
      (<binary-port> "SgPort*" "binary port" "SG_BINARY_PORTP" "SG_PORT")
      (<textual-port> "SgPort*" "textual port" "SG_TEXTUAL_PORTP" "SG_PORT")
      (<procedure> "SgProcedure*" "procedure" "SG_PROCEDUREP" "SG_PROCEDURE")
+     (<closure> "SgClosure*" "closure" "SG_CLOSUREP" "SG_CLOSURE")
      (<hashtable> "SgHashTable*" "hashtable" "SG_HASHTABLE_P" "SG_HASHTABLE")
      (<tree-map> "SgTreeMap*" "tree-map" "SG_TREEMAP_P" "SG_TREEMAP")
      ;; regex

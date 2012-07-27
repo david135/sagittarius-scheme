@@ -31,96 +31,7 @@
  */
 /* This file is included at vm.c */
 
-#undef ADJUST_ARGUMENT_FRAME
-#if !defined(APPLY_CALL)
-#define ADJUST_ARGUMENT_FRAME(proc, argc)				\
-  do {									\
-    int required = SG_PROCEDURE_REQUIRED(proc);				\
-    int optargs =  SG_PROCEDURE_OPTIONAL(proc);				\
-    if (optargs) {							\
-      SgObject p = SG_NIL, a;						\
-      if (argc < required) {						\
-	Sg_WrongNumberOfArgumentsViolation(SG_PROCEDURE_NAME(AC(vm)),	\
-					   required, argc, SG_UNDEF);	\
-      }									\
-      /* fold rest args */						\
-      while (argc > required+optargs-1) {				\
-	a = POP(SP(vm));						\
-	p = Sg_Cons(a, p);						\
-	argc--;								\
-      }									\
-      PUSH(SP(vm), p);							\
-      argc++;								\
-    } else {								\
-      if (argc != required) {						\
-	Sg_WrongNumberOfArgumentsViolation(SG_PROCEDURE_NAME(AC(vm)),	\
-					   required, argc, SG_UNDEF);	\
-      }									\
-    }									\
-    FP(vm) = SP(vm) - argc;						\
-  } while (0)
-#else  /* APPLY_CALL */
-#define ADJUST_ARGUMENT_FRAME(proc, argc)				\
-  do {									\
-    int required = SG_PROCEDURE_REQUIRED(proc);				\
-    int optargs =  SG_PROCEDURE_OPTIONAL(proc);				\
-    int rargc = Sg_Length(INDEX(SP(vm), 0));				\
-    SgObject p, a;							\
-    if (optargs) {							\
-      int __i, req_opt, oargc;						\
-      if ((rargc+argc-1) < required) {					\
-      	Sg_WrongNumberOfArgumentsViolation(SG_PROCEDURE_NAME(AC(vm)),	\
-					   rargc+argc-1, argc, SG_UNDEF); \
-      }									\
-      req_opt = required+optargs;					\
-      p = POP(SP(vm)); /* tail of arglist */				\
-      oargc = argc--;							\
-      if (oargc > req_opt) {						\
-	/* fold rest args */						\
-	p = Sg_CopyList(p);						\
-	for (__i = oargc; __i > req_opt; __i--) {			\
-	  a = POP(SP(vm));						\
-	  argc--;							\
-	  p = Sg_Cons(a, p);						\
-	}								\
-	PUSH(SP(vm), p);						\
-	argc++;								\
-	/* argc -= oargc - __i -1; */					\
-      } else {								\
-	/* unfold rest arg */						\
-	CHECK_STACK(req_opt - oargc, vm);				\
-	for (__i = oargc; SG_PAIRP(p) && __i < req_opt; __i++) {	\
-	  PUSH(SP(vm), SG_CAR(p));					\
-	  argc++;							\
-	  p = SG_CDR(p);						\
-	}								\
-	p = Sg_CopyList(p);						\
-	PUSH(SP(vm), p);						\
-	argc++;								\
-	/* argc += __i - oargc +1; */					\
-      }									\
-    } else {								\
-      /* not optargs */							\
-      if ((rargc+argc-1) != required) {					\
-	Sg_WrongNumberOfArgumentsViolation(SG_PROCEDURE_NAME(AC(vm)),	\
-					   required, rargc, SG_UNDEF);	\
-      }									\
-      p = POP(SP(vm));							\
-      argc--;								\
-      if (rargc > 0) {							\
-	CHECK_STACK(rargc, vm);						\
-	/* argc +=rargc; */						\
-	do {								\
-	  PUSH(SP(vm), SG_CAR(p));					\
-	  argc++;							\
-	  p = SG_CDR(p);						\
-	} while (--rargc > 0);						\
-      }									\
-    }									\
-    FP(vm) = SP(vm) - argc;						\
-  } while (0)
-#endif	/* APPLY_CALL */
-
+#include "vm-args-adjust.c"
 #undef GENERIC_ENTRY
 #undef APP
 #undef DO_METHOD_CALL
@@ -173,14 +84,26 @@
 
   if (proctype == SG_PROC_CLOSURE) {
     SgClosure * cl = SG_CLOSURE(AC(vm));
-    SgCodeBuilder *cb = SG_CODE_BUILDER(cl->code);
-    CHECK_STACK(cb->maxStack, vm);
-    ADJUST_ARGUMENT_FRAME(cl, argc);
-    CL(vm) = AC(vm);
-    PC(vm) = cb->code;
-    AC(vm) = SG_UNDEF;		/* make default return value #<unspecified> */
-    SG_PROF_COUNT_CALL(vm, CL(vm));
-    NEXT;
+#ifdef USE_JIT
+    if (cl->state == SG_NATIVE) {
+      ADJUST_ARGUMENT_FRAME(cl, argc);
+      SG_PROF_COUNT_CALL(vm, cl);
+      CL(vm) = cl;
+      AC(vm) = SG_SUBR_FUNC(cl->native)(FP(vm), argc, vm);
+      NEXT;
+    } else {
+#endif
+      SgCodeBuilder *cb = SG_CODE_BUILDER(cl->code);
+      CHECK_STACK(cb->maxStack, vm);
+      ADJUST_ARGUMENT_FRAME(cl, argc);
+      CL(vm) = AC(vm);
+      PC(vm) = cb->code;
+      AC(vm) = SG_UNDEF; /* make default return value #<unspecified> */
+      SG_PROF_COUNT_CALL(vm, CL(vm));
+      NEXT;
+#ifdef USE_JIT
+    }
+#endif
   }
 
   if (proctype == SG_PROC_GENERIC) {

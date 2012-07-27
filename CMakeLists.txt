@@ -68,6 +68,7 @@ CHECK_FUNCTION_EXISTS(gettimeofday HAVE_GETTIMEOFDAY)
 OPTION(USE_BOEHM_GC "use boehm gc" ON)
 OPTION(DEBUG_VERSION "debug version" ON)
 OPTION(SAGITTARIUS_PROFILE "profiler" ON)
+OPTION(USE_JIT "using jit" ON)
 
 # platform name
 STRING(TOLOWER ${CMAKE_SYSTEM_NAME} SAGITTARIUS_PLATFORM)
@@ -202,6 +203,12 @@ ELSEIF(WATCOM)
   SET(CMAKE_CXX_FLAGS "-ox -xs ${CMAKE_CXX_FLAGS}")
 ENDIF()
 
+IF (USE_JIT AND CMAKE_COMPILER_IS_GNUCXX)
+  # for now we are using xbyak as jit compiler and it requires this
+  # compile option for g++
+  SET(CMAKE_CXX_FLAGS "-fno-operator-names ${CMAKE_CXX_FLAGS}")
+ENDIF()
+
 IF(USE_BOEHM_GC)
   #SET(GC_DEPENDS_TARGET false)
   CHECK_INCLUDE_FILE(gc.h HAVE_GC_H)
@@ -276,7 +283,7 @@ ELSEIF(CYGWIN)
   # compiler must be gcc
   #ADD_DEFINITIONS(-fwide-exec-charset=ucs-4le)
   SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fwide-exec-charset=ucs-4le")
-  SET(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -fwide-exec-charset=ucs-4le")
+  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fwide-exec-charset=ucs-4le")
 ELSE()
 ENDIF()
 
