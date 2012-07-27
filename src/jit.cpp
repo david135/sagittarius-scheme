@@ -29,13 +29,20 @@
  *
  *  $Id: $
  */
+// debugging flags
+//#define JIT_DEBUG
+//#define JIT_DUMP
+
+#include <math.h>
 #include <string>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include "xbyak/xbyak.h"
 #define LIBSAGITTARIUS_BODY
 #include "sagittarius/closure.h"
 #include "sagittarius/code.h"
+#include "sagittarius/compare.h"
 #include "sagittarius/error.h"
 #include "sagittarius/core.h"
 #include "sagittarius/gloc.h"
@@ -48,16 +55,17 @@
 #include "sagittarius/string.h"
 #include "sagittarius/vm.h"
 
-//#define JIT_DEBUG
-//#define JIT_DUMP
+static int jit_compile_closure_rec(SgObject closure, SgObject set);
+
 typedef std::map<SgWord*, std::string> Labels;
 struct WalkContext
 {
   bool noExternalCall;		// not to access given VM.
   Labels srcLabels;
   Labels dstLabels;
-  WalkContext() 
-    : noExternalCall(true)
+  SgObject seen;		// list of closure
+  WalkContext(SgObject sets) 
+    : noExternalCall(true), seen(sets)
   {}
 };
 
@@ -109,7 +117,7 @@ void DefaultWalker::walk(SgClosure *closure, SgCodeBuilder *cb,
       // in case we can't compile internal closure, try to avoid the
       // inconsistency.
       SgObject ncb = SG_OBJ(code[i+1]);
-      WalkContext nctx;
+      WalkContext nctx(ctx.seen);
       // the real walking is done in runtime. so we can simply ignore the
       // result, just check if it has an error.
       walk(closure, SG_CODE_BUILDER(ncb), nctx);
@@ -140,7 +148,7 @@ void DefaultWalker::walk(SgClosure *closure, SgCodeBuilder *cb,
       if (!SG_EQ(closure, p) && SG_CLOSUREP(p) && 
 	  SG_CLOSURE(p)->state == SG_NON_NATIVE) {
 	// to make it easier, compile it here
-	int r = Sg_JitCompileClosure(p);
+	int r = jit_compile_closure_rec(p, Sg_Cons(closure, ctx.seen));
 	if (!r) {
 	  throw std::runtime_error("nested closure jit compile failed.");
 	}
@@ -185,6 +193,13 @@ static void* convert_proc(SgObject proc)
   if (SG_SUBRP(proc)) {
     return (void*)SG_SUBR_FUNC(proc);
   } else if (SG_CLOSUREP(proc)) {
+    // higher order function can not be specified during walking path.
+    // so this path actually exists, let's compile it.
+    if (SG_CLOSURE(proc)->state == SG_NON_NATIVE) {
+      if (!Sg_JitCompileClosure(proc)) {
+	Sg_Error(UC("jit compile failed %S"), proc);
+      }
+    }
     return (void*)SG_SUBR_FUNC(SG_CLOSURE(proc)->native);
   } else {
     Sg_Error(UC("not supported yet, %S"), proc);
@@ -218,6 +233,7 @@ static SgObject maybe_pop_cont(SgObject r, SgVM *vm, int pop)
   return r;
 }
 
+#if 0
 struct JitAllocator : public Xbyak::Allocator
 {
   virtual uint8_t * alloc(size_t size)
@@ -229,6 +245,8 @@ struct JitAllocator : public Xbyak::Allocator
 };
 
 static JitAllocator jit_allocator;
+#endif
+static Xbyak::Allocator jit_allocator;
 
 class JitCompiler : public Xbyak::CodeGenerator
 {
@@ -257,10 +275,19 @@ private:
 #endif
 
 public:
-  JitCompiler(SgClosure * const closure, Walker & walker)
-    : CodeGenerator(1024, Xbyak::AutoGrow, &jit_allocator)
+  JitCompiler(SgClosure * const closure, Walker & walker, SgObject sets)
+    : CodeGenerator(((SG_CODE_BUILDER(closure->code)->size > 512)
+		     ? ceil(SG_CODE_BUILDER(closure->code)->size / 512)
+		     : 1) *
+#ifdef JIT_DEBUG
+		    Xbyak::DEFAULT_MAX_CODE_SIZE * 4,
+#else
+		    Xbyak::DEFAULT_MAX_CODE_SIZE,
+#endif
+		    0, &jit_allocator)
     , closure_(closure)
     , walker_(walker)
+    , context_(sets)
     , label_(0)
 #ifdef XBYAK64
     , vm(rbx)
@@ -528,6 +555,13 @@ private:
     mov(d, ptr[vm + offsetof(SgVM, sp)]);
     mov(d, ptr[d - (index + 1) * sizeof(void*)]);
   }
+  void vm_stack_set(const Xbyak::Reg32e &v, const Xbyak::Reg32e &vm,
+		    int index,
+		    const Xbyak::Reg32e &tmp)
+  {
+    mov(tmp, ptr[vm + offsetof(SgVM, sp)]);
+    mov(ptr[tmp - (index + 1) * sizeof(void*)], v);
+  }
   // only for inialisation
   void set_args(const Xbyak::Operand &d)
   {
@@ -590,29 +624,52 @@ private:
 
   // Debugging methods 
 #ifdef JIT_DEBUG
-  static void trace_enter_leave(InsnInfo *info, int enter_p)
+  static void trace_enter_leave(InsnInfo *info, SgWord code)
   {
     SgVM *vm = Sg_VM();
-    for (int i = 0; i < nest_level*2; i++) {
-      fputc(' ', stderr);
+    if (vm->state != COMPILING) {
+      char buf[50] = {0};
+      if (code >= 0 && info->instValues != 0) {
+	int val1, val2;
+	switch (info->instValues) {
+	case 1:
+	  INSN_VAL1(val1, code);
+	  snprintf(buf, 50, "%s(%d)", info->name, val1);
+	  break;
+	case 2:
+	  INSN_VAL2(val1, val2, code);
+	  snprintf(buf, 50, "%s(%d %d)", info->name, val1, val2);
+	  break;
+	}
+      } else {
+	snprintf(buf, 50, "%s", info->name);
+      }
+      for (int i = 0; i < nest_level*2; i++) {
+	fputc(' ', stderr);
+      }
+      fprintf(stderr, "%d: %s %s(sp:%p fp:%p ac:%p *sp:%p)\n",
+	      nest_level, (code < 0) ? "enter" : "leave",
+	      buf,
+	      vm->sp, vm->fp, vm->ac, *(vm->sp-1));
     }
-    fprintf(stderr, "%d: %s %s(sp:%p fp:%p ac:%p *sp:%p)\n",
-	    nest_level, (enter_p) ? "enter" : "leave",
-	    info->name,
-	    vm->sp, vm->fp, vm->ac, *(vm->sp-1));
   }
   static void trace_impl(const char *msg)
   {
     SgVM *vm = Sg_VM();
-    for (int i = 0; i < nest_level*2; i++) {
-      fputc(' ', stderr);
+    if (vm->state != COMPILING) {
+      for (int i = 0; i < nest_level*2; i++) {
+	fputc(' ', stderr);
+      }
+      fprintf(stderr, "%d: %s(sp:%p fp:%p ac:%p *sp:%p)\n",
+	      nest_level, msg, vm->sp, vm->fp, vm->ac, *(vm->sp-1));
     }
-    fprintf(stderr, "%d: %s(sp:%p fp:%p ac:%p *sp:%p)\n",
-	    nest_level, msg, vm->sp, vm->fp, vm->ac, *(vm->sp-1));
   }
   static void dump_eax_impl(void *eax)
   {
-    fprintf(stderr, "reg: %p\n", eax);
+    SgVM *vm = Sg_VM();
+    if (vm->state != COMPILING) {
+      fprintf(stderr, "reg: %p\n", eax);
+    }
   }
   static void inc_nest_impl(int off)
   {
@@ -621,11 +678,13 @@ private:
   static void dump_args_impl(void **args, int argc)
   {
     SgVM *vm = Sg_VM();
-    fprintf(stderr, "sp: %p, fp: %p, args %d:\n", vm->sp, vm->fp, argc);
-    for (int i = 0; i < argc; i++) {
-      fprintf(stderr, " %d: %p\n", i, args[i]);
+    if (vm->state != COMPILING) {
+      fprintf(stderr, "sp: %p, fp: %p, args %d:\n", vm->sp, vm->fp, argc);
+      for (int i = 0; i < argc; i++) {
+	fprintf(stderr, " %d: %p\n", i, args[i]);
+      }
+      fprintf(stderr, "\n");
     }
-    fprintf(stderr, "\n");
   }
 
   void dump_args()
@@ -652,12 +711,12 @@ private:
 #endif
   }
 
-  void trace_enter(InsnInfo *info)
+  void trace_enter(SgWord code, InsnInfo *info)
   {
 #ifdef JIT_DEBUG
     push(ac);
     {
-      push((uintptr_t)TRUE);
+      push((uintptr_t)code);
       push((uintptr_t)info);
       call((void*)JitCompiler::trace_enter_leave);
       pop(ac);
@@ -672,7 +731,7 @@ private:
 #ifdef JIT_DEBUG
     push(ac);
     {
-      push((uintptr_t)FALSE);
+      push((uintptr_t)-1);
       push((uintptr_t)info);
       call((void*)JitCompiler::trace_enter_leave);
       pop(ac);
@@ -736,7 +795,6 @@ private:
   }
   void push_insn()
   {
-    dump_eax();
     vm_sp(edx, vm); // edx = vm->sp
     push_insn(edx, ac);
   }
@@ -788,6 +846,16 @@ private:
     add(csp, 1*sizeof(void*));
   }
 
+  void cons_insn()
+  {
+    push(ac);
+    vm_stack_ref(edx, vm, 0);
+    push(edx);
+    call((void*)Sg_Cons);
+    add(csp, 2 * sizeof(void*));
+    vm_dec_sp(vm);
+  }
+
   void pairp_insn()
   {
     // TODO 64 bit
@@ -805,16 +873,21 @@ private:
     L(l.c_str());
   }
 };
+#define check_bound_object(o, dst)					\
+  do {									\
+    dst = Sg_FindBinding(SG_IDENTIFIER_LIBRARY(o),			\
+		       SG_IDENTIFIER_NAME(o),				\
+		       SG_UNBOUND);					\
+    if (SG_UNBOUNDP(o)) {						\
+      throw std::runtime_error("unbound variable object is refered.");	\
+    }									\
+  } while(0)
+
 #define retrive_next_gloc(o,d)						\
   do {									\
     o = SG_OBJ(d);							\
     if (SG_IDENTIFIERP(o)) {						\
-      o = Sg_FindBinding(SG_IDENTIFIER_LIBRARY(o),			\
-			 SG_IDENTIFIER_NAME(o),				\
-			 SG_UNBOUND);					\
-      if (SG_UNBOUNDP(o)) {						\
-	throw std::runtime_error("unbound variable object is called.");	\
-      }									\
+      check_bound_object(o, o);						\
     }									\
     o = SG_GLOC_GET(SG_GLOC(o));					\
   } while (0)
@@ -891,8 +964,9 @@ int JitCompiler::compile_rec(SgWord *code, int size)
     }
     // if it has some result. cf) some instruction does not have
     // result such as PUSH.
-    trace_enter(info);
+    trace_enter(code[i], info);
     switch (insn) {
+    case NOP: nop();
     case FRAME: 
       // to make vm's stack compatible...
       push((uintptr_t)SG_INT_VALUE(code[i+1]));
@@ -919,6 +993,12 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       vm_sp(edx, vm);
       push_insn(edx, ecx);
       break;
+    case GREF: {
+      SgObject o;
+      retrive_next_gloc(o, SG_OBJ(code[i+1]));
+      mov(ac, (uintptr_t)o);
+      break;
+    }
     case GREF_PUSH: {
       SgObject o;
       retrive_next_gloc(o, SG_OBJ(code[i+1]));
@@ -939,6 +1019,11 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       push_insn(edx, ecx);
       break;
     }
+    case CONST_RET: {
+      mov(ac, (uintptr_t)code[i+1]);
+      epilogue();
+      return i+2;
+    }
     case CONSTI: consti_insn(code, i); break;
     case CONSTI_PUSH:
       // the same as LREF_PUSH;
@@ -947,6 +1032,68 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       vm_sp(edx, vm);
       push_insn(edx, ecx);
       break;
+    case BOX:
+      INSN_VAL1(val1, code[i]);
+      // save ac just in case
+      push(ac);
+      {
+	vm_stack_ref(edx, vm, val1);
+	push(edx);
+	call((void*)::make_box);
+	add(csp, 1 * sizeof(void*));
+	vm_stack_set(ac, vm, val1, edx);
+      }
+      pop(ac);
+      break;
+    case UNBOX:
+      mov(ac, ptr[ac + offsetof(SgBox, value)]);
+      break;
+      // SET related
+    case LSET:
+      lref_insn(code[i], ecx);
+      goto lfset_entry;
+    case FSET:
+      fref_insn(code[i], ecx);
+    lfset_entry:
+      mov(ptr[ecx + offsetof(SgBox, value)], ac);
+      mov(ac, (uintptr_t)SG_UNDEF);
+      break;
+    case GSET: {
+      SgObject o = SG_OBJ(code[i+1]);
+      if (SG_GLOCP(o)) {
+	mov(edx, (uintptr_t)o);
+	mov(ptr[edx + offsetof(SgGloc, value)], ac);
+      } else {
+	SgObject oldval;
+	check_bound_object(o, oldval);
+	push((uintptr_t)SG_IDENTIFIER_LIBRARY(o));
+	push((uintptr_t)SG_IDENTIFIER_NAME(o));
+	push(ac);
+	call((void*)Sg_MakeBinding);
+	add(csp, 3 * sizeof(void*));
+	mov(ptr[code+1], ac);
+      }
+      mov(ac, (uintptr_t)SG_UNDEF);
+      break;
+    }
+    case NOT: {
+      cmp(ac, (uintptr_t)SG_FALSE);
+      std::string n = gen_label();
+      std::string e = gen_label();
+      je(n.c_str());
+      mov(ac, (uintptr_t)SG_FALSE);
+      jmp(e.c_str());
+      L(n.c_str());
+      mov(ac, (uintptr_t)SG_TRUE);
+      L(e.c_str());
+      break;
+    }
+    case BNEQ:
+      bnproc = (void*)Sg_EqP;	// FIXME
+      goto bnnum_entry;
+    case BNEQV:
+      bnproc = (void*)Sg_EqvP;	// FIXME
+      goto bnnum_entry;
     case BNNUME:
       bnproc = (void *)Sg_NumEq;
       goto bnnum_entry;
@@ -1065,20 +1212,8 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       break;
     }
     case GREF_TAIL_CALL: {
-      INSN_VAL1(val1, code[i]);
       retrive_next_gloc(gproc, SG_OBJ(code[i+1]));
-      // manage vm->sp part
-      vm_sp(edx, vm);
-      push(edx);
-      push((uintptr_t)val1);
-      vm_fp(ecx, vm);
-      push(ecx);
-      call((void*)::shift_args);
-      add(csp, 3 * sizeof(void*));
-      // vm->sp = ac
-      mov(ptr[vm + offsetof(SgVM, sp)], ac);
-      tail = true;
-      goto call_entry;
+      goto tail_call_entry;
     }
     case GREF_CALL: 
       retrive_next_gloc(gproc, SG_OBJ(code[i+1]));
@@ -1096,6 +1231,29 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       }
       break;
     }
+    case TAIL_CALL:
+    tail_call_entry:
+      INSN_VAL1(val1, code[i]);
+      // if it's not GREF_TAIL_CALL, then we need to save ac.
+      if (SG_FALSEP(gproc)) {
+	push(ac);
+      }
+      // manage vm->sp part
+      vm_sp(edx, vm);
+      push(edx);
+      push((uintptr_t)val1);
+      vm_fp(ecx, vm);
+      push(ecx);
+      call((void*)::shift_args);
+      add(csp, 3 * sizeof(void*));
+      // vm->sp = ac
+      mov(ptr[vm + offsetof(SgVM, sp)], ac);
+      if (SG_FALSEP(gproc)) {
+	pop(ac);
+      }
+      tail = true;
+      goto call_entry;
+      break;
     case APPLY: {
       INSN_VAL2(val1, val2, code[i]);
       push(ac);
@@ -1190,9 +1348,20 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       cdr_insn();
       cdr_insn();
       break;
+    case CONS:
+      cons_insn();
+      break;
+    case CONS_PUSH:
+      cons_insn();
+      push_insn();
+      break;
     case LREF_CAR:
       lref_insn(code[i]);
       car_insn();
+      break;
+    case LREF_CDR:
+      lref_insn(code[i]);
+      cdr_insn();
       break;
     case LREF_CAR_PUSH:
       lref_insn(code[i]);
@@ -1203,6 +1372,14 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       lref_insn(code[i]);
       cdr_insn();
       push_insn();
+      break;
+    case FREF_CAR:
+      fref_insn(code[i]);
+      car_insn();
+      break;
+    case FREF_CDR:
+      fref_insn(code[i]);
+      cdr_insn();
       break;
     default:
       throw std::runtime_error(info->name);
@@ -1246,16 +1423,18 @@ bool JitCompiler::compile()
 #endif
 static void jit_finelizer(SgObject z, void *data)
 {
+  //puts("gong!");
   Xbyak::AlignedFree((void *)SG_SUBR_FUNC(z));
 }
 
-int Sg_JitCompileClosure(SgObject closure)
+static int jit_compile_closure_rec(SgObject closure, SgObject set)
 {
-  DefaultWalker walker;
-  JitCompiler compiler(SG_CLOSURE(closure), walker);
-
-  if (compiler.compile()) {
-    compiler.ready();
+  // check if the target closure is already in compiling
+  if (!SG_FALSEP(Sg_Memq(closure, set))) return TRUE;
+  try {
+    DefaultWalker walker;
+    JitCompiler compiler(SG_CLOSURE(closure), walker, set);
+    // set dummy subr so that we can decieve cross calling.
     SgObject subr
       = Sg_MakeSubr(reinterpret_cast<SgSubrProc *>(compiler.getCode()),
 		    NULL,
@@ -1263,18 +1442,32 @@ int Sg_JitCompileClosure(SgObject closure)
 		    SG_PROCEDURE_OPTIONAL(closure),
 		    SG_PROCEDURE_NAME(closure));
     Sg_RegisterFinalizer(subr, jit_finelizer, NULL);
-
-#ifdef JIT_DUMP
-    Sg_Printf(SG_PORT(Sg_StandardErrorPort()), UC("%S:%d\n"), closure,
-	      compiler.getSize());
-    compiler.dump_code();
-#endif
-
     SG_CLOSURE(closure)->native = subr;
-    SG_CLOSURE(closure)->state = SG_NATIVE;
-    return TRUE;
+    if (compiler.compile()) {
+#ifdef JIT_DUMP
+      Sg_Printf(SG_PORT(Sg_StandardErrorPort()), UC("%S:%d\n"), closure,
+		compiler.getSize());
+      compiler.dump_code();
+#endif
+      //printf("top %p:%d\n", compiler.getCode(), compiler.getSize());
+      SG_CLOSURE(closure)->state = SG_NATIVE;
+      return TRUE;
+    }
+    SG_CLOSURE(closure)->native = NULL;
+    SG_CLOSURE(closure)->state = SG_INVALID_FOR_NATIVE;
+    return FALSE;
+  } catch (Xbyak::Error e) {
+    const char *m = Xbyak::ConvertErrorToString(e);
+    if (m) {
+      fprintf(stderr, "%s\n", m);
+    }
+    return FALSE;
   }
-  SG_CLOSURE(closure)->state = SG_INVALID_FOR_NATIVE;
-  return FALSE;
+}
+
+
+int Sg_JitCompileClosure(SgObject closure)
+{
+  return jit_compile_closure_rec(closure, SG_NIL);
 }
 

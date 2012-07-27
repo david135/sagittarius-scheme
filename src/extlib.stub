@@ -711,9 +711,9 @@
     (result (Sg_ProfilerRawResult)))
 
   (define-c-proc disasm (c::<procedure>) ::<top>
-    (if (SG_CLOSUREP c)
-	(Sg_VMDumpCode (-> (SG_CLOSURE c) code))
-	(Sg_Printf (-> (Sg_VM) logPort) (UC "subr %S") (SG_PROCEDURE_NAME c)))
+    (Sg_Printf (-> (Sg_VM) logPort) (UC ";; disasm %S\n") c)
+    (when (SG_CLOSUREP c)
+      (Sg_VMDumpCode (-> (SG_CLOSURE c) code)))
     (result SG_UNDEF))
 
   ;; keyword
