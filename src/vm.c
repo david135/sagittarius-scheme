@@ -862,19 +862,44 @@ SgObject Sg_VMApply4(SgObject proc, SgObject arg0, SgObject arg1, SgObject arg2,
   fp when a frame was made and size. Sg_VMPushCC sets fp when it's called but,
   make_call_frame does not.
  */
+static SgCContinuationProc dynamic_wind_dummy_cc;
 static SgCContinuationProc dynamic_wind_before_cc;
 static SgCContinuationProc dynamic_wind_body_cc;
 static SgCContinuationProc dynamic_wind_after_cc;
 
+/* To make dynamic-wind work in JIT */
+static SgObject dyn_dummy(SgObject *args, int argc, void *data)
+{
+  return SG_UNDEF;
+}
+
+SG_DEFINE_SUBR(dyn_dummy_stub, 0, 0, dyn_dummy, SG_FALSE, NULL);
+
 SgObject Sg_VMDynamicWind(SgObject before, SgObject thunk, SgObject after)
 {
   void *data[3];
-  /* TODO should we check type? */
   data[0] = (void*)before;
   data[1] = (void*)thunk;
   data[2] = (void*)after;
   
-  Sg_VMPushCC(dynamic_wind_before_cc, data, 3);
+  /* Sg_VMPushCC(dynamic_wind_before_cc, data, 3); */
+  /* return Sg_VMApply0(before); */
+  Sg_VMPushCC(dynamic_wind_dummy_cc, data, 3);
+  return Sg_VMApply0(&dyn_dummy_stub);
+}
+
+static SgObject dynamic_wind_dummy_cc(SgObject result, void **data)
+{
+  SgObject before = SG_OBJ(data[0]);
+  SgObject thunk  = SG_OBJ(data[1]);
+  SgObject after  = SG_OBJ(data[2]);
+  void *d[3];
+  /* TODO should we check type? */
+  d[0] = (void*)before;
+  d[1] = (void*)thunk;
+  d[2] = (void*)after;
+
+  Sg_VMPushCC(dynamic_wind_before_cc, d, 3);
   return Sg_VMApply0(before);
 }
 
