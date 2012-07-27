@@ -111,3 +111,10 @@ static inline SgObject* shift_args(SgObject *fp, int m, SgObject *sp)
   return f;
 }
 
+static inline SgObject make_box(SgObject value)
+{
+  SgBox *b = SG_NEW(SgBox);
+  SG_SET_CLASS(b, SG_CLASS_BOX);
+  b->value = value;
+  return SG_OBJ(b);
+}

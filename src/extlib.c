@@ -2744,9 +2744,11 @@ static SgObject extlib_disasm(SgObject *SG_FP, int SG_ARGC, void *data_)
 SgObject SG_RESULT = (SgObject)NULL;
 
 #line 714 "./extlib.stub"
-if (SG_CLOSUREP(c)){
-Sg_VMDumpCode((SG_CLOSURE(c))->code);} else {
-Sg_Printf((Sg_VM())->logPort,UC("subr %S"),SG_PROCEDURE_NAME(c));}
+Sg_Printf((Sg_VM())->logPort,UC(";; disasm %S\n"),c);
+
+#line 715 "./extlib.stub"
+if (SG_CLOSUREP(c)){{
+Sg_VMDumpCode((SG_CLOSURE(c))->code);}}
 
 #line 717 "./extlib.stub"
 SG_RESULT=(SG_UNDEF);

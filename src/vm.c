@@ -77,22 +77,14 @@ static pthread_key_t the_vm_key;
 static SgSubr default_exception_handler_rec;
 #define DEFAULT_EXCEPTION_HANDLER SG_OBJ(&default_exception_handler_rec)
 
-/* common macro and static functions for both vm and jit */
-#include "vm-common.c"
-
 static void box_print(SgObject obj, SgPort *port, SgWriteContext *ctx)
 {
   Sg_Printf(port, UC("#<box 0x%x>"), obj);
 }
 SG_DEFINE_BUILTIN_CLASS_SIMPLE(Sg_BoxClass, box_print);
 
-static inline SgObject make_box(SgObject value)
-{
-  SgBox *b = SG_NEW(SgBox);
-  SG_SET_CLASS(b, SG_CLASS_BOX);
-  b->value = value;
-  return SG_OBJ(b);
-}
+/* common macro and static functions for both vm and jit */
+#include "vm-common.c"
 
 static SgObject evaluate_safe(SgObject program, SgWord *compiledCode);
 static SgObject run_loop();
