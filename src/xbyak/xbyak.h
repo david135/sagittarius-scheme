@@ -605,7 +605,9 @@ namespace Xbyak {
 #if defined(_WIN32)
       DWORD oldProtect;
       return VirtualProtect(const_cast<void*>(addr), size, canExec ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE, &oldProtect) != 0;
-#elif defined(__GNUC__)
+      // For Sagittarius, on cygwin we don't have to do this and this somehow
+      // fails sometime.
+#elif defined(__GNUC__) && !defined(__CYGWIN__)
       size_t pageSize = sysconf(_SC_PAGESIZE);
       size_t iaddr = reinterpret_cast<size_t>(addr);
       size_t roundAddr = iaddr & ~(pageSize - static_cast<size_t>(1));
