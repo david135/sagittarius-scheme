@@ -96,6 +96,20 @@ private:
   void walk(SgClosure *closure, SgCodeBuilder *cb, WalkContext &ctx);
 };
 
+#define check_bound_gloc(o, d)					\
+  do {								\
+    d = o;							\
+    if (SG_IDENTIFIERP(o)) {					\
+      d = Sg_FindBinding(SG_IDENTIFIER_LIBRARY(o),		\
+			 SG_IDENTIFIER_NAME(o),			\
+			 SG_UNBOUND);				\
+      if (SG_UNBOUNDP(d)) {					\
+	throw std::runtime_error("unbound variable appeard.");	\
+      }								\
+    }								\
+  } while (0);
+
+
 void DefaultWalker::walk(SgClosure *closure, SgCodeBuilder *cb,
 			 WalkContext &ctx)
 {
@@ -103,6 +117,8 @@ void DefaultWalker::walk(SgClosure *closure, SgCodeBuilder *cb,
   for (int i = 0; i < cb->size;) {
     Instruction insn = static_cast<Instruction>(INSN(code[i]));
     InsnInfo *info = Sg_LookupInsnName(insn);
+    bool allow_only_gloc = false;
+    bool check_only_gloc = false;
     switch (INSN(code[i])) {
     case JUMP:{
       int n = SG_INT_VALUE(code[i+1]);
@@ -124,19 +140,24 @@ void DefaultWalker::walk(SgClosure *closure, SgCodeBuilder *cb,
       break;
     }
       // for now
+    case GSET:
+      allow_only_gloc = true;
+    case GREF:
+    case GREF_PUSH:
+      check_only_gloc = true;
     case GREF_CALL:
     case GREF_TAIL_CALL: {
       SgObject p = SG_OBJ(code[i+1]);
-      if (SG_IDENTIFIERP(p)) {
-	// should not be here but just in case.
-	p = Sg_FindBinding(SG_IDENTIFIER_LIBRARY(p),
-			   SG_IDENTIFIER_NAME(p),
-			   SG_UNBOUND);
-	if (SG_UNBOUNDP(p)) {
-	  // the closure must throw unbound error, so walk failed.
-	  throw std::runtime_error("unbound variable.");
-	}
+      if (allow_only_gloc && SG_IDENTIFIERP(p)) {
+	// FIXME
+	// resolving identifier in runtime with GSET instruction is really
+	// painful, so for now we don't allow it.
+	throw std::runtime_error("given closure contains setting global "
+				 "variable. it must be run at lease once.");
       }
+      check_bound_gloc(p, p);
+      if (check_only_gloc) break;
+
       p = SG_GLOC_GET(SG_GLOC(p));
       if (!SG_PROCEDURE(p)) {
 	throw std::runtime_error("call instruction is calling non procedure object.");
@@ -932,23 +953,12 @@ private:
   }
   
 };
-#define check_bound_object(o, dst)					\
-  do {									\
-    dst = Sg_FindBinding(SG_IDENTIFIER_LIBRARY(o),			\
-		       SG_IDENTIFIER_NAME(o),				\
-		       SG_UNBOUND);					\
-    if (SG_UNBOUNDP(o)) {						\
-      throw std::runtime_error("unbound variable object is refered.");	\
-    }									\
-  } while(0)
 
-#define retrive_next_gloc(o,d)						\
-  do {									\
-    o = SG_OBJ(d);							\
-    if (SG_IDENTIFIERP(o)) {						\
-      check_bound_object(o, o);						\
-    }									\
-    o = SG_GLOC_GET(SG_GLOC(o));					\
+
+#define retrive_next_gloc(o,d)			\
+  do {						\
+    check_bound_gloc(SG_OBJ(d), o);		\
+    o = SG_GLOC_GET(SG_GLOC(o));		\
   } while (0)
   
 
@@ -1119,9 +1129,7 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       break;
     case GSET: {
       SgObject o = SG_OBJ(code[i+1]);
-      if (!SG_GLOCP(o)) {
-	check_bound_object(o, o);
-      }
+      ASSERT(SG_GLOCP(o));
       mov(edx, (uintptr_t)o);
       mov(ptr[edx + offsetof(SgGloc, value)], ac);
       mov(ac, (uintptr_t)SG_UNDEF);
@@ -1219,12 +1227,12 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       push(edx);
       push((uintptr_t)cb);
       call((void*)Sg_MakeClosure);
-      // TODO we can avoid to emit some instruction here, if we reuse stack.
       add(csp, 2 * sizeof(void*));
-      push(ac);
-      call((void*)Sg_JitCompileClosure);
-      // we can ignore the result, the closure is destructively compiled.
-      pop(ac);
+      // convert_proc treats the jit compilation. so let's make it delay
+      // until it's needed. (well, usually it's next call...)
+      //push(ac);
+      //call((void*)Sg_JitCompileClosure);
+      //pop(ac);
       break;
     }
     case NEG:
@@ -1402,6 +1410,16 @@ int JitCompiler::compile_rec(SgWord *code, int size)
     case CONS:
       cons_insn();
       break;
+    car_push_entry:
+    case CAR_PUSH:
+      car_insn();
+      push_insn();
+      break;
+    cdr_push_entry:
+    case CDR_PUSH:
+      cdr_insn();
+      push_insn();
+      break;
     case CONS_PUSH:
       cons_insn();
       push_insn();
@@ -1416,13 +1434,11 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       break;
     case LREF_CAR_PUSH:
       lref_insn(code[i]);
-      car_insn();
-      push_insn();
+      goto car_push_entry;
       break;
     case LREF_CDR_PUSH:
       lref_insn(code[i]);
-      cdr_insn();
-      push_insn();
+      goto cdr_push_entry;
       break;
     case FREF_CAR:
       fref_insn(code[i]);
@@ -1432,6 +1448,40 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       fref_insn(code[i]);
       cdr_insn();
       break;
+    case FREF_CAR_PUSH:
+      fref_insn(code[i]);
+      goto car_push_entry;
+      break;
+    case FREF_CDR_PUSH:
+      fref_insn(code[i]);
+      goto cdr_push_entry;
+      break;
+    case GREF_CAR: {
+      SgObject o;
+      retrive_next_gloc(o, code[i+1]);
+      mov(ac, (uintptr_t)Sg_Car(o));
+      break;
+    }
+    case GREF_CDR: {
+      SgObject o;
+      retrive_next_gloc(o, code[i+1]);
+      mov(ac, (uintptr_t)Sg_Cdr(o));
+      break;
+    }
+    case GREF_CAR_PUSH: {
+      SgObject o;
+      retrive_next_gloc(o, code[i+1]);
+      mov(ac, (uintptr_t)Sg_Car(o));
+      push_insn();
+      break;
+    }
+    case GREF_CDR_PUSH: {
+      SgObject o;
+      retrive_next_gloc(o, code[i+1]);
+      mov(ac, (uintptr_t)Sg_Cdr(o));
+      push_insn();
+      break;
+    }
     default:
       throw std::runtime_error(info->name);
     }
