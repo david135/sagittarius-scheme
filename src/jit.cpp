@@ -60,12 +60,13 @@ static int jit_compile_closure_rec(SgObject closure, SgObject set);
 typedef std::map<SgWord*, std::string> Labels;
 struct WalkContext
 {
-  bool noExternalCall;		// not to access given VM.
+  bool   noGSET;
   Labels srcLabels;
   Labels dstLabels;
   SgObject seen;		// list of closure
   WalkContext(SgObject sets) 
-    : noExternalCall(true), seen(sets)
+    : noGSET(false)		// TODO check 
+    , seen(sets)
   {}
 };
 
@@ -141,7 +142,7 @@ void DefaultWalker::walk(SgClosure *closure, SgCodeBuilder *cb,
     }
       // for now
     case GSET:
-      allow_only_gloc = true;
+      //allow_only_gloc = true;
     case GREF:
     case GREF_PUSH:
       check_only_gloc = true;
@@ -177,7 +178,6 @@ void DefaultWalker::walk(SgClosure *closure, SgCodeBuilder *cb,
     }
     case CALL:
     case TAIL_CALL:
-      ctx.noExternalCall = false;
       break;
     default: break;
     }
@@ -248,10 +248,11 @@ static SgObject pop_cont(SgObject r, SgVM *vm)
 
 static SgObject maybe_pop_cont(SgObject r, SgVM *vm, int pop)
 {
+  AC(vm) = r;
   if (pop) {
     POP_CONT();
   }
-  return r;
+  return AC(vm);
 }
 
 struct JitAllocator : public Xbyak::Allocator
@@ -669,7 +670,7 @@ private:
 	fputc(' ', stderr);
       }
       fprintf(stderr, "%d: %s %s(sp:%p fp:%p ac:%p *sp:%p)\n",
-	      nest_level, (code < 0) ? "enter" : "leave",
+	      nest_level, (code >= 0) ? "enter" : "leave",
 	      buf,
 	      vm->sp, vm->fp, vm->ac, *(vm->sp-1));
     }
@@ -951,16 +952,42 @@ private:
     add(csp, 1 * sizeof(void*));
     L(end_label.c_str());
   }
+
+  SgObject gref_insn(SgObject o)
+  {
+    check_bound_gloc(o, o);
+    if (context_.noGSET) {
+      o = SG_GLOC_GET(SG_GLOC(o));
+      mov(ac, (uintptr_t)o);
+      return o;
+    } else {
+      mov(ac, (uintptr_t)o);
+      mov(ac, ptr[ac + offsetof(SgGloc, value)]);
+      return SG_FALSE;
+    }
+  }
   
+  void gref_car_insn(SgObject o)
+  {
+    o = gref_insn(o);
+    if (SG_FALSEP(o)) {
+      car_insn();
+    } else {
+      mov(ac, (uintptr_t)Sg_Car(o));
+      add(csp, 1 * sizeof(void*));
+    }
+  }
+  void gref_cdr_insn(SgObject o)
+  {
+    o = gref_insn(o);
+    if (SG_FALSEP(o)) {
+      cdr_insn();
+    } else {
+      mov(ac, (uintptr_t)Sg_Cdr(o));
+      add(csp, 1 * sizeof(void*));
+    }
+  }
 };
-
-
-#define retrive_next_gloc(o,d)			\
-  do {						\
-    check_bound_gloc(SG_OBJ(d), o);		\
-    o = SG_GLOC_GET(SG_GLOC(o));		\
-  } while (0)
-  
 
 static SgObject list_fun(int n, SgObject ac, SgVM *vm)
 {
@@ -1062,19 +1089,8 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       vm_sp(edx, vm);
       push_insn(edx, ecx);
       break;
-    case GREF: {
-      SgObject o;
-      retrive_next_gloc(o, SG_OBJ(code[i+1]));
-      mov(ac, (uintptr_t)o);
-      break;
-    }
-    case GREF_PUSH: {
-      SgObject o;
-      retrive_next_gloc(o, SG_OBJ(code[i+1]));
-      mov(ac, (uintptr_t)o);
-      push_insn();
-      break;
-    }
+    case GREF: gref_insn(SG_OBJ(code[i+1])); break;
+    case GREF_PUSH: gref_insn(SG_OBJ(code[i+1])); push_insn(); break;
     case CONST: {
       SgObject o = SG_OBJ(code[i+1]);
       mov(ac, (uintptr_t)o);
@@ -1129,9 +1145,23 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       break;
     case GSET: {
       SgObject o = SG_OBJ(code[i+1]);
-      ASSERT(SG_GLOCP(o));
-      mov(edx, (uintptr_t)o);
-      mov(ptr[edx + offsetof(SgGloc, value)], ac);
+      if (SG_IDENTIFIERP(o)) {
+	// make gloc here
+	SgObject old;
+	check_bound_gloc(o, old);
+	// FIXME, this this path should not be allowed.
+	push((uintptr_t)0);
+	push(ac);
+	push((uintptr_t)SG_IDENTIFIER_NAME(o));
+	push((uintptr_t)SG_IDENTIFIER_LIBRARY(o));
+	call((void*)Sg_MakeBinding);
+	add(csp, 4 * sizeof(void*));
+      } else {
+	mov(edx, (uintptr_t)o);
+	mov(ptr[edx + offsetof(SgGloc, value)], ac);
+      }
+      trace("after GSET");
+
       mov(ac, (uintptr_t)SG_UNDEF);
       break;
     }
@@ -1274,14 +1304,13 @@ int JitCompiler::compile_rec(SgWord *code, int size)
       call(calcproc);
       add(csp, 2*sizeof(void*));
       break;
-    case GREF_TAIL_CALL: {
-      retrive_next_gloc(gproc, SG_OBJ(code[i+1]));
+    case GREF_TAIL_CALL:
+      gproc = gref_insn(SG_OBJ(code[i+1]));
       goto tail_call_entry;
-    }
     case GREF_CALL: 
-      retrive_next_gloc(gproc, SG_OBJ(code[i+1]));
+      gproc = gref_insn(SG_OBJ(code[i+1]));
       goto call_entry;
-      break;
+
     call_entry:
     case CALL: {
       INSN_VAL1(val1, code[i]);
@@ -1451,37 +1480,21 @@ int JitCompiler::compile_rec(SgWord *code, int size)
     case FREF_CAR_PUSH:
       fref_insn(code[i]);
       goto car_push_entry;
-      break;
     case FREF_CDR_PUSH:
       fref_insn(code[i]);
       goto cdr_push_entry;
-      break;
-    case GREF_CAR: {
-      SgObject o;
-      retrive_next_gloc(o, code[i+1]);
-      mov(ac, (uintptr_t)Sg_Car(o));
-      break;
-    }
-    case GREF_CDR: {
-      SgObject o;
-      retrive_next_gloc(o, code[i+1]);
-      mov(ac, (uintptr_t)Sg_Cdr(o));
-      break;
-    }
-    case GREF_CAR_PUSH: {
-      SgObject o;
-      retrive_next_gloc(o, code[i+1]);
-      mov(ac, (uintptr_t)Sg_Car(o));
+
+    case GREF_CAR: gref_car_insn(SG_OBJ(code[i+1])); break;
+    case GREF_CDR: gref_cdr_insn(SG_OBJ(code[i+1])); break;
+    case GREF_CAR_PUSH:
+      gref_car_insn(SG_OBJ(code[i+1]));
       push_insn();
       break;
-    }
-    case GREF_CDR_PUSH: {
-      SgObject o;
-      retrive_next_gloc(o, code[i+1]);
-      mov(ac, (uintptr_t)Sg_Cdr(o));
+    case GREF_CDR_PUSH:
+      gref_cdr_insn(SG_OBJ(code[i+1]));
       push_insn();
       break;
-    }
+
     default:
       throw std::runtime_error(info->name);
     }
