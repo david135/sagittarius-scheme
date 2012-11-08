@@ -1,0 +1,87 @@
+;; -*- scheme -*-
+#!compatible
+(decl-code
+ (.include <sagittarius.h>)
+ (.define "LIBSAGITTARIUS_EXT_BODY")
+ (.include <sagittarius/extend.h>
+	   "socket.h"))
+
+(define-cise-stmt check-string-or-false
+  ((_ name o)
+   `(unless (or (SG_STRINGP ,o)
+		(SG_FALSEP ,o))
+      (Sg_WrongTypeOfArgumentViolation ',name
+				       (SG_MAKE_STRING "string or #f")
+				       ,o
+				       '()))))
+
+(define-type <socket> "SgSocket*")
+(define-type <addrinfo> "SgAddrinfo*")
+
+(define-c-proc addrinfo? (o) ::<boolean>  SG_ADDRINFOP)
+(define-c-proc make-addrinfo ()  Sg_MakeAddrinfo)
+(define-c-proc get-addrinfo (node service hints::<addrinfo>)
+  (check-string-or-false make-client-socket node)
+  (check-string-or-false make-client-socket service)
+  (result (Sg_GetAddrinfo node service hints)))
+
+(define-c-proc make-socket (info::<addrinfo>) Sg_CreateSocket)
+(define-c-proc socket-setsockopt!
+  (socket::<socket> level::<fixnum> name::<fixnum> value) Sg_SocketSetopt)
+(define-c-proc socket-getsockopt
+  (socket::<socket> level::<fixnum> name::<fixnum> size::<fixnum>)
+  Sg_SocketGetopt)
+
+(define-c-proc socket-connect! (socket::<socket> info::<addrinfo>)
+  Sg_SocketConnect)
+(define-c-proc socket-bind! (socket::<socket> info::<addrinfo>) Sg_SocketBind)
+(define-c-proc socket-listen! (socket::<socket> backlog::<fixnum>)
+  Sg_SocketListen)
+
+;;; error message
+(define-c-proc socket-error-message (socket::<socket>) Sg_SocketErrorMessage)
+
+(define-c-proc socket? (o) ::<boolean> SG_SOCKETP)
+
+(define-c-proc socket-port (o::<socket>) Sg_MakeSocketPort)
+
+(define-c-proc shutdown-output-port (o::<port>) ::<void> Sg_ShutdownPort)
+
+(define-c-proc socket-accept (o::<socket>) Sg_SocketAccept)
+
+(define-c-proc socket-send
+  (o::<socket> bv::<bytevector> :optional (flags::<fixnum> 0)) ::<fixnum>
+  (result (Sg_SocketSend (SG_SOCKET o)
+			 (SG_BVECTOR_ELEMENTS bv)
+			 (SG_BVECTOR_SIZE bv)
+			 flags)))
+
+(define-c-proc socket-recv (o::<socket> len::<fixnum>
+					:optional (flags::<fixnum> 0)) 
+  (let ((data (Sg_MakeByteVector len 0))
+	(res::int (Sg_SocketReceive (SG_SOCKET o)
+				    (SG_BVECTOR_ELEMENTS data) len flags)))
+    (cond ((== len res) (result data))
+	  ((< res 0)
+	   ;; most probably socket is non-blocking
+	   (result #f))
+	  (else
+	   ;; shrink
+	   (let ((r (Sg_MakeByteVector res 0)))
+	     (Sg_ByteVectorCopyX (SG_BVECTOR data) 0 (SG_BVECTOR r) 0 res)
+	     (result r))))))
+
+(define-c-proc socket-shutdown (o::<socket> how::<fixnum>) ::<void>
+  Sg_SocketShutdown)
+
+(define-c-proc socket-close  (o::<socket>) ::<void> Sg_SocketClose)
+
+(define-c-proc socket-fd (o::<socket>) ::<fixnum>
+  (result (-> o socket)))
+
+(define-c-proc socket-nonblocking! (o::<socket>) ::<boolean>
+  Sg_SocketNonblocking)
+(define-c-proc socket-blocking! (o::<socket>) ::<boolean>
+  Sg_SocketBlocking)
+
+(define-c-proc socket-select (reads writes errors timeval) Sg_SocketSelect)
