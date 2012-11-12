@@ -66,7 +66,9 @@
      check-substring-spec
      substring-spec-ok?
      make-kmp-restart-vector kmp-step string-kmp-partial-search)
-    (import (rnrs)
+    (import (rename (except (rnrs) string-for-each)
+		    (string-ci-hash string-hash-ci))
+	    (rnrs r5rs)
 	    (rnrs mutable-strings)
 	    (sagittarius)
 	    (sagittarius control)
@@ -938,35 +940,6 @@
 			    values))))
 
 
-;;; Hash
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Compute (c + 37 c + 37^2 c + ...) modulo BOUND, with sleaze thrown in
-;;; to keep the intermediate values small. (We do the calculation with just
-;;; enough bits to represent BOUND, masking off high bits at each step in
-;;; calculation. If this screws up any important properties of the hash
-;;; function I'd like to hear about it. -Olin)
-;;;
-;;; If you keep BOUND small enough, the intermediate calculations will 
-;;; always be fixnums. How small is dependent on the underlying Scheme system; 
-;;; we use a default BOUND of 2^22 = 4194304, which should hack it in
-;;; Schemes that give you at least 29 signed bits for fixnums. The core 
-;;; calculation that you don't want to overflow is, worst case,
-;;;     (+ 65535 (* 37 (- bound 1)))
-;;; where 65535 is the max character code. Choose the default BOUND to be the
-;;; biggest power of two that won't cause this expression to fixnum overflow, 
-;;; and everything will be copacetic.
-
-(define-optional (string-hash s (optional (bound 4194304)
-					  (start 0)
-					  (end -1)))
-  (check-arg string? s string-hash)
-  (string-hash (%maybe-substring s start end) bound))
-
-(define-optional (string-hash-ci s (optional (bound 4194304)
-					     (start 0)
-					     (end -1)))
-  (check-arg string? s string-hash-ci)
-  (string-hash-ci (%maybe-substring s start end) bound))
 
 ;;; Case hacking
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -980,17 +953,9 @@
 ;;;   Capitalize every contiguous alpha sequence: capitalise
 ;;;   first char, lowercase rest.
 
-(define (string-upcase  s . maybe-start+end)
-  (let-string-start+end (start end) string-upcase s maybe-start+end
-    (%string-map char-upcase s start end)))
-
 (define (string-upcase! s . maybe-start+end)
   (let-string-start+end (start end) string-upcase! s maybe-start+end
     (%string-map! char-upcase s start end)))
-
-(define (string-downcase  s . maybe-start+end)
-  (let-string-start+end (start end) string-downcase s maybe-start+end
-    (%string-map char-downcase s start end)))
 
 (define (string-downcase! s . maybe-start+end)
   (let-string-start+end (start end) string-downcase! s maybe-start+end
@@ -1011,12 +976,6 @@
 (define (string-titlecase! s . maybe-start+end)
   (let-string-start+end (start end) string-titlecase! s maybe-start+end
     (%string-titlecase! s start end)))
-
-(define (string-titlecase s . maybe-start+end)
-  (let-string-start+end (start end) string-titlecase! s maybe-start+end
-    (let ((ans (substring s start end)))
-      (%string-titlecase! ans 0 (- end start))
-      ans)))
 
 
 ;;; Cutting & pasting strings
@@ -1067,21 +1026,21 @@
 
 
 (define (string-trim s . criterion+start+end)
-  (let-optionals* criterion+start+end ((criterion char-set:whitespace) rest)
+  (let-optionals* criterion+start+end ((criterion char-set:whitespace) . rest)
     (let-string-start+end (start end) string-trim s rest
       (cond ((string-skip s criterion start end) =>
 	     (lambda (i) (%substring/shared s i end)))
 	    (else "")))))
 
 (define (string-trim-right s . criterion+start+end)
-  (let-optionals* criterion+start+end ((criterion char-set:whitespace) rest)
+  (let-optionals* criterion+start+end ((criterion char-set:whitespace) . rest)
     (let-string-start+end (start end) string-trim-right s rest
       (cond ((string-skip-right s criterion start end) =>
-	     (lambda (i) (%substring/shared s 0 (+ 1 i))))
+	     (lambda (i) (%substring/shared s start (+ 1 i))))
 	    (else "")))))
 
 (define (string-trim-both s . criterion+start+end)
-  (let-optionals* criterion+start+end ((criterion char-set:whitespace) rest)
+  (let-optionals* criterion+start+end ((criterion char-set:whitespace) . rest)
     (let-string-start+end (start end) string-trim-both s rest
       (cond ((string-skip s criterion start end) =>
 	     (lambda (i)
@@ -1090,7 +1049,7 @@
 
 
 (define (string-pad-right s n . char+start+end)
-  (let-optionals* char+start+end ((char #\space (char? char)) rest)
+  (let-optionals* char+start+end ((char #\space (char? char)) . rest)
     (let-string-start+end (start end) string-pad-right s rest
       (check-arg (lambda (n) (and (integer? n) (exact? n) (<= 0 n)))
 		 n string-pad-right)
@@ -1102,7 +1061,7 @@
 	      ans))))))
 
 (define (string-pad s n . char+start+end)
-  (let-optionals* char+start+end ((char #\space (char? char)) rest)
+  (let-optionals* char+start+end ((char #\space (char? char)) . rest)
     (let-string-start+end (start end) string-pad s rest
       (check-arg (lambda (n) (and (integer? n) (exact? n) (<= 0 n)))
 		 n string-pad)
@@ -1603,6 +1562,7 @@
 (define (string-append/shared . strings) (string-concatenate/shared strings))
 
 (define (string-concatenate/shared strings)
+  (check-arg list? strings string-concatenate/shared)
   (let lp ((strings strings) (nchars 0) (first #f))
     (cond ((pair? strings)			; Scan the args, add up total
 	   (let* ((string  (car strings))	; length, remember 1st 
@@ -1630,20 +1590,24 @@
 ; Alas, Scheme 48's APPLY blows up if you have many, many arguments.
 ;(define (string-concatenate strings) (apply string-append strings))
 
+;;;;
+;; Now this is implemented in C 
+;;;;
 ;;; Here it is written out. I avoid using REDUCE to add up string lengths
 ;;; to avoid non-R5RS dependencies.
-(define (string-concatenate strings)
-  (let* ((total (do ((strings strings (cdr strings))
-		     (i 0 (+ i (string-length (car strings)))))
-		    ((not (pair? strings)) i)))
-	 (ans (make-string total)))
-    (let lp ((i 0) (strings strings))
-      (if (pair? strings)
-	  (let* ((s (car strings))
-		 (slen (string-length s)))
-	    (%string-copy! ans i s 0 slen)
-	    (lp (+ i slen) (cdr strings)))))
-    ans))
+;; (define (string-concatenate strings)
+;;   (check-arg list? strings string-concatenate)
+;;   (let* ((total (do ((strings strings (cdr strings))
+;; 		     (i 0 (+ i (string-length (car strings)))))
+;; 		    ((not (pair? strings)) i)))
+;; 	 (ans (make-string total)))
+;;     (let lp ((i 0) (strings strings))
+;;       (if (pair? strings)
+;; 	  (let* ((s (car strings))
+;; 		 (slen (string-length s)))
+;; 	    (%string-copy! ans i s 0 slen)
+;; 	    (lp (+ i slen) (cdr strings)))))
+;;     ans))
 	  
 
 ;;; Defined by R5RS, so commented out here.
@@ -1736,7 +1700,8 @@
 
 (define (string-tokenize s . token-chars+start+end)
   (let-optionals* token-chars+start+end
-                  ((token-chars char-set:graphic (char-set? token-chars)) rest)
+                  ((token-chars char-set:graphic (char-set? token-chars))
+		   . rest)
     (let-string-start+end (start end) string-tokenize s rest
       (let lp ((i end) (ans '()))
 	(cond ((and (< start i) (string-index-right s token-chars start i)) =>

@@ -1,4 +1,5 @@
 ;; lib/vm.scm
+#!core
 ;; dummy
 (define *toplevel-variable* '())
 (define *expand-phase* 0)
@@ -20,6 +21,8 @@
       (number? g)
       ;; vector can not be const for boot code.
       #;(vector? g)))
+;; on boot code we don't have set! or redefine ... I assume
+(define (gloc-library g) #f)
 
 (define (cachable? o)
   (or (string? o) (number? o) (symbol? o)))
@@ -47,19 +50,18 @@
 	  (ret #f))
       (let loop ((fp frames))
 	(cond ((pair? fp)
-	       (when (and name-ident?
-			  (eq? (id-envs name) fp))
+	       (when (and name-ident? (eq? (id-envs name) fp))
 		 (set! name-ident? #f) ;; given name is no longer identifier
 		 (set! name (id-name name)))
-	       (when (> (caar fp) lookup-as)
-		 (loop (cdr fp)))
-	       (let loop2 ((tmp (cdar fp)))
-		 (if (pair? tmp)
-		     (let ((vp (car tmp)))
-		       (if (eq? name (car vp))
-			   (cdr vp)
-			   (loop2 (cdr tmp))))
-		     (loop (cdr fp)))))
+	       (if (> (caar fp) lookup-as)
+		   (loop (cdr fp))
+		   (let loop2 ((tmp (cdar fp)))
+		     (if (pair? tmp)
+			 (let ((vp (car tmp)))
+			   (if (eq? name (car vp))
+			       (cdr vp)
+			       (loop2 (cdr tmp))))
+			 (loop (cdr fp))))))
 	      (else
 	       (if (symbol? name)
 		   (make-identifier name '() (vector-ref p1env 0))
@@ -200,6 +202,8 @@
 ;; - exported      : exported symbols from whis library
 ;; - binding table : binding table.
 ;; - transient     : #t not import after converted to c
+;; - defined       : temporary storage for macro expansion
+;;                   this contains all defined variables in this library.
 
 ;; libraries
 ;; this might be like this
@@ -209,8 +213,8 @@
 ;; but on scheme VM it's just hashtable to be simple.
 (define *libraries* (make-hashtable equal-hash equal?))
 (define (make-library library)
-  (let ((lib (vector '.library library '() #f (make-eq-hashtable) #f)))
-    (hashtable-set! #;(vm-libraries) *libraries* library lib)
+  (let ((lib (vector '.library library '() #f (make-eq-hashtable) #f '())))
+    (hashtable-set! *libraries* library lib)
     lib))
 
 (define (library? lib)
@@ -233,6 +237,12 @@
   (vector-ref lib 5))
 (define (library-transient-set! lib val)
   (vector-set! lib 5 val))
+(define (library-defined lib)
+  (vector-ref lib 6))
+(define (library-defined-add! lib val)
+  (let ((r (cons (if (identifier? val) (id-name val) val)
+		 (vector-ref lib 6))))
+    (vector-set! lib 6 r)))
 
 (define (%set-library lib)
   (or (library? lib)
@@ -288,7 +298,7 @@
 	(set! *current-library* (car name)))))
 
 ;; just stub
-(define (import-library to from only except rename prefix trans?)
+(define (import-library to from resolved-spec trans?)
   (if trans?
       (library-transient-set! from #t)
       (library-transient-set! from #f))
@@ -409,56 +419,57 @@
 	(else
 	 (error 'call-syntax-handler "bug?"))))
 
-(define unwrap-syntax
-  (lambda (form . only-global?)
-    (define rec
-      (lambda (form history)
-	(cond ((or (fixnum? form)
-		   (char? form)
-		   (boolean? form)) form)
-	      ((memq form history) form)
-	      ((pair? form)
-	       (let* ((newh (cons form history))
-		      (ca   (rec (car form) newh))
-		      (cd   (rec (cdr form) newh)))
-		 (if (and (eq? ca (car form))
-			  (eq? cd (cdr form)))
-		     form
-		     (cons ca cd))))
-	      ((identifier? form)
-	       (id-name form))
-	      ((and (vector? form)
-		    (> (vector-length form) 1)
-		    (eq? (vector-ref form 0) '.closure))
-	       'closure)
-	      ((library? form)
-	       (library-name form))
-	      ((vector? form)
-	       (let ((len (vector-length form))
-		     (newh (cons form history)))
-		 (let loop ((i 0))
-		   (cond ((= i len) form)
-			 (else
-			  (let* ((pe (vector-ref form i))
-				 (e (rec pe newh)))
-			    (cond ((eq? e pe)
-				   (loop (+ i 1)))
-				  (else
-				   (let ((v (make-vector len #f)))
-				     (let vcopy ((j 0))
-				       (unless (= j i)
-					 (vector-set! v j (vector-ref form j))
-					 (vcopy (+ j 1))))
-				     (vector-set! v i e)
-				     (let vcopy ((j i))
-				       (unless (= j len)
-					 (vector-set! v j (vector-ref form j))
-					 (vcopy (+ j 1))))
-				     v)))))))))
-	      (else form))))
-    (if (null? only-global?)
-	(rec form '())
-	form)))				; for scheme VM we don't do any thing
+(define (unwrap-syntax form . only-global?)
+  (define rec
+    (lambda (form history)
+      (cond ((or (fixnum? form)
+		 (char? form)
+		 (boolean? form)) form)
+	    ((memq form history) form)
+	    ((pair? form)
+	     (let* ((newh (cons form history))
+		    (ca   (rec (car form) newh))
+		    (cd   (rec (cdr form) newh)))
+	       (if (and (eq? ca (car form))
+			(eq? cd (cdr form)))
+		   form
+		   (cons ca cd))))
+	    ((identifier? form)
+	     (id-name form))
+	    ((and (vector? form)
+		  (> (vector-length form) 1)
+		  (eq? (vector-ref form 0) '.closure))
+	     'closure)
+	    ((library? form)
+	     (library-name form))
+	    ((vector? form)
+	     (let ((len (vector-length form))
+		   (newh (cons form history)))
+	       (let loop ((i 0))
+		 (cond ((= i len) form)
+		       (else
+			(let* ((pe (vector-ref form i))
+			       (e (rec pe newh)))
+			  (cond ((eq? e pe)
+				 (loop (+ i 1)))
+				(else
+				 (let ((v (make-vector len #f)))
+				   (let vcopy ((j 0))
+				     (unless (= j i)
+				       (vector-set! v j (vector-ref form j))
+				       (vcopy (+ j 1))))
+				   (vector-set! v i e)
+				   (let vcopy ((j i))
+				     (unless (= j len)
+				       (vector-set! v j (vector-ref form j))
+				       (vcopy (+ j 1))))
+				   v)))))))))
+	    (else form))))
+  (if (null? only-global?)
+      (rec form '())
+      form))				; for scheme VM we don't do any thing
+
+(define (unwrap-syntax-with-reverse form) (unwrap-syntax form))
 
 (define wrap-syntax
   (lambda (form p1env . opts)
@@ -607,7 +618,7 @@
 
 ;; this needs to be in C++. I don't want to double manage these values.
 ;;(define (pass3/let-frame-size) 2)
-(define (pass3/frame-size) *frame-size*)
+(define (vm-frame-size) *frame-size*)
 
 ;; also need to be c++
 ;; code builder
@@ -696,6 +707,8 @@
   (vector -1 EMPTY 0 0 undef))
 
 (define (init-packet packet insn type arg0 arg1 o)
+  (when (or (null? arg0) (null? arg1))
+    (raise 'error))
   (vector-set! packet 0 insn)
   (vector-set! packet 1 type)
   (vector-set! packet 2 arg0)
@@ -703,107 +716,57 @@
   (vector-set! packet 4 o)
   packet)
 
-(define (packet-insn packet)
-  (vector-ref packet 0))
-(define (packet-insn-set! packet insn)
-  (vector-set! packet 0 insn))
-(define (packet-type packet)
-  (vector-ref packet 1))
-(define (packet-type-set! packet type)
-  (vector-set! packet 1 type))
-(define (packet-arg0 packet)
-  (vector-ref packet 2))
-(define (packet-arg0-set! packet o)
-  (vector-set! packet 2 o))
-(define (packet-arg1 packet)
-  (vector-ref packet 3))
-(define (packet-arg1-set! packet o)
-  (vector-set! packet 3 o))
-(define (packet-obj packet)
-  (vector-ref packet 4))
-(define (packet-obj-set! packet o)
-  (vector-set! packet 4 o))
+(define (packet-insn packet) (vector-ref packet 0))
+(define (packet-insn-set! packet insn) (vector-set! packet 0 insn))
+(define (packet-type packet) (vector-ref packet 1))
+(define (packet-type-set! packet type) (vector-set! packet 1 type))
+(define (packet-arg0 packet) (vector-ref packet 2))
+(define (packet-arg0-set! packet o) (vector-set! packet 2 o))
+(define (packet-arg1 packet) (vector-ref packet 3))
+(define (packet-arg1-set! packet o) (vector-set! packet 3 o))
+(define (packet-obj packet) (vector-ref packet 4))
+(define (packet-obj-set! packet o) (vector-set! packet 4 o))
 
-(define make-code-builder 
-  (lambda ()
-    (vector '.code-builder (make-array) #f 0 #f 0 0 '() (make-code-packet) '() '())))
-(define code-builder-code
-  (lambda (cb)
-    (vector-ref cb 1)))
-(define code-builder-code-set!
-  (lambda (cb o)
-    (array-data-set! (vector-ref cb 1) o)
-    (array-length-set! (vector-ref cb 1) (vector-length o))))
-(define code-builder-name
-  (lambda (cb)
-    (vector-ref cb 2)))
-(define code-builder-name-set!
-  (lambda (cb argc)
-    (vector-set! cb 2 argc)))
-(define code-builder-argc
-  (lambda (cb)
-    (vector-ref cb 3)))
-(define code-builder-argc-set!
-  (lambda (cb argc)
-    (vector-set! cb 3 argc)))
-(define code-builder-optional?
-  (lambda (cb)
-    (vector-ref cb 4)))
-(define code-builder-optional-set!
-  (lambda (cb o)
-    (vector-set! cb 4 o)))
-(define code-builder-freec
-  (lambda (cb)
-    (vector-ref cb 5)))
-(define code-builder-freec-set!
-  (lambda (cb o)
-    (vector-set! cb 5 o)))
-(define code-builder-maxstack
-  (lambda (cb)
-    (vector-ref cb 6)))
-(define code-builder-maxstack-set!
-  (lambda (cb o)
-    (vector-set! cb 6 o)))
-(define code-builder-src
-  (lambda (cb)
-    (vector-ref cb 7)))
-(define code-builder-src-set!
-  (lambda (cb o)
-    (vector-set! cb 7 o)))
-(define code-builder-add-src
-  (lambda (cb src)
-    (let ((index (array-length (code-builder-code cb)))
-	  (old-src (code-builder-src cb)))
-      (code-builder-src-set! cb (append old-src (list (cons index src)))))))
-(define code-builder-packet
-  (lambda (cb)
-    (vector-ref cb 8)))
-(define code-builder-packet-set!
-  (lambda (cb o)
-    (vector-set! cb 8 o)))
-(define code-builder-label-defs
-  (lambda (cb)
-    (vector-ref cb 9)))
-(define code-builder-label-defs-set!
-  (lambda (cb l)
-    (vector-set! cb 9 l)))
-(define code-builder-label-refs
-  (lambda (cb)
-    (vector-ref cb 10)))
-(define code-builder-label-refs-set!
-  (lambda (cb l)
-    (vector-set! cb 10 l)))
+(define (make-code-builder)
+  (vector '.code-builder (make-array) #f 0 #f 0 0 '()
+          (make-code-packet) '() '()))
+(define (code-builder-code cb)
+  (vector-ref cb 1))
+(define (code-builder-code-set! cb o)
+  (array-data-set! (vector-ref cb 1) o)
+  (array-length-set! (vector-ref cb 1) (vector-length o)))
+(define (code-builder-name cb) (vector-ref cb 2))
+(define (code-builder-name-set! cb argc) (vector-set! cb 2 argc))
+(define (code-builder-argc cb) (vector-ref cb 3))
+(define (code-builder-argc-set! cb argc) (vector-set! cb 3 argc))
+(define (code-builder-optional? cb) (vector-ref cb 4))
+(define (code-builder-optional-set! cb o) (vector-set! cb 4 o))
+(define (code-builder-freec cb) (vector-ref cb 5))
+(define (code-builder-freec-set! cb o) (vector-set! cb 5 o))
+(define (code-builder-maxstack cb) (vector-ref cb 6))
+(define (code-builder-maxstack-set! cb o) (vector-set! cb 6 o))
+(define (code-builder-src cb) (vector-ref cb 7))
+(define (code-builder-src-set! cb o) (vector-set! cb 7 o))
+(define (code-builder-add-src cb src)
+  (let ((index (array-length (code-builder-code cb)))
+        (old-src (code-builder-src cb)))
+    (code-builder-src-set! cb (append old-src (list (cons index src))))))
+(define (code-builder-packet cb) (vector-ref cb 8))
+(define (code-builder-packet-set! cb o) (vector-set! cb 8 o))
+(define (code-builder-label-defs cb) (vector-ref cb 9))
+(define (code-builder-label-defs-set! cb l) (vector-set! cb 9 l))
+(define (code-builder-label-refs cb) (vector-ref cb 10))
+(define (code-builder-label-refs-set! cb l) (vector-set! cb 10 l))
 
-(define code-builder?
-  (lambda (cb)
-    (and (vector? cb)
-	 (eq? (vector-ref cb 0) '.code-builder))))
+(define (code-builder? cb)
+  (and (vector? cb)
+       (eq? (vector-ref cb 0) '.code-builder)))
 
-(define label?
-  (lambda (l)
-    (and (vector? l)
-	 (> (vector-length l) 0)
-	 (eqv? (vector-ref l 0) 11 #;$LABEL))))
+(define (label? l)
+  (and (vector? l)
+       (> (vector-length l) 0)
+       (eqv? (vector-ref l 0) 11 #;$LABEL
+             )))
 
 (define (cb-flush cb)
   (if (= (packet-type (code-builder-packet cb)) EMPTY)
@@ -818,14 +781,16 @@
 		 (array-push! (code-builder-code cb) insn)
 		 (if (label? obj)
 		     (begin
-		       (code-builder-label-refs-set! cb 
-						     (acons obj
-							    (array-length (code-builder-code cb))
-							    (code-builder-label-refs cb)))
+		       (code-builder-label-refs-set!
+                        cb 
+                        (acons obj
+                               (array-length (code-builder-code cb))
+                               (code-builder-label-refs cb)))
 		       (array-push! (code-builder-code cb) 0)) ; dummy
 		     (array-push! (code-builder-code cb) obj)))))
 	(code-builder-packet-set! cb (make-code-packet))
-	#;(packet-type-set! (code-builder-packet cb) EMPTY))))
+	#;(packet-type-set! (code-builder-packet cb) EMPTY)
+        )))
 	     
 
 (define (cb-put cb packet)

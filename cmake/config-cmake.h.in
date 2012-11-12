@@ -8,7 +8,10 @@
 #cmakedefine SAGITTARIUS_DYNLIB_PATH "@SAGITTARIUS_DYNLIB_PATH@"
 #cmakedefine SAGITTARIUS_SITE_DYNLIB_PATH "@SAGITTARIUS_SITE_DYNLIB_PATH@"
 
+#cmakedefine SAGITTARIUS_TRIPLE "@SAGITTARIUS_TRIPLE@"
+
 #cmakedefine USE_BOEHM_GC
+#cmakedefine USE_IMMEDIATE_FLONUM
 
 #cmakedefine HAVE_GC_H
 #cmakedefine HAVE_GC_GC_H
@@ -26,6 +29,8 @@
 #cmakedefine HAVE_DLFCN_H
 #cmakedefine HAVE_SCHED_H
 #cmakedefine HAVE_IO_H
+#cmakedefine HAVE_SYS_MMAN_H
+#cmakedefine HAVE_UNISTD_H
 
 #cmakedefine HAVE_ALLOCA
 #cmakedefine HAVE_SCHED_YIELD
@@ -33,6 +38,7 @@
 #cmakedefine HAVE_SELECT
 #cmakedefine HAVE_CLOCK_GETTIME
 #cmakedefine HAVE_GETTIMEOFDAY
+#cmakedefine HAVE_MMAP
 
 #cmakedefine SHLIB_SO_SUFFIX "@SHLIB_SO_SUFFIX@"
 
@@ -40,6 +46,7 @@
 #cmakedefine SIZEOF_SHORT @SIZEOF_SHORT@
 #cmakedefine SIZEOF_LONG @SIZEOF_LONG@
 #cmakedefine SIZEOF___INT64 @SIZEOF___INT64@
+#cmakedefine SIZEOF_SIZE_T @SIZEOF_SIZE_T@
 #cmakedefine SIZEOF_VOIDP @SIZEOF_VOIDP@
 #cmakedefine SIZEOF_FLOAT @SIZEOF_FLOAT@
 #cmakedefine SIZEOF_DOUBLE @SIZEOF_DOUBLE@

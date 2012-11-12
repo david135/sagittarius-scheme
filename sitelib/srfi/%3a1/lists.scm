@@ -44,7 +44,7 @@
     append-map append-map! map! pair-for-each filter-map map-in-order
     filter! partition! remove!
     find-tail
-    any exists
+    any every
     list-index
     take-while drop-while take-while!
     span break span! break!
@@ -69,23 +69,29 @@
     assoc cons* filter find fold-right for-each map member partition remove)
 
   (import 
-   (only (rnrs) define-syntax lambda syntax-case and identifier? syntax define syntax-rules ...
-    cons let if not pair? car cdr unless integer? >= quote procedure? do - < case-lambda number?
-    <= + * eq? null? or cond else apply list cadr caddr cadddr cddddr values zero? begin let-values
-    let* append call-with-current-continuation reverse => letrec equal? memq _ length symbol? string?
-    assertion-violation caar when memv list-ref
-    ;; on Sagittarius these are the same as R6RS
-    filter partition cons* fold-right map for-each
-    caaaar caaadr caaar caadar caaddr
-    caadr caar cadaar cadadr cadar caddar cadddr caddr cadr
-    car cdaaar cdaadr cdaar cdadar cdaddr cdadr cdar cddaar
-    cddadr cddar cdddar cddddr cdddr cddr cdr assv assq)
-   (rename (rnrs) (for-all every) (exists any))
+   (only (rename (rnrs) (for-all every) (exists any))
+	 define-syntax lambda syntax-case and identifier? syntax define
+	 syntax-rules ... cons let if not pair? car cdr unless integer? >=
+	 quote = procedure? do - < case-lambda number? <= + * eq? null? or
+	 cond else apply list cadr caddr cadddr cddddr values zero? begin
+	 let-values let* append call-with-current-continuation reverse =>
+	 letrec equal? memq _ length symbol? string? assertion-violation
+	 caar when memv list-ref negative?
+	 ;; on Sagittarius these are the same as R6RS
+	 filter partition cons* fold-right map for-each
+	 caaaar caaadr caaar caadar caaddr
+	 caadr caar cadaar cadadr cadar caddar cadddr caddr cadr
+	 car cdaaar cdaadr cdaar cdadar cdaddr cdadr cdar cddaar
+	 cddadr cddar cdddar cddddr cdddr cddr cdr assv assq
+	 every any)
+   
    (only (rnrs mutable-pairs) set-cdr! set-car!)
-   (only (sagittarius) receive circular-list? dotted-list? reverse! acons append!)
+   (only (sagittarius) receive circular-list? dotted-list? reverse! acons
+    append!)
    (only (sagittarius control) check-arg)
    (only (core) last-pair)
-   (only (core base) split-at null-list? delete lset-intersection take drop fold lset-difference assoc member find find-tail lset-union reduce)
+   (only (core base) split-at null-list? delete lset-intersection take drop fold
+    lset-difference assoc member find find-tail lset-union reduce)
     )
 
 ;;;
@@ -489,7 +495,7 @@
 (define (length+ x)         ; Returns #f if X is circular.
   (let ((n (length x)))
     ;; on Sagittarius, -2 as return valu of length is circular-list
-    (if (== n -2) #f n)))
+    (if (= n -2) #f n)))
 	
 
 (define (zip list1 . more-lists) (apply map list list1 more-lists))
@@ -816,10 +822,17 @@
     (cond
       [(pair? ls)
        (let ([a (car ls)])
-         (if (pair? a)
-             (f (cdr ls) (cons (car a) a*) (cons (cdr a) d*))
-             (values '() '())))]
-      [else (values (reverse a*) (reverse d*))])))
+         (cond ((pair? a)
+		(f (cdr ls) (cons (car a) a*) (cons (cdr a) d*)))
+	       ((null? a) (values '() '()))
+	       (else (assertion-violation '%cars+cdrs 
+					  "improper lists are not allowed"
+					  lists))))]
+      [(null? ls)
+       (values (reverse a*) (reverse d*))]
+      [else 
+       (assertion-violation '%cars+cdrs "improper lists are not allowed"
+			    lists)])))
 
 ;  (call-with-current-continuation
 ;    (lambda (abort)
@@ -865,16 +878,18 @@
 
       ;; N-ary case
       (let lp ((list1 list1) (lists lists) (i 0))
-    (if (null-list? list1) i
-        (receive (as ds) (%cars+cdrs lists)
-          (if (null? as) i
-          (lp (cdr list1) ds
-              (if (apply pred (car list1) as) (+ i 1) i))))))
+	(if (null-list? list1)
+	    i
+	    (receive (as ds) (%cars+cdrs lists)
+	      (if (null? as) i
+		  (lp (cdr list1) ds
+		      (if (apply pred (car list1) as) (+ i 1) i))))))
 
       ;; Fast path
       (let lp ((lis list1) (i 0))
-    (if (null-list? lis) i
-        (lp (cdr lis) (if (pred (car lis)) (+ i 1) i))))))
+	(if (null-list? lis)
+	    i
+	    (lp (cdr lis) (if (pred (car lis)) (+ i 1) i))))))
 
 
 ;;; fold/unfold
@@ -894,23 +909,54 @@
              (cons (f seed) ans))))]))
 
 
+;;(define (unfold p f g seed . maybe-tail-gen)
+;;  (check-arg procedure? p unfold)
+;;  (check-arg procedure? f unfold)
+;;  (check-arg procedure? g unfold)
+;;  (if (pair? maybe-tail-gen) ;;; so much for :optional (aghuloum)
+;;
+;;      (let ((tail-gen (car maybe-tail-gen)))
+;;	(if (pair? (cdr maybe-tail-gen))
+;;	    (apply error 'unfold "Too many arguments" p f g seed maybe-tail-gen)
+;;
+;;	    (let recur ((seed seed))
+;;	      (if (p seed)
+;;		  (tail-gen seed)
+;;		  (cons (f seed) (recur (g seed)))))))
+;;
+;;      (let recur ((seed seed))
+;;	(if (p seed)
+;;	    '()
+;;	    (cons (f seed) (recur (g seed)))))))
+
+;; originally from guile modified by Takashi Kato
 (define (unfold p f g seed . maybe-tail-gen)
+  (define (reverse+tail tail-gen lst seed)
+    (let rtlp ((lst    lst)
+	     (result (tail-gen seed)))
+      (if (null? lst)
+          result
+          (rtlp (cdr lst)
+                (cons (car lst) result)))))
+  (define (default-tail-gen x) '())
+
   (check-arg procedure? p unfold)
   (check-arg procedure? f unfold)
   (check-arg procedure? g unfold)
-  (if (pair? maybe-tail-gen) ;;; so much for :optional (aghuloum)
-
+  (if (pair? maybe-tail-gen)
       (let ((tail-gen (car maybe-tail-gen)))
-    (if (pair? (cdr maybe-tail-gen))
-        (apply error 'unfold "Too many arguments" p f g seed maybe-tail-gen)
-
-        (let recur ((seed seed))
-          (if (p seed) (tail-gen seed)
-          (cons (f seed) (recur (g seed)))))))
-
-      (let recur ((seed seed))
-    (if (p seed) '()
-        (cons (f seed) (recur (g seed)))))))
+	(if (pair? (cdr maybe-tail-gen))
+	    (apply error 'unfold "Too many arguments" p f g seed maybe-tail-gen)
+	    (let lp ((seed   seed)
+		       (result '()))
+	      (if (p seed)
+		  (reverse+tail tail-gen result seed)
+		  (lp (g seed)
+			(cons (f seed) result))))))
+      (let lp ((seed seed) (result '()))
+	(if (p seed)
+	    (reverse+tail default-tail-gen result seed)
+	    (lp (g seed) (cons (f seed) result))))))
 
 
 ;;(define (fold kons knil lis1 . lists)
@@ -1233,6 +1279,8 @@
 
 (define (partition! pred lis)
   (check-arg procedure? pred partition!)
+  (when (negative? (length lis))
+    (assertion-violation 'partition! "proper list required" lis))
   (if (null-list? lis) (values lis lis)
 
       ;; This pair of loops zips down contiguous in & out runs of the
@@ -1339,7 +1387,7 @@
 (define delete-duplicates
   (case-lambda
     [(lis)
-     (delete-duplicates equal?)]
+     (delete-duplicates lis equal?)]
     [(lis elt=)
      (check-arg procedure? elt= delete-duplicates)
      (let recur ((lis lis))

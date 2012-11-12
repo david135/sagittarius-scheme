@@ -148,7 +148,7 @@
       (if (string? c)
 	  (cgen-decl c)
 	  (cgen-decl (call-with-output-string
-		       (cut cise-render c 'toplevel <>))))))
+		       (cut cise-render c :ctx 'toplevel :port <>))))))
 
   (define (name->type name)
     (or (cgen-type-from-name name)
@@ -216,7 +216,10 @@
     (filter (cut is-a? <> class) 
 	    (cgen-unit-toplevel-nodes (cgen-current-unit))))
 
-  (define-class <procstub> (<stub>)
+  (define-class <setter-mixin> ()
+    ((setter :init-value #f)))
+
+  (define-class <procstub> (<setter-mixin> <stub>)
     ((args            	:init-value () :init-keyword :args)
      (keyword-args    	:init-value () :init-keyword :keyword-args)
      (num-reqargs     	:init-value 0  :init-keyword :num-reqargs)
@@ -400,6 +403,7 @@
 	(() #f)
 	(((? string? s) . r) (push-stmt! cproc s) (loop r))
 	((('inline opcode) . r) (slot-set! cproc 'inline-insn opcode) (loop r))
+	((('setter . spec) . r) (process-setter cproc spec) (loop r))
 	(((? symbol? s)) ;; 'call' convention
 	 (let* ((args (map (cut slot-ref <> 'name) (slot-ref cproc 'args)))
 		(form (if (eq? (slot-ref cproc 'return-type) '<void>)
@@ -410,6 +414,32 @@
 			     (slot-ref cproc 'return-type))))
 	   (process-body-inner cproc rettype form)))
 	(_ (process-body-inner cproc (slot-ref cproc 'return-type) body)))))
+  
+  (define-method process-setter ((cproc <c-proc>) decl)
+    (cond
+     ((symbol? (car decl)) (slot-set! cproc 'setter (car decl)))
+     ((< (length decl) 2)
+      (error 'process-setter "bad form of anonymous setter" `(setter ,decl)))
+     (else
+      (let-values (((args keyargs nreqs nopts rest? other-keys?)
+		    (process-c-proc-args (slot-ref cproc'proc-name) (car decl)))
+		   ((body rettype) (extract-rettype (cdr decl))))
+	(let ((setter (make <c-proc>
+			:scheme-name `(setter ,(slot-ref cproc 'scheme-name))
+			:c-name (format "~a_SETTER" (slot-ref cproc 'c-name))
+			:proc-name (make-literal (format "~a" `(setter ,(slot-ref cproc 'scheme-name))))
+			:args args :return-type rettype
+			:keyword-args keyargs
+			:num-reqargs nreqs
+			:num-optargs nopts
+			:have-rest-arg? rest?
+			:allow-other-keys? other-keys?)))
+	  (slot-set! cproc 'setter (cons setter (c-stub-name setter)))
+	  (for-each (lambda (arg) (arg-proc arg cproc)) args)
+	  (unless (null? keyargs)
+	    (for-each (lambda (arg) (arg-proc arg cproc)) keyargs))
+	  (process-body setter body)
+	  (cgen-add! setter))))))
 
   (define-method process-body-inner ((cproc <procstub>) rettype body)
     (define (expand-stmt stmt)
@@ -436,11 +466,6 @@
       (_ (error 'define-c-proc "invalid cproc return type" rettype))))
 
   ;; emit
-  (define (calculate-required args)
-    (let loop ((args args) (n 0))
-      (cond ((null? args) n)
-	    ((is-a? (car args) <required-arg>) (loop (cdr args) (+ n 1)))
-	    (else (loop (cdr args) n)))))
   (define-method cgen-emit-body ((cproc <c-proc>))
     (p "static SgObject " (slot-ref cproc 'c-name)
        "(SgObject *SG_FP, int SG_ARGC, void *data_)")
@@ -448,15 +473,15 @@
     (for-each emit-arg-decl (slot-ref cproc 'args))
     (for-each emit-arg-decl (slot-ref cproc 'keyword-args))
     (unless (null? (slot-ref cproc 'keyword-args))
-      (let ((req-count (calculate-required (slot-ref cproc 'args))))
-	(f "  SgObject SG_OPTARGS = Sg_ArrayToList(SG_FP+~d, SG_ARGC-~d);~%"
-	   req-count req-count)))
+      (p "  int SG_KEYARGC = SG_ARGC-1-" (length (slot-ref cproc'args)) ";"))
     (p "  SG_ENTER_SUBR(\"" (slot-ref cproc 'scheme-name) "\");")
     ;; argument count check
     (cond ((and (> (slot-ref cproc 'num-optargs) 0)
+		;;(null? (slot-ref cproc 'keyword-args))
 		(not (slot-ref cproc 'have-rest-args?)))
-	   (p "  if (SG_ARGC > " (+ (slot-ref cproc 'num-reqargs) 
-				    (slot-ref cproc 'num-optargs)) "||")
+	   (p "  if ((SG_ARGC > " (+ (slot-ref cproc 'num-reqargs) 
+				    (slot-ref cproc 'num-optargs)) " &&")
+	   (p "      !SG_NULLP(SG_ARGREF(SG_ARGC-1))) ||")
 	   (p "      SG_ARGC < " (slot-ref cproc'num-reqargs) ")")
 	   (p "    Sg_WrongNumberOfArgumentsBetweenViolation(")
 	   (f "     SG_INTERN(\"~a\"), ~d, ~d, SG_ARGC, SG_NIL);~%"
@@ -503,7 +528,26 @@
       (f "  SG_PROCEDURE_NAME(&~a) = ~a;~%"
 	 (c-stub-name cproc)
 	 (cgen-c-name (slot-ref cproc'proc-name))))
-    #;(call-next-method))
+    (call-next-method))
+
+  (define-method cgen-emit-init ((cproc <setter-mixin>))
+    (define (emit setter setter-name)
+      (when setter
+	(f "  SG_PROCEDURE_NAME(&~a) = ~a;~%" setter-name 
+	   (cgen-c-name (slot-ref setter 'proc-name))))
+      (f "  Sg_SetterSet(SG_PROCEDURE(&~a), SG_PROCEDURE(&~a), TRUE);~%"
+	 (c-stub-name cproc) setter-name))
+    (match (slot-ref cproc 'setter)
+      ((n . (? string? x)) (emit n x))
+      ((? symbol? x)
+       (or (and-let* ((setter (find (lambda (z) (eq? (slot-ref z 'scheme-name)
+						     x))
+				    (get-stubs <stub>))))
+	     (emit setter (c-stub-name setter)))
+	   (error 'cgen-emit-init
+		  "unknown setter name is used in the definition"
+		  x (slot-ref cproc 'scheme-name))))
+      (_ #f)))
 
   (define-method emit-arg-decl ((arg <arg>))
     (p "  SgObject " (slot-ref arg'scm-name) ";")
@@ -546,47 +590,49 @@
     (emit-arg-unbox-rec arg))
 
   (define-method emit-arg-unbox ((arg <optional-arg>))
-    (p "  if (SG_ARGC >= " (slot-ref arg'count) "+1) {")
+    (p "  if (SG_ARGC > " (slot-ref arg'count) "+1) {")
     (p "    "(slot-ref arg'scm-name) " = SG_ARGREF(" (slot-ref arg'count) ");")
-    ;; if proc has keyword arguments, then it must have SG_OPTARGS.
-    (unless (null? (slot-ref (slot-ref arg 'proc) 'keyword-args))
-      (p "    SG_OPTARGS = SG_CDR(SG_OPTARGS);"))
     (p "  } else {")
     (p "    "(slot-ref arg'scm-name) " = " (get-arg-default arg) ";")
     (p "  }")
     (emit-arg-unbox-rec arg))
 
   (define-method emit-arg-unbox ((arg <rest-arg>))
-    (p "  " (slot-ref arg'scm-name)
-       (format " = Sg_ArrayToList(SG_FP+~d, SG_ARGC-~d);"
-	       (slot-ref arg'count) (slot-ref arg'count)))
+    (p "  " (slot-ref arg'scm-name) " = SG_ARGREF(SG_ARGC-1);")
     (emit-arg-unbox-rec arg))
 
   (define (emit-keyword-args-unbox cproc)
     (let ((args (slot-ref cproc 'keyword-args))
 	  (other-keys? (slot-ref cproc 'allow-other-keys?)))
-      (p "  if (Sg_Length(SG_OPTARGS) % 2)")
+      (p "  if (SG_KEYARGC > 0 && SG_KEYARGC % 2)")
       (f "    Sg_AssertionViolation(~a, \
-               SG_MAKE_STRING(\"keyword list not even\"), SG_OPTARGS);~%"
-	 (cgen-c-name (slot-ref cproc 'proc-name)))
-      (p "  while (!SG_NULLP(SG_OPTARGS)) {")
+               SG_MAKE_STRING(\"keyword list not even\"), \
+                 Sg_ArrayToList(SG_FP+~a, SG_ARGC-1-~a));~%"
+	 (cgen-c-name (slot-ref cproc 'proc-name))
+	 (length (slot-ref cproc'args)) (length (slot-ref cproc'args)))
+      (p "  { int SG_KEYINDEX;")
+      (p "      for (SG_KEYINDEX=0; SG_KEYINDEX<SG_KEYARGC; SG_KEYINDEX+=2) {")
       (pair-for-each 
        (lambda (args)
 	 (let ((arg (car args))
 	       (tail? (null? (cdr args))))
-	   (f "    if (SG_EQ(SG_CAR(SG_OPTARGS), ~a)) {~%"
+	   (f "      if (SG_EQ(SG_ARGREF(~a+SG_KEYINDEX), ~a)) {~%"
+	      (length (slot-ref cproc'args))
 	      (cgen-c-name (slot-ref arg 'keyword)))
-	   (f "      ~a = SG_CADR(SG_OPTARGS);~%" (slot-ref arg 'scm-name))
+	   (f "        ~a = SG_ARGREF(~a+SG_KEYINDEX+1);~%"
+	      (slot-ref arg 'scm-name) (length (slot-ref cproc'args)))
 	   (if tail?
-	       (p "    }")
-	       (p "    } else "))))
+	       (p "      }")
+	       (p "      } else "))))
        args)
       (unless other-keys?
-	(f "    else Sg_AssertionViolation(~a, \
-                     SG_MAKE_STRING(\"unknown keyword\"), SG_CAR (SG_OPTARGS));"
-	   (cgen-c-name (slot-ref cproc 'proc-name)))
+	(f "      else Sg_AssertionViolation(~a, \
+                         SG_MAKE_STRING(\"unknown keyword\"), \
+                         SG_ARGREF(~a+SG_KEYINDEX));"
+	   (cgen-c-name (slot-ref cproc 'proc-name))
+	   (length (slot-ref cproc'args)))
 	(p))
-      (p "    SG_OPTARGS = SG_CDDR(SG_OPTARGS);")
+      (p "    }")
       (p "  }")
       (for-each emit-arg-unbox-rec args)))
 

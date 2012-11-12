@@ -373,6 +373,8 @@ static SgChar read_escape(SgPort *port, SgReadContext *ctx)
   case 'r':  return 0x000D;
   case '"':  return 0x0022;
   case '\\': return 0x005C;
+    /* R7RS */
+  case '|':  return 0x007C;
   case EOF: 
     lexical_error(port, ctx, 
 		  UC("unexpected end-of-file while reading escape sequence"));
@@ -408,7 +410,7 @@ static SgObject read_symbol_generic(SgPort *port, SgChar initial,
 	}
       }
       lexical_error(port, ctx,
-		    UC("invalid character %c during reading identifier"),
+		    UC("invalid character %U during reading identifier"),
 		    initial);
     } else {
       i = helper(port, ctx, buf, i, initial, table);
@@ -452,7 +454,7 @@ static SgObject read_symbol_generic(SgPort *port, SgChar initial,
 	}
       }
       lexical_error(port, ctx,
-		    UC("invalid character %c during reading identifier"), c);
+		    UC("invalid character %U during reading identifier"), c);
     }
     i = helper(port, ctx, buf, i, c, table);
   }
@@ -482,7 +484,7 @@ static int read_r6rs_symbol_helper(SgPort *port, SgReadContext *ctx,
     }
   }
   lexical_error(port, ctx,
-		UC("invalid character %c while reading identifier"), c);
+		UC("invalid character %U while reading identifier"), c);
   return -1;			/* dummy */
 }
 
@@ -500,7 +502,7 @@ static int read_compat_symbol_helper(SgPort *port, SgReadContext *ctx,
     return i;
   }
   lexical_error(port, ctx,
-		UC("invalid character %c while reading identifier"), c);
+		UC("invalid character %U while reading identifier"), c);
   return -1;			/* dummy */
 }
 
@@ -832,6 +834,26 @@ SgObject read_hash_unquote(SgPort *port, SgChar c,
   return SG_LIST2(SG_SYMBOL_UNSYNTAX, read_expr(port, ctx));  
 }
 
+static SgObject construct_lib_name(SgObject s)
+{
+  SgObject h = SG_NIL, t = SG_NIL;
+  int i, prev;
+  for (i = 0, prev = 0; i < SG_STRING_SIZE(s); i++) {
+    if (SG_STRING_VALUE_AT(s, i) == '/') {
+      SG_APPEND1(h, t, Sg_Intern(Sg_Substring(s, prev, i)));
+      prev = i + 1;
+    }
+  }
+  if (i != prev) {
+    SG_APPEND1(h, t, Sg_Intern(Sg_Substring(s, prev, i)));
+  }
+  return h;
+}
+
+/*
+  TODO: some SRFIs (as far as I know only 105) requires speciall sh-bang
+  it's better to have hook or something.
+ */
 SgObject read_hash_bang(SgPort *port, SgChar c, dispmacro_param *param,
 			SgReadContext *ctx)
 {
@@ -852,22 +874,34 @@ SgObject read_hash_bang(SgPort *port, SgChar c, dispmacro_param *param,
       SgString *tag = SG_SYMBOL(desc)->name;
       if (ustrcmp(tag->value, "r6rs") == 0) {
 	SG_VM_SET_FLAG(Sg_VM(), SG_R6RS_MODE);
+	SG_VM_SET_FLAG(Sg_VM(), SG_NO_OVERWRITE);
 	SG_VM_UNSET_FLAG(Sg_VM(), SG_COMPATIBLE_MODE);
 	Sg_SetCurrentReadTable(Sg_CopyReadTable(&r6rs_read_table));
 	return NULL;
       }
-      if (ustrcmp(tag->value, "compatible") == 0 ||
-	  /* for now it's the same as compatible */
-	  ustrcmp(tag->value, "r7rs") == 0) {
+      if (ustrcmp(tag->value, "r7rs") == 0) {
+	SG_VM_SET_FLAG(Sg_VM(), SG_NO_OVERWRITE);
 	SG_VM_SET_FLAG(Sg_VM(), SG_COMPATIBLE_MODE);
 	SG_VM_UNSET_FLAG(Sg_VM(), SG_R6RS_MODE);
+	Sg_SetCurrentReadTable(Sg_CopyReadTable(&compat_read_table));
+	return NULL;
+      }
+      if (ustrcmp(tag->value, "compatible") == 0) {
+	SG_VM_SET_FLAG(Sg_VM(), SG_COMPATIBLE_MODE);
+	SG_VM_UNSET_FLAG(Sg_VM(), SG_R6RS_MODE);
+	SG_VM_UNSET_FLAG(Sg_VM(), SG_NO_OVERWRITE);
 	Sg_SetCurrentReadTable(Sg_CopyReadTable(&compat_read_table));
 	return NULL;
       }
       if (ustrcmp(tag->value, "core") == 0) {
 	SG_VM_UNSET_FLAG(Sg_VM(), SG_COMPATIBLE_MODE);
 	SG_VM_UNSET_FLAG(Sg_VM(), SG_R6RS_MODE);
+	SG_VM_UNSET_FLAG(Sg_VM(), SG_NO_OVERWRITE);
 	Sg_SetCurrentReadTable(Sg_CopyReadTable(&compat_read_table));
+	return NULL;
+      }
+      if (ustrcmp(tag->value, "no-overwrite") == 0) {
+	SG_VM_SET_FLAG(Sg_VM(), SG_NO_OVERWRITE);
 	return NULL;
       }
       if (ustrcmp(tag->value, "fold-case") == 0) {
@@ -913,6 +947,34 @@ SgObject read_hash_bang(SgPort *port, SgChar c, dispmacro_param *param,
       if (ustrcmp(tag->value, "nobacktrace") == 0) {
 	SgVM *vm = Sg_VM();
 	SG_VM_SET_FLAG(vm, SG_NO_DEBUG_INFO);
+	return NULL;
+      }
+      if (ustrncmp(tag->value, "reader=", 7) == 0) {
+	SgObject name = construct_lib_name(Sg_Substring(tag, 7, -1));
+	SgObject lib = Sg_FindLibrary(name, FALSE);
+	/* should we raise error or not? */
+	if (SG_FALSEP(lib)) {
+	  lexical_error(port, ctx, UC("no library named %S"), name);
+	}
+	if (!SG_FALSEP(SG_LIBRARY_READER(lib))) {
+	  Sg_SetCurrentReader(SG_LIBRARY_READER(lib));
+	}
+	/* to let replaced reader read next expression, otherwise current
+	   reader keep reading the next one.
+	 */
+	return SG_UNDEF;
+      }
+      /* for portability with other implementation */
+      if (ustrncmp(tag->value, "read-macro=", 11) == 0) {
+	SgObject name = construct_lib_name(Sg_Substring(tag, 11, -1));
+	SgObject lib = Sg_FindLibrary(name, FALSE);
+	/* should we raise error or not? */
+	if (SG_FALSEP(lib)) {
+	  lexical_error(port, ctx, UC("no library named %S"), name);
+	}
+	if (SG_LIBRARY_READTABLE(lib)) {
+	  add_read_table(SG_LIBRARY_READTABLE(lib), Sg_CurrentReadTable());
+	}
 	return NULL;
       }
     }
@@ -1160,6 +1222,7 @@ static const struct {
   { "page",       0x000C },
   { "return",     0x000D },
   { "esc",        0x001B },
+  { "escape",     0x001B },
   { "space",      0x0020 },
   { "delete",     0x007F }
 };
@@ -1211,12 +1274,11 @@ SgObject read_hash_equal(SgPort *port, SgChar c, dispmacro_param *param,
   if (param->present) {
     SgObject obj = read_expr(port, ctx);
     intptr_t mark = param->value;
-    if (SG_EQ(obj, SG_EOF)) {
+    if (SG_EOFP(obj)) {
       lexical_error(port, ctx,
 		    UC("unexpected end-of-file while reading tag #%ld="), mark);
     }
-    if (SG_EQ(Sg_HashTableRef(ctx->graph, SG_MAKE_INT(mark), SG_UNDEF),
-	      SG_UNDEF)) {
+    if (SG_UNDEFP(Sg_HashTableRef(ctx->graph, SG_MAKE_INT(mark), SG_UNDEF))) {
       Sg_HashTableSet(ctx->graph, SG_MAKE_INT(mark), obj, 0);
       return obj;
     }
@@ -1259,8 +1321,7 @@ SgObject read_hash_less(SgPort *port, SgChar c, dispmacro_param *param,
       }
       if (SG_LIBRARY_READTABLE(lib)) {
 	add_read_table(SG_LIBRARY_READTABLE(lib), Sg_CurrentReadTable());
-      }
-      
+      }      
     } else {
       lexical_error(port, ctx,
 		    UC("library name required but got %S"), name);
@@ -1295,11 +1356,11 @@ SgObject dispmacro_reader(SgPort *port, SgChar c, SgReadContext *ctx)
     SgChar c2 = Sg_GetcUnsafe(port);
     if (c2 >= '0' && c2 <= '9') {
       param.present = TRUE;
-      param.value = c - '0';
+      param.value = c2 - '0';
       while (1) {
 	c2 = Sg_GetcUnsafe(port);
 	if (c2 < '0' || c2 > '9') break;
-	param.value = param.value * 10 + c - '0';
+	param.value = param.value * 10 + c2 - '0';
 	if (param.value < 0 || param.value > SG_INT_MAX) {
 	  lexical_error(port, ctx,
 			UC("invalid object tag, value out of range"));
@@ -1369,7 +1430,7 @@ SgObject read_expr4(SgPort *port, int flags, SgChar delim, SgReadContext *ctx)
       }
       case CT_ILLEGAL:
 	lexical_error(port, ctx,
-		      UC("invalid character %c during reading identifier"), c);
+		      UC("invalid character %U during reading identifier"), c);
 	break;
       default:
 	goto read_sym_or_num;
@@ -1458,7 +1519,7 @@ SgObject Sg_ReadDelimitedList(SgObject port, SgChar delim, int sharedP)
   SgObject obj;
   SgReadContext ctx = {0};
   ASSERT(SG_PORTP(port));
-  ASSERT(SG_TEXTUAL_PORTP(port));
+
   /* make read context for shared object */
   if (sharedP) {
     ctx.graph = Sg_MakeHashTableSimple(SG_HASH_EQ, 1);
@@ -1577,6 +1638,9 @@ int Sg_ConstantLiteralP(SgObject o)
   if (SG_PAIRP(o)) {
     /* simple check */
     return SG_PAIR(o)->constp;
+  } else if (SG_VECTORP(o)) {
+    /* again simple check */
+    return SG_VECTOR(o)->literalp;
   }
   e = Sg_HashTableRef(obtable, o, SG_UNBOUND);
   if (SG_UNBOUNDP(e)) return FALSE;
@@ -1630,6 +1694,7 @@ int Sg_DelimitedCharP(SgChar c)
     SgReadContext ctx = {0};						\
     SgPort *p;								\
     SgChar c;								\
+    SgObject r;								\
     if (argc != 2) {							\
       Sg_WrongNumberOfArgumentsAtLeastViolation(SG_INTERN(NAME),	\
 						2, argc, SG_NIL);	\
@@ -1646,17 +1711,18 @@ int Sg_DelimitedCharP(SgChar c)
     }									\
     p = SG_PORT(args[0]);						\
     c = SG_CHAR_VALUE(args[1]);						\
-    return (FN)(p, c, &ctx);						\
+    r = (FN)(p, c, &ctx);						\
+    if (r) return r;							\
+    else return SG_UNDEF;						\
   }									\
-  SG_DEFINE_SUBR(SCHEME_OBJ(FN), 2, 0,					\
-		 STUB_NAME(FN), SG_FALSE, NULL)
+  SG_DEFINE_SUBR(SCHEME_OBJ(FN), 2, 0, STUB_NAME(FN), SG_FALSE, NULL)
 
 #define DEFINE_DISPMACRO_STUB(FN, NAME)				\
   static SgObject STUB_NAME(FN)					\
   (SgObject *args, int argc, void *data_)			\
   {								\
     SgReadContext ctx = {0};					\
-    SgObject param_scm;						\
+    SgObject param_scm, r;					\
     SgPort *p;							\
     SgChar c;							\
     dispmacro_param param;					\
@@ -1689,10 +1755,11 @@ int Sg_DelimitedCharP(SgChar c)
 				      param_scm, SG_NIL);	\
       return SG_UNDEF;						\
     }								\
-    return (FN)(p, c, &param, &ctx);				\
+    r = (FN)(p, c, &param, &ctx);				\
+    if (r) return r;						\
+    else return SG_UNDEF;					\
   }								\
-  SG_DEFINE_SUBR(SCHEME_OBJ(FN), 3, 0,				\
-		 STUB_NAME(FN), SG_FALSE, NULL)
+  SG_DEFINE_SUBR(SCHEME_OBJ(FN), 3, 0, STUB_NAME(FN), SG_FALSE, NULL)
 
 DEFINE_MACRO_STUB(read_vertical_bar,   "|-reader");
 DEFINE_MACRO_STUB(read_double_quote,   "\"-reader");
@@ -1739,10 +1806,10 @@ SgObject Sg_GetMacroCharacter(SgChar c, readtable_t *table)
     SgObject term;
     if (r->type == CT_NON_TERM_MACRO) term = SG_TRUE;
     else if (r->type == CT_TERM_MACRO) term = SG_FALSE;
-    else return SG_FALSE;
+    else return Sg_Values2(SG_FALSE, SG_FALSE);
     return Sg_Values2(SG_UNBOUNDP(r->sfunc) ? SG_UNBOUND : r->sfunc, term);
   }
-  return SG_FALSE;
+  return Sg_Values2(SG_FALSE, SG_FALSE);
 }
 
 #define macro_function_item(name) { (name), SG_OBJ(&(SCHEME_OBJ(name))) }
@@ -2046,7 +2113,8 @@ void Sg__InitReader()
   SET_READER_NAME(read_hash_less,       "#<-reader");
   SET_READER_NAME(read_hash_colon,      "#:-reader");
 
-  Sg_SetCurrentReadTable(&compat_read_table);
+  /* the static read table must be used as a template */
+  Sg_SetCurrentReadTable(Sg_CopyReadTable(&compat_read_table));
 }
 
 /*

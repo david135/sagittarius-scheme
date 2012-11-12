@@ -29,7 +29,7 @@
 ;;;  
 
 ;; The API's names are from Gauche
-#<(sagittarius regex)>
+#!read-macro=sagittarius/regex
 (library (util file)
     (export file->list
 	    file->string
@@ -42,11 +42,22 @@
 	    temporary-directory
 	    make-temporary-file
 
-	    find-files)
+	    find-files
+
+	    path-for-each path-map
+	    delete-directory*
+	    create-directory*
+	    copy-directory
+	    build-path*
+
+	    null-device
+	    ;;console-device
+	    )
     (import (rnrs)
 	    (sagittarius)
 	    (sagittarius regex)
 	    (srfi :0)
+	    (srfi :1)
 	    (srfi :13 strings)
 	    (srfi :14 char-set)
 	    (srfi :38)
@@ -70,6 +81,13 @@
     (file->list get-line path))
 
   (define *path-set* (string->char-set "\\/"))
+  (define (path-filename path)
+    (let* ((pos (string-index-right path (cond-expand
+					  (sagittarius.os.windows 
+					   *path-set*)
+					  (else #\/)))))
+      (string-copy path (or (and pos (+ pos 1)) 0))))
+
   (define (decompose-path path)
     (if (looking-at #/[\/\\]$/ path)
 	(values (string-trim-right path path-set) #f #f)
@@ -113,7 +131,7 @@
 	    (windows (build-path (getenv "windir") "Temp"))
 	    (else "/tmp"))))) ;; assume else is posix
   (define temporary-directory (make-parameter %tmp))
-  (define (make-temporary-file prefix)
+  (define (make-temporary-file :optional (prefix "tmp"))
     (define (gen) 
       (string-append prefix (number->string (microsecond) 32)))
     (let loop ((file (gen)))
@@ -121,34 +139,180 @@
 	  (loop (gen))
 	  (values (open-file-output-port file) file))))
 
-  (define (find-files target :key (pattern #f) (all #t) (sort string<=?)
-		      (recursive #t))
-    (define (rec dir)
-      (let loop ((contents (read-directory dir))
-		 (r '()))
-	(if (null? contents)
-	    r
-	    (let* ((content (car contents))
-		   (path (build-path dir content)))
-	      (cond ((looking-at #/^\./ content)
-		     (cond ((file-directory? path) ;; . .. must be ignored
-			    (loop (cdr contents) r))
-			   (all
-			    (loop (cdr contents) (cons path r)))
-			   (else
-			    (loop (cdr contents) r))))
-		    ((file-directory? path)
-		     (if recursive
-			 (loop (cdr contents) (append r (rec path)))
-			 (loop (cdr contents) r)))
-		    (else
-		     (loop (cdr contents)
-			   (if (or (not pattern) 
-				   (looking-at (regex pattern) content))
-			       (cons path r)
-			       r))))))))
+  (define (find-files target :key (physical #t) (pattern #f) (all #t)
+		      (sort string<=?) (recursive #t))
+    (define rx-pattern (cond ((string? pattern) (regex pattern))
+			     ((regex-pattern? pattern) pattern)
+			     (else #f)))
+    (define (check-pattern content)
+      (or (not pattern)
+	  (rx-pattern content)))
+    (define (check path type)
+      (and (not (eq? type 'directory))
+	   (check-pattern (path-filename path))
+	   path))
     (if (file-directory? target)
-	(let ((r (rec target)))
+	(let ((r (filter values (path-map target check
+					  :file-only #t
+					  :physical physical
+					  :all all :recursive recursive))))
 	  (if sort (list-sort sort r) r))
 	'()))
+
+  ;; POSIX's nftw (sort of)
+  ;; always depth
+  ;; when proc returns #f, then it will stop
+  (define (path-for-each path proc :key (physical #t) (file-only #f)
+			 (absolute-path #t) (stop-on-false #f)
+			 (all #t) (recursive #t))
+    (define non-stop? (not stop-on-false))
+    (define (rec path entries)
+      (let loop ((entries entries))
+	(unless (null? entries)
+	  (let* ((entry (car entries))
+		 (abs-path (build-path path entry)))
+	    (cond ((and all (char=? (string-ref entry 0) #\.))
+		   (if (file-directory? abs-path)
+			 ;; ignore '.' and '..'
+			 (loop (cdr entries))
+			 (begin
+			   (proc (if absolute-path abs-path entry) 'file)
+			   (loop (cdr entries)))))
+		  ((file-directory? abs-path)
+		   ;; first do it recursively
+		   (and (or (and (when recursive
+				   (rec abs-path (read-directory abs-path))))
+			    non-stop?)
+			(or file-only
+			    (proc (if absolute-path abs-path entry) 'directory)
+			    non-stop?)
+			(loop (cdr entries))))
+		  ((file-symbolic-link? abs-path)
+		   (and (or (not physical)
+			    (proc (if absolute-path abs-path entry)
+				  'symbolic-link)
+			    non-stop?)
+			(loop (cdr entries))))
+		  (else
+		   (and (or (proc (if absolute-path abs-path entry) 'file)
+			    non-stop?)
+			(loop (cdr entries)))))))))
+    (when (file-exists? path)
+      (cond ((file-directory? path)
+	     (rec path (read-directory path)))
+	    ((and (not file-only) (file-symbolic-link? path))
+	     (proc path 'symbolic-link))
+	    (else
+	     (proc path 'file)))))
+
+  (define (path-map path proc :key (physical #t) (file-only #f)
+		    (absolute-path #t) (all #t) (recursive #t))
+    (define (rec path entries)
+      (let loop ((entries entries) (r '()))
+	(if (null? entries)
+	    r
+	    (let* ((entry (car entries))
+		   (abs-path (build-path path entry)))
+	      (cond ((and all (char=? (string-ref entry 0) #\.))
+		     (if (file-directory? abs-path)
+			 ;; ignore '.' and '..'
+			 (loop (cdr entries) r)
+			 (let ((rp (proc (if absolute-path abs-path entry)
+					 'file)))
+			   (loop (cdr entries) (cons rp r)))))
+		    ((file-directory? abs-path)
+		     ;; first do it recursively
+		     (let ((rp (if recursive
+				   (rec abs-path (read-directory abs-path))
+				   '())))
+		       (if file-only
+			   (loop (cdr entries) (append! r rp))
+			   (let ((pr (proc (if absolute-path abs-path entry)
+					   'directory)))
+			     (loop (cdr entries) (append! (cons pr r) rp))))))
+		    ((file-symbolic-link? abs-path)
+		     (if physical
+			 (loop (cdr entries) r)
+			 (let ((rp (proc (if absolute-path abs-path entry)
+					 'symbolic-link)))
+			   (loop (cdr entries) (cons rp r)))))
+		    (else
+		     (let ((rp (proc (if absolute-path abs-path entry)
+				     'file)))
+		       (loop (cdr entries) (cons rp r)))))))))
+    (if (file-exists? path)
+	(cond ((file-directory? path)
+	       (rec path (read-directory path)))
+	      ((and (not file-only) (file-symbolic-link? path))
+	       (list (proc path 'symbolic-link)))
+	      (else
+	       (list (proc path 'file))))
+	'()))
+  ;; rm -rf
+  (define (delete-directory* path)
+    ;; delete-directory can handle file as well
+    (define (remove path type) (delete-directory path))
+    (path-for-each path remove)
+    ;; delete the top most
+    (delete-directory path))
+  ;; mkdir -p
+  (define (create-directory* path)
+    (define (rec p)
+      (let-values (((dir base ext) (decompose-path p)))
+	(cond ((file-exists? p)
+	       (unless (file-directory? p)
+		 (error 'create-directory*
+			"non-directory is found during creating a directory"
+			base path)))
+	      (dir
+	       (rec dir)
+	       (unless (file-writable? dir)
+		 (error 'create-directory*
+			"directory unwritable during creating a directory"
+			dir path))
+	       (unless (equal? base ".") (create-directory p)))
+	      (else
+	       (unless (equal? base ".") (create-directory p))))))
+    ;; some platform complains the last "/"
+    (rec (string-trim-right path *path-set*)))
+
+  ;; xcopy ... sort of
+  (define (copy-directory base-path dst
+			  :key (excludes '())
+			  :allow-other-keys opt)
+    (apply path-for-each
+	   base-path
+	   (lambda (opath type)
+	     (and-let* (( (not (member opath excludes string-contains)) )
+			(path (string-copy opath 
+					   (+ (string-length base-path) 1))))
+	       (if (eq? type 'directory)
+		   (create-directory* (build-path dst path))
+		   (let-values (((dir base ext) (decompose-path path)))
+		     (create-directory* (build-path dst dir))
+		     (copy-file opath (build-path dst path) #t)))))
+	   opt))
+
+  (define (build-path* . paths)
+    (let ((len (length paths)))
+      (case len
+	;; treat trivial cases
+	((0) "")			; should this case raise an error?
+	((1) (car paths))
+	((2) (build-path (car paths) (cadr paths)))
+	(else
+	 (receive (f l) (split-at paths (- len 1))
+	   (let ((r (fold-right build-path "" f)))
+	     (build-path r (car l))))))))
+
+  (define (null-device)
+    (cond-expand
+     (windows "NUL")
+     (else "/dev/null")))
+
+;;   (define (console-device)
+;;     (cond-expand
+;;      (windows "CON")
+;;      (else "/dev/tty")))
+
 )

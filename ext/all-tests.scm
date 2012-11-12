@@ -9,9 +9,9 @@
  (else
   (add-dynamic-load-path "../build")))
 
-(import (rnrs) (util file) (core errors))
+(import (rnrs) (util file) (core errors) (srfi :39 parameters)
+	(srfi :64 testing))
 
-(import (rnrs))
 (define-constant resource-file ".sagittarius-exttestrc")
 (define search-path #f)
 (if (file-exists? resource-file)
@@ -25,13 +25,11 @@
 	      (add-load-path path))))))
     ;; to avoid to use installed time library. for ext/thread
     (add-load-path "./time"))
-
 (let* ((files (find-files (or search-path ".") :pattern "^test.scm"))
        (thunks (map (lambda (file) (lambda () (load file))) files)))
   (for-each (lambda (file thunk)
-	      (print file)
-	      (guard (e (#t
-			 (print (describe-condition e))))
-		(thunk))
+	      (parameterize ((test-runner-current (test-runner-create)))
+		(guard (e (#t (print (describe-condition e))))
+		  (thunk)))
 	      (newline))
 	    files thunks))

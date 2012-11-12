@@ -97,6 +97,27 @@ Moreover, if you do not use @var{rename}, it always makes it non-hygine.
 
 }
 
+@subsubsection{Arithmetic operations}
+
+@define[Function]{@name{+.} @args{z @dots{}}}
+@define[Function]{@name{*.} @args{z @dots{}}}
+@define[Function]{@name{-.} @args{z @dots{}}}
+@define[Function]{@name{-.} @args{z1 z2 @dots{}}}
+@define[Function]{@name{/.} @args{z @dots{}}}
+@define[Function]{@name{/.} @args{z1 z2 @dots{}}}
+@desc{The same as @code{+}, @code{*}, @code{-} and @code{/}. The difference is
+these procedures converts given arguments inexact number.}
+
+@define[Function]{@name{mod-inverse} @args{x m}}
+@desc{@var{x} and @var{m} must be exact integer.
+
+Returns @code{@var{x} ^ -1 mod @var{m}}}
+
+@define[Function]{@name{mod-expt} @args{x e m}}
+@desc{@var{x}, @var{e} and @var{m} must be exact integer.
+
+Returns @code{@var{x} ^ @var{e} mod @var{m}}}
+
 @subsubsection{File system operations}
 
 @define[Function]{@name{file-size-in-bytes} @args{filename}}
@@ -146,6 +167,16 @@ If @var{new-filename} exists, it overwrite the existing file.
 not exist, it returns #f.
 }
 
+@define[Function]{@name{copy-file} @args{src dst :optional overwrite}}
+@desc{@var{src} and @var{dst} must be string and indicating existing file path.
+
+Copies given @var{src} file to @var{dst} and returns #t if it's copied otherwise
+#t.
+
+If optional argument @var{overwrite} is #t then it will over write the file even
+if it exists.
+}
+
 @define[Function]{@name{current-directory} @args{:optional path}}
 @desc{Returns current working directory.
 
@@ -155,6 +186,13 @@ current working directory to @var{path} and returns unspecified value.
 
 @define[Function]{@name{set-current-directory} @args{path}}
 @desc{Sets current working directory to @var{path}.}
+
+@define[Function]{@name{build-path} @args{path1 path2}}
+@desc{@var{path1} and @var{path2} must be string.
+
+Concatenate given parameter with platform dependent path separator.
+}
+
 
 @subsubsection{Hashtables}
 
@@ -350,9 +388,8 @@ custom codecs.
 @subsubsection{Keywords}
 
 Sagittarius has keyword objects which starts with @code{':'}. It has almost the
-same feature as symbol, however it can not be bounded with any values. It can be
-used when variable is bounded by @code{define-with-key} (see
-@secref["lib.sagittarius.control"]{@code{(sagittarius control)}}library).
+same feature as symbol, however it can not be bounded with any values. The 
+keyword objects are self quoting so users don't have to put @code{'} explicitly.
 
 @define[Function]{@name{make-keyword} @args{symbol}}
 @desc{Creates a new keyword from @var{symbol}.}
@@ -360,6 +397,31 @@ used when variable is bounded by @code{define-with-key} (see
 @define[Function]{@name{keyword?} @args{obj}}
 @desc{Returns #t if @var{obj} is keyword, otherwise #f.
 }
+
+@define[Function]{@name{keyword->symbol} @args{keyword}}
+@desc{Returns a symbol representation of given keyword @var{keyword}.}
+
+@define[Function]{@name{keyword->string} @args{keyword}}
+@desc{Returns a string representation of given keyword @var{keyword}.}
+
+@define[Function]{@name{get-keyword} @args{keyword list :optional fallback}}
+@desc{Returns the element after given @var{keyword} from given @var{list}.
+
+The elements count of the @var{list} should be even number, otherwise the
+procedure might raise @code{&error} when @var{keyword} is not found in
+@var{list}.
+
+If @var{fallback} is given and the procedure could not find the @var{keyword}
+from the @var{list}, the @var{fallback} will be return. Otherwise it raises
+@code{&error}.
+
+@snipet[=> d]{(get-keyword :key '(a b c :key d))}
+@snipet[=> &error]{(get-keyword :key '(a b c d e))}
+@snipet[=> &error]{(get-keyword :key '(a b c d e) 'fallback)}
+@snipet[=> fallback]{(get-keyword :key '(a b c d e f) 'fallback)}
+
+}
+
 
 @subsubsection{Weak Pointer}
 A weak pointer is a reference to an object that doesn’t prevent the object from
@@ -400,9 +462,32 @@ argument @var{start} is given, conversion starts with index @var{start}. If
 optional argument @var{end} is given, convertion ends by index @var{end}.
 }
 
-@define[Function]{@name{integer->bytevector} @args{ei}}
+@define[Function]{@name{integer->bytevector} @args{ei :optional size}}
 @desc{@var{Ei} must be exact integer. Converts exact integer @var{ei} to a
-bytevector.}
+bytevector.
+
+If optional argument @var{size} is given, then the procedure returns @var{size}
+size bytevector.
+
+NOTE: The conversion is processed from right most byte so if the @var{size} is
+smaller than given @var{ei} bytes, then the rest of left bytes will be dropped.
+
+@snipet[=> "#vu8(#x00 #x12 #x34 #x56 #x78)"]{(integer->bytevector #x12345678 5)}
+@snipet[=> "#vu8(#x34 #x56 #x78)"]{(integer->bytevector #x12345678 3)}
+}
+
+@define[Function]{@name{bytevector-append} @args{bvs @dots{}}}
+@desc{Returns a newly allocated bytevector that contains all elements in
+order from the subsequent locations in @var{bvs @dots{}}.
+}
+
+@define[Function]{@name{bytevector-concatenate} @args{list-of-bytevectors}}
+@desc{Appends each bytevectors in @var{list-of-bytevectors}. This is
+equivalent to:
+
+@snipet{(apply bytevector-append @var{list-of-bytevectors})}
+}
+
 
 @subsubsection{List operations}
 
@@ -431,10 +516,77 @@ reverse order. The cells of list may be reused to construct the returned list.
 @subsubsection{Vector operations}
 
 @define[Function]{@name{vector-copy} @args{vector :optional start end fill}}
-@desc{Copies a vector @var{vector}. Optional @var{start} and @var{end} arguments
-can be used to limit the range of @var{vector} to be copied. If the range
-specified by @var{start} and @var{end} falls outside of the original vector, the
-@var{fill} value is used to fill the result vector.
+@desc{[SRFI-43] Copies a vector @var{vector}. Optional @var{start} and @var{end}
+arguments can be used to limit the range of @var{vector} to be copied. If the
+range specified by @var{start} and @var{end} falls outside of the original
+vector, the @var{fill} value is used to fill the result vector.
+}
+
+@define[Function]{@name{vector-append} @args{vector @dots{}}}
+@desc{[SRFI-43] Returns a newly allocated vector that contains all elements in
+order from the subsequent locations in @var{vector @dots{}}.
+}
+
+@define[Function]{@name{vector-concatenate} @args{list-of-vectors}}
+@desc{[SRFI-43] Appends each vectors in @var{list-of-vectors}. This is
+equivalent to:
+
+@snipet{(apply vector-append @var{list-of-vectors})}
+}
+
+@define[Function]{@name{vector-reverse} @args{vector :optional start end}}
+@define[Function]{@name{vector-reverse!} @args{vector :optional start end}}
+@desc{[SRFI-43] Reverse the given @var{vector}'s elements.
+
+The second form reverses the given @var{vector} destructively.
+
+Optional arguments @var{start} and @var{end} must be non negative integer
+if it's given. And it restricts the range of the target elements.
+}
+
+@subsubsection{String operations}
+
+@define[Function]{@name{string-scan} @args{string item :optional return}}
+@desc{Scan @var{item} (either a string or a character) in @var{string}.
+
+The @var{return} argument specified what value should be returned when
+@var{item} is found in @var{string}. It must be one of the following symbols;
+
+@dl-list{
+@dl-item[@code{index}]{
+	Returns the index in @var{string} if @var{item} is found, or @code{#f}.
+	This is the default behaviour.
+}
+@dl-item[@code{before}]{
+	Returns a substring of @var{string} before @var{item}, or @code{#f} if
+	@var{item} is not found.
+}
+@dl-item[@code{after}]{
+	Returns a substring of @var{string} after @var{item}, or @code{#f} if
+	@var{item} is not found.
+}
+@dl-item[@code{before*}]{
+	Returns a substring of @var{string} before @var{item}, and the substring
+	after it. If @var{item} is not found then return @code{(values #f #f)}.
+}
+@dl-item[@code{after*}]{
+	Returns a substring of @var{string} up to the end of @var{item}, and the
+	rest. after it. If @var{item} is not found then return 
+	@code{(values #f #f)}.
+}
+@dl-item[@code{both}]{
+	Returns a substring of @var{string} before @var{item} and after
+	 @var{item}. If @var{item} is not found, return @code{(values #f #f)}.
+}
+}
+}
+
+
+@define[Function]{@name{string-concatenate} @args{list-of-strings}}
+@desc{[SRFI-13] Appends each strings in @var{list-of-strings}. This is
+equivalent to:
+
+@snipet{(apply string-append @var{list-of-strings})}
 }
 
 @subsubsection{Debugging aid}
@@ -443,10 +595,13 @@ specified by @var{start} and @var{end} falls outside of the original vector, the
 @desc{Disassembles the compiled body of @var{closure} and print it.
 }
 
+@include-section["sagittarius/control.scrbl"]
+@include-section["sagittarius/ffi.scrbl"]
+@include-section["sagittarius/io.scrbl"]
+@include-section["sagittarius/mop.scrbl"]
+@include-section["sagittarius/object.scrbl"]
+@include-section["sagittarius/process.scrbl"]
+@include-section["sagittarius/reader.scrbl"]
+@include-section["sagittarius/record.scrbl"]
 @include-section["sagittarius/regex.scrbl"]
 @include-section["sagittarius/socket.scrbl"]
-@include-section["sagittarius/control.scrbl"]
-@include-section["sagittarius/record.scrbl"]
-@include-section["sagittarius/reader.scrbl"]
-@include-section["sagittarius/process.scrbl"]
-@include-section["sagittarius/mop.scrbl"]

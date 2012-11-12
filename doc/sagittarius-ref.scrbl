@@ -1,7 +1,7 @@
 @; -*- mode:scribble; coding: utf-8 -*-
 @title{Sagittarius Users' Reference}
 
-This document is a manual for Sagittarius, a Mostly R6RS Scheme implementation.
+This document is a manual for Sagittarius, an R6RS Scheme implementation.
 This is for version @eval{(sagittarius-version)}.
 
 @table-of-contents[:id "table-of-contents"]
@@ -39,11 +39,11 @@ what are the non conformed points.
 @dl-list[]{
 @dl-item["Reader"]{
  Basically reader has 2 modes. One is R6RS mode and other one is compatible
- mode. Although, user can modify reader with reader macro. For detail, see
+ mode. Although, user can modify reader with reader macro. For more details, see
  @secref["lib.sagittarius.reader.predefined"]{Predefined reader macros}.
 }
 @dl-item["Macro expansion"]{
- On R6RS requires explicit macro expansion phase, however in Sagittarius we do
+ On R6RS requires explicit macro expansion phase, however Sagittarius does
  not have it. A macro is expanded when programs are compiled.}
 @dl-item["Unbound symbol"]{
  If you write unbound symbol in your code, however Sagittarius won't raise
@@ -55,10 +55,7 @@ what are the non conformed points.
  Sagittarius does not require toplevel expression which is specified in R6RS.}
 @dl-item["Miscellaneous"]{
  Redefinition of exported values are allowed. The value which imported at the
- last will be used.
-
- Almost everything is first class object. The syntax keyword @code{export} is
- not.}
+ last will be used.}
 }
 
 @subsection{Notations}
@@ -81,6 +78,9 @@ will appear in this manual.
 @dl-item["Library"]{A library}
 @dl-item["Condition Type"]{A condition type}
 @dl-item["Reader Macro"]{A reader macro}
+@dl-item["Class"]{A CLOS class}
+@dl-item["Generic"]{A generic function}
+@dl-item["Method"]{A method}
 ]
 
 For functions, syntaxes, or macros, the the entry may be followed by one or more
@@ -161,6 +161,68 @@ any command-line option processing and error handling.
 	      (cdr args)))
   0)
 }
+@subsection{Working on REPL}
+
+If @code{sash} does not get any script file to process, then it will go in to
+REPL (read-eval-print-loop). For developers' convenience, REPL imports some
+libraries by default such as @code{(rnrs)}.
+
+If @code{.sashrc} file is located in the directory indicated @code{HOME} or
+@code{USERPROFILE} environment variable, then REPL reads it before evaluating
+user input. So developer can pre-load some more libraries, instead of typing
+each time.
+
+NOTE: @code{.sashrc} is only for REPL, it is developers duty to load all
+libraries on script file.
+
+@subsection{Writing a library}
+
+Sagittarius provides 2 styles to write a library, one is R6RS style and other
+one is R7RS style. Both styles are processed the same and users can use it
+without losing code portability.
+
+Following example is written in R6RS style, for the detail of @code{library}
+syntax please see the R6RS document described in bellow sections.
+@codeblock{
+(library (foo)
+  (export bar)
+  (import (rnrs))
+
+ (define bar 'bar)
+)
+}
+The library named @code{(foo)} must be saved the file named @code{foo.scm},
+@code{foo.ss} or @code{foo.sls} (I use @code{.scm} for all examples) and
+located on the loading path, the value is returned by calling
+@code{add-load-path} with 0 length string.
+
+If you want to write portable code, then you can write implementation specific
+code separately using @code{.sagittarius.scm}, @code{.sagittarius.ss} or
+@code{.sagittarius.sls} extensions.
+
+If you don't want to share a library but only used in specific one, you can
+write both in one file and name the file you want to show. For example;
+@codeblock{
+(library (not showing)
+  ;; exports all internal use procedures
+  (export ...)
+  (import (rnrs))
+;; write procedures
+...
+)
+
+(library (shared)
+  (export shared-procedure ...)
+  (import (rnrs) (not showing))
+;; write shared procedures here
+)
+}
+Above script must be saved the file named @code{shared.scm}. The order of
+libraries are important. Top most dependency must be the first and next is
+second most, so on.
+
+Note: This style can hide some private procedures however if you want to write
+portable codes some implementation do not allow you to write this style.
 
 @include-section["r6rs.scrbl"]
 @include-section["r7rs.scrbl"]
@@ -169,7 +231,6 @@ any command-line option processing and error handling.
 @include-section["utils.scrbl"]
 @include-section["ported.scrbl"]
 @include-section["srfi.scrbl"]
-
 @section[:appendix "A" :tag "index"]{Index}
 
 @index-table[:id "index-table"]

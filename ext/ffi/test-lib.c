@@ -27,39 +27,39 @@ EXPORT int add(int x, int y)
   return x + y;
 }
 
-static void quicksort_(uintptr_t base,const size_t num,const size_t size
-    ,void *temp,int (*compare)(const void *,const void *))
+static void quicksort_(uintptr_t base,const size_t num,const size_t size,
+		       void *temp,int (*compare)(const void *,const void *))
 {
-	size_t pivot = 0,first2last = 0,last2first = num-1;
-	while(pivot+1 != num && !compare(base+size*pivot,base+size*(pivot+1))){
-		pivot++;
-	}
-	if(pivot+1 == num){
-		return;
-	}
-	if(0 > compare(base+size*pivot,base+size*(pivot+1))){
-		pivot++;
-	}
-	while(first2last < last2first){
-		while(0 < compare(base+size*pivot,base+size*first2last)
-		    && first2last != num-1){
-			first2last++;
-		}
-		while(0 >= compare(base+size*pivot,base+size*last2first)
-		    && last2first){
-			last2first--;
-		}
-		if(first2last < last2first){
-			if(pivot == first2last || pivot == last2first){
-				pivot = pivot^last2first^first2last;
-			}
-			memcpy(temp,base+size*first2last,size);
-			memcpy(base+size*first2last,base+size*last2first,size);
-			memcpy(base+size*last2first,temp,size);
-		}
-	}
-	quicksort_(base,first2last,size,temp,compare);
-	quicksort_(base+size*first2last,num-first2last,size,temp,compare);
+  size_t pivot = 0,first2last = 0,last2first = num-1;
+  while(pivot+1 != num && !compare(base+size*pivot,base+size*(pivot+1))){
+    pivot++;
+  }
+  if(pivot+1 == num){
+    return;
+  }
+  if(0 > compare(base+size*pivot,base+size*(pivot+1))){
+    pivot++;
+  }
+  while(first2last < last2first){
+    while(0 < compare(base+size*pivot,base+size*first2last)
+	  && first2last != num-1){
+      first2last++;
+    }
+    while(0 >= compare(base+size*pivot,base+size*last2first)
+	  && last2first){
+      last2first--;
+    }
+    if(first2last < last2first){
+      if(pivot == first2last || pivot == last2first){
+	pivot = pivot^last2first^first2last;
+      }
+      memcpy(temp,base+size*first2last,size);
+      memcpy(base+size*first2last,base+size*last2first,size);
+      memcpy(base+size*last2first,temp,size);
+    }
+  }
+  quicksort_(base,first2last,size,temp,compare);
+  quicksort_(base+size*first2last,num-first2last,size,temp,compare);
 }
 
 EXPORT int quicksort(void *base, const size_t num, const size_t size,
@@ -96,6 +96,23 @@ EXPORT void store_data(struct data_to_store *storage)
   storage->inner.str = "message from C";
 }
 
+EXPORT void address_passing(char **s)
+{
+  (*s)[0] = 'a';
+}
+
+EXPORT void address_passing_string(char **s)
+{
+  *s = (char *)malloc(6);
+  strncpy(*s, "hello", 5);
+  (*s)[5] = 0;
+}
+
+EXPORT void address_passing_free(char **s)
+{
+  free(*s);
+}
+
 
 int main(void)
 {
@@ -110,6 +127,14 @@ int main(void)
   while(counter != 8){
     printf("%d ",array[counter]);
     counter++;
+  }
+  puts("\n");
+  {
+    void *p = malloc(sizeof(char));
+    void *ap = &p;
+    address_passing((char **)ap);
+    printf("%c\n", ((char *)p)[0]);
+    free(p);
   }
 
   return 0;

@@ -76,14 +76,14 @@ SG_CDECL_BEGIN
 SG_EXTERN SgObject Sg_MakeStringC(const char *value);
 SG_EXTERN SgObject Sg_MakeString(const SgChar *value, SgStringType flag);
 SG_EXTERN SgObject Sg_MakeStringEx(const SgChar *value, SgStringType flag,
-				   size_t length);
+				   int length);
 
-SG_EXTERN SgObject Sg_ReserveString(size_t size, SgChar fill);
+SG_EXTERN SgObject Sg_ReserveString(int size, SgChar fill);
 /* this is for get-string-n related not for c use */
 SG_EXTERN SgObject Sg_MakeEmptyString();
 
 SG_EXTERN SgObject Sg_StringToList(SgString *s, int start, int end);
-SG_EXTERN SgObject Sg_ListToString(SgObject obj);
+SG_EXTERN SgObject Sg_ListToString(SgObject obj, int start, int end);
 
 /* compare */
 SG_EXTERN int 	   Sg_StringEqual(SgString *s1, SgString *s2);
@@ -99,6 +99,9 @@ SG_EXTERN SgChar   Sg_StringRef(SgString *s, int k);
 /* search */
 SG_EXTERN SgObject Sg_StringScan(SgString *s1, SgString *s2, int retmode);
 SG_EXTERN SgObject Sg_StringScanChar(SgString *s1, SgChar ch, int retmode);
+/* split */
+SG_EXTERN SgObject Sg_StringSplitChar(SgString *s1, SgChar ch);
+
 /* modify */
 SG_EXTERN SgObject Sg_Substring(SgString *x, int start, int end);
 SG_EXTERN void     Sg_StringSet(SgString *s, int k, SgChar c);

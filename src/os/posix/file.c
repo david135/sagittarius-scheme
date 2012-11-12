@@ -37,6 +37,10 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <limits.h>
+#include "sagittarius/config.h"
+#ifdef HAVE_SYS_MMAN_H
+# include <sys/mman.h>
+#endif
 #define LIBSAGITTARIUS_BODY
 #include "sagittarius/file.h"
 #include "sagittarius/unicode.h"
@@ -286,6 +290,104 @@ int Sg_DeleteFile(SgString *path)
   return remove(Sg_Utf32sToUtf8s(path));
 }
 
+int Sg_CopyFile(SgString *src, SgString *dst, int overwriteP)
+{
+#define check_file_exists					\
+  do {								\
+    if (Sg_FileExistP(dst) && !overwriteP) return FALSE;	\
+  } while (0)							\
+
+  int fps, fpd;
+  struct stat st;
+  const char *source = Sg_Utf32sToUtf8s(src), *dest = Sg_Utf32sToUtf8s(dst);
+#ifdef HAVE_MMAP
+  void *bufs, *bufd;
+
+  check_file_exists;
+  if((fps = open(source, O_RDONLY)) == -1) {
+    Sg_IOError(-1, SG_INTERN("copy-file"),
+	       SG_MAKE_STRING("failed to open src file"),
+	       SG_FALSE, dst);
+    return FALSE;		/* dummy */
+  }
+  if((fpd = open(dest, O_RDWR | O_CREAT | O_TRUNC, 0644)) == -1) {
+    close(fps);
+    Sg_IOError(-1, SG_INTERN("copy-file"),
+	       SG_MAKE_STRING("failed to open dst file"),
+	       SG_FALSE, dst);
+    return FALSE;		/* dummy */
+  }
+  if(fstat(fps, &st) == -1) {
+    close(fpd);
+    close(fps);
+    Sg_Error(UC("failed to fstat"));
+    return FALSE;
+  }
+  if(pwrite(fpd, "", 1, st.st_size - 1) != 1) {
+    close(fpd);
+    close(fps);
+    Sg_IOError(-1, SG_INTERN("copy-file"),
+	       SG_MAKE_STRING("failed to create dst buffer"),
+	       SG_FALSE, dst);
+    return FALSE;		/* dummy */
+  }
+  if((bufs=mmap(0, st.st_size, PROT_READ, MAP_SHARED, fps, 0)) == MAP_FAILED) {
+    close(fpd);
+    close(fps);
+    Sg_Error(UC("failed to mmap (src)"));
+    return FALSE;		/* dummy */
+  }
+  if((bufd=mmap(0, st.st_size, PROT_WRITE, MAP_SHARED, fpd, 0)) == MAP_FAILED) {
+    close(fpd);
+    close(fps);
+    Sg_Error(UC("failed to mmap (dst)"));
+    return FALSE;		/* dummy */
+  }
+
+  memcpy(bufd, bufs, st.st_size);
+
+  munmap(bufd, st.st_size);
+  munmap(bufs, st.st_size);
+
+#else
+#define BSIZE 8000
+  ssize_t bytes;
+  char buffer[BSIZE];
+
+  check_file_exists;
+  if((fps = open(source, O_RDONLY)) == -1) {
+    Sg_IOError(-1, SG_INTERN("copy-file"),
+	       SG_MAKE_STRING("failed to open src file"),
+	       SG_FALSE, dst);
+    return FALSE;		/* dummy */
+  }
+  if((fpd = open(dest, O_WRONLY | O_CREAT | O_TRUNC, 0644)) == -1) {
+    close(fps);
+    Sg_IOError(-1, SG_INTERN("copy-file"),
+	       SG_MAKE_STRING("failed to open dst file"),
+	       SG_FALSE, dst);
+    return FALSE;		/* dummy */
+  }
+  if(fstat(fps, &st) == -1) {
+    close(fpd);
+    close(fps);
+    Sg_Error(UC("failed to fstat"));
+    return FALSE;
+  }
+
+  while((bytes = read(fps, buffer, BSIZE)) > 0)
+    write(fpd, buffer, bytes);
+
+#undef BSIZE
+#endif
+  Sg_ChangeFileMode(dst, st.st_mode);
+  chown(dest, st.st_uid, st.st_gid);
+
+  close(fpd);
+  close(fps);
+  return TRUE;
+}
+
 /* Originally from Mosh start */
 int Sg_FileWritableP(SgString *path)
 {
@@ -309,7 +411,7 @@ int Sg_FileRegularP(SgString *path)
 int Sg_FileSymbolicLinkP(SgString *path)
 {
   struct stat st;
-  if (stat(Sg_Utf32sToUtf8s(path), &st) == 0) {
+  if (lstat(Sg_Utf32sToUtf8s(path), &st) == 0) {
     return S_ISLNK(st.st_mode);
   }
   return FALSE;
@@ -503,6 +605,27 @@ SgObject Sg_AbsolutePath(SgString *path)
   }
   return SG_FALSE;
 }
+
+SgObject Sg_InstalledDirectory()
+{
+  /* On POSIX environment, I don't think there are somebody interested in this
+     path. So just return #f */
+  return SG_FALSE;
+}
+
+int Sg_CopyAccessControl(SgString *src, SgString *dst)
+{
+  struct stat st;
+  const char *source = Sg_Utf32sToUtf8s(src), *dest = Sg_Utf32sToUtf8s(dst);
+  if (stat(source, &st) == 0) {
+    chmod(dest, st.st_mode);
+    chown(dest, st.st_uid, st.st_gid);
+  }
+  /* TODO should this be error? */
+  return FALSE;
+}
+
+
 /*
   end of file
   Local Variables:

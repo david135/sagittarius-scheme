@@ -53,8 +53,11 @@ struct SgProcedureRec
   SG_INSTANCE_HEADER;
   unsigned int required : 16;
   unsigned int optional : 8;
-  SgProcedureType type;
+  unsigned int type     : 3;
+  unsigned int locked   : 1;
+  unsigned int reserved : 4;	/* padding, for future extension. */
   SgObject     name;
+  SgObject     setter;		/* not supported yet. */
   SgObject     inliner;		/* #f, or instruction */
 };
 
@@ -66,16 +69,19 @@ struct SgProcedureRec
 #define SG_PROCEDURE_TYPE(obj)     SG_PROCEDURE(obj)->type
 #define SG_PROCEDURE_NAME(obj)     SG_PROCEDURE(obj)->name
 #define SG_PROCEDURE_INLINER(obj)  SG_PROCEDURE(obj)->inliner
+#define SG_PROCEDURE_SETTER(obj)   SG_PROCEDURE(obj)->setter
 
 #define SG_PROCEDURE_INIT(obj, req, opt, typ, name)	\
   SG_PROCEDURE_REQUIRED(obj) = (req),			\
   SG_PROCEDURE_OPTIONAL(obj) = (opt),			\
   SG_PROCEDURE_TYPE(obj) = (typ),			\
   SG_PROCEDURE_NAME(obj) = (name),			\
-  SG_PROCEDURE_INLINER(obj) = SG_FALSE			\
+  SG_PROCEDURE(obj)->locked = FALSE,			\
+  SG_PROCEDURE_INLINER(obj) = SG_FALSE,			\
+  SG_PROCEDURE_SETTER(obj) = SG_FALSE
 
 #define SG__PROCEDURE_INITIALIZER(klass, req, opt, type, name, inliner)	\
-  { {(klass)}, (req), (opt), (type), (name), (inliner) }
+  { {(klass)}, (req), (opt), (type), FALSE, 0, (name), SG_FALSE, (inliner) }
 
 /* This is just container for procedure */
 struct SgSubrRec
@@ -83,21 +89,20 @@ struct SgSubrRec
   SgProcedure  common;
   SgSubrProc  *func;
   void        *data;
-  SgWord       returnCode[1];
 };
 
-#define SG_SUBR(obj)      	 ((SgSubr*)(obj))
-#define SG_SUBRP(obj)     	 (SG_PROCEDUREP(obj) && SG_PROCEDURE(obj)->type == SG_PROC_SUBR)
-#define SG_SUBR_FUNC(obj) 	 (SG_SUBR(obj)->func)
-#define SG_SUBR_DATA(obj) 	 (SG_SUBR(obj)->data)
-#define SG_SUBR_RETURN_CODE(obj) (SG_SUBR(obj)->returnCode)
+#define SG_SUBR(obj)  ((SgSubr*)(obj))
+#define SG_SUBRP(obj)							\
+  (SG_PROCEDUREP(obj) && SG_PROCEDURE_TYPE(obj) == SG_PROC_SUBR)
+#define SG_SUBR_FUNC(obj) (SG_SUBR(obj)->func)
+#define SG_SUBR_DATA(obj) (SG_SUBR(obj)->data)
 
 #define SG__DEFINE_SUBR_INT(cvar, req, opt, func, inliner, data)	\
   SgSubr cvar = {							\
     SG__PROCEDURE_INITIALIZER(SG_CLASS_STATIC_TAG(Sg_ProcedureClass),	\
 			      req, opt, SG_PROC_SUBR,			\
 			      SG_FALSE, inliner),			\
-    (func), (data), {FALSE}						\
+    (func), (data)							\
   }
 
 #define SG_DEFINE_SUBR(cvar, req, opt, func, inliner, data)	\
@@ -113,8 +118,13 @@ struct SgSubrRec
 
 SG_CDECL_BEGIN
 
-SG_EXTERN SgObject Sg_MakeSubr(SgSubrProc proc, void *data, int required, int optional, SgObject info);
+SG_EXTERN SgObject Sg_MakeSubr(SgSubrProc proc, void *data, int required,
+			       int optional, SgObject info);
 SG_EXTERN SgObject Sg_NullProc();
+SG_EXTERN SgObject Sg_SetterSet(SgProcedure *proc, SgProcedure *setter,
+				int lock);
+SG_EXTERN SgObject Sg_Setter(SgObject proc);
+SG_EXTERN int      Sg_HasSetter(SgObject proc);
 
 SG_CDECL_END
 

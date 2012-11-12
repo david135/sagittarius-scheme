@@ -68,9 +68,8 @@ typedef struct FD_tag
 
 static int64_t win_read(SgObject self, uint8_t *buf, int64_t size)
 {
-  DWORD readSize;
+  DWORD readSize = 0;
   int isOK;
-  SgFile *file = SG_FILE(self);
   /* check console */
   if (Sg_IsUTF16Console(self)) {
     ASSERT(size == 1);
@@ -80,7 +79,7 @@ static int64_t win_read(SgObject self, uint8_t *buf, int64_t size)
       *buf = (uint8_t)(SG_FD(self)->prevChar);
       SG_FD(self)->prevChar = -1;
     } else {
-      wchar_t wc;
+      wchar_t wc = 0;
       isOK = ReadConsoleW(SG_FD(self)->desc, &wc, 1, &readSize, NULL);
       if (isOK) {
 	readSize = 1;
@@ -89,7 +88,7 @@ static int64_t win_read(SgObject self, uint8_t *buf, int64_t size)
       }
     }
   } else {
-    isOK = ReadFile(SG_FD(file)->desc, buf, size, &readSize, NULL);
+    isOK = ReadFile(SG_FD(self)->desc, buf, (DWORD)size, &readSize, NULL);
     if (!isOK) {
       DWORD err = GetLastError();
       switch (err) {
@@ -98,7 +97,7 @@ static int64_t win_read(SgObject self, uint8_t *buf, int64_t size)
       }
     }
   }
-  setLastError(file);
+  setLastError(SG_FILE(self));
   if (isOK) {
     return readSize;
   } else {
@@ -108,7 +107,7 @@ static int64_t win_read(SgObject self, uint8_t *buf, int64_t size)
 
 static int64_t win_write(SgObject self, uint8_t *buf, int64_t size)
 {
-  DWORD writeSize;
+  DWORD writeSize = 0;
   int isOK;
   SgFile *file = SG_FILE(self);
   /* check console */
@@ -117,25 +116,27 @@ static int64_t win_write(SgObject self, uint8_t *buf, int64_t size)
     unsigned int destSize = 0;
     uint8_t *dest = NULL;
     if ((destSize = WideCharToMultiByte(GetConsoleOutputCP(), 0,
-					(const wchar_t *)buf, size / 2, 
+					(const wchar_t *)buf, 
+					(DWORD)(size / 2), 
 					(LPSTR)NULL, 0, NULL, NULL)) == 0) {
       Sg_IOWriteError(SG_INTERN("write"), Sg_GetLastErrorMessage(), SG_UNDEF);
     }
     dest = SG_NEW_ATOMIC2(uint8_t *, destSize + 1);
     if (WideCharToMultiByte(GetConsoleOutputCP(), 0, (const wchar_t *)buf,
-			    size / 2, (LPSTR)dest, destSize, NULL, NULL) == 0) {
+			    (DWORD)(size / 2),
+			    (LPSTR)dest, destSize, NULL, NULL) == 0) {
       Sg_IOWriteError(SG_INTERN("write"), Sg_GetLastErrorMessage(), SG_UNDEF);
     }
     isOK = WriteFile(SG_FD(file)->desc, dest, destSize, &writeSize, NULL);
     if (writeSize != destSize) {
       Sg_IOWriteError(SG_INTERN("write"), Sg_GetLastErrorMessage(), SG_UNDEF);
     }
-    writeSize = size;
+    writeSize = (DWORD)size;
 #else
     isOK = WriteFile(SG_FD(file)->desc, buf, size, &writeSize, NULL);
 #endif
   } else {
-    isOK = WriteFile(SG_FD(file)->desc, buf, size, &writeSize, NULL);
+    isOK = WriteFile(SG_FD(file)->desc, buf, (DWORD)size, &writeSize, NULL);
   }
   setLastError(file);
   if (isOK) {
@@ -147,7 +148,7 @@ static int64_t win_write(SgObject self, uint8_t *buf, int64_t size)
 
 static int64_t win_seek(SgObject self, int64_t offset, Whence whence)
 {
-  LARGE_INTEGER largePos, resultPos;
+  LARGE_INTEGER largePos, resultPos = {0};
   DWORD posMode;
   BOOL isOK;
   largePos.QuadPart = offset;
@@ -257,7 +258,7 @@ static int win_can_close(SgObject self)
 
 static int64_t win_size(SgObject self)
 {
-  LARGE_INTEGER size;
+  LARGE_INTEGER size = {0};
   int isOK = GetFileSizeEx(SG_FD(self)->desc, &size);
   setLastError(self);
   if (isOK) {
@@ -361,6 +362,11 @@ int Sg_DeleteFile(SgString *path)
   return DeleteFileW(utf32ToUtf16(path)) ? 0 : -1;
 }
 
+int Sg_CopyFile(SgString *src, SgString *dst, int overwriteP)
+{
+  return CopyFileW(utf32ToUtf16(src), utf32ToUtf16(dst), !overwriteP);
+}
+
 /* Originally from Mosh start */
 int Sg_FileWritableP(SgString *path)
 {
@@ -395,8 +401,8 @@ int Sg_FileSymbolicLinkP(SgString *path)
 
 static int end_with(const SgString *target, const char * key)
 {
-  int size = SG_STRING_SIZE(target);
-  int keysize = strlen(key);
+  size_t size = SG_STRING_SIZE(target);
+  size_t keysize = strlen(key);
   SgChar *value = SG_STRING_VALUE(target);
   SgChar *p;
   p = value + size - keysize;
@@ -423,7 +429,12 @@ int Sg_DirectoryP(SgString *path)
 
 int Sg_DeleteFileOrDirectory(SgString *path)
 {
-  return DeleteFileW(utf32ToUtf16(path));
+  wchar_t *wpath = utf32ToUtf16(path);
+  if (PathIsDirectoryW(wpath)) {
+    return RemoveDirectoryW(wpath);
+  } else {
+    return DeleteFileW(wpath);
+  }
 }
 
 int Sg_FileRename(SgString *oldpath, SgString *newpath)
@@ -451,9 +462,10 @@ int Sg_CreateSymbolicLink(SgString *oldpath, SgString *newpath)
 					       "CreateSymbolicLinkW");
     if (win32CreateSymbolicLink) {
       const wchar_t* newPathW = utf32ToUtf16(newpath);
+      const wchar_t* oldPathW = utf32ToUtf16(oldpath);
       /* SYMBOLIC_LINK_FLAG_DIRECTORY == 1 */
-      DWORD flag = PathIsDirectoryW(newPathW) ? 1 : 0;
-      if (win32CreateSymbolicLink(newPathW, utf32ToUtf16(oldpath), flag)) {
+      DWORD flag = PathIsDirectoryW(oldPathW) ? 1 : 0;
+      if (win32CreateSymbolicLink(newPathW, oldPathW, flag)) {
 	return TRUE;
       }
     }
@@ -529,7 +541,7 @@ SgObject Sg_FileSize(SgString *path)
 			  FILE_SHARE_READ | FILE_SHARE_WRITE,
 			  NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
   if (fd != INVALID_HANDLE_VALUE) {
-    LARGE_INTEGER bsize;
+    LARGE_INTEGER bsize = {0};
     if (GetFileSizeEx(fd, &bsize)) {
       CloseHandle(fd);
       return Sg_MakeIntegerFromS64(bsize.QuadPart);
@@ -643,25 +655,53 @@ static void initialize_path()
   win_dynlib_path = SG_STRING(SG_MAKE_STRING(SAGITTARIUS_DYNLIB_PATH));
 }
 
+SgObject Sg_InstalledDirectory()
+{
+  wchar_t tmp[MAX_PATH];
+  if (GetModuleFileNameW(NULL, tmp, MAX_PATH)) {
+    if (PathRemoveFileSpecW(tmp)) {
+      PathAddBackslashW(tmp);
+      return utf16ToUtf32(tmp);
+    }
+  }
+  return SG_FALSE;
+}
+
 SgObject Sg_GetDefaultLoadPath()
 {
+  SgObject env = Sg_Getenv(UC("SAGITTARIUS_LOADPATH"));
+  SgObject h = SG_NIL, t = SG_NIL;
+  if (!SG_FALSEP(env) && SG_STRING_SIZE(env) != 0) {
+    SG_APPEND(h, t, Sg_StringSplitChar(SG_STRING(env), ';'));
+  }
+
   if (win_lib_path == NULL ||
       win_sitelib_path == NULL ||
       win_dynlib_path == NULL) {
     initialize_path();
   }
-  return SG_LIST2(win_sitelib_path, win_lib_path);
+  SG_APPEND1(h, t, win_sitelib_path);
+  SG_APPEND1(h, t, win_lib_path);
+  return h;
 }
 
 SgObject Sg_GetDefaultDynamicLoadPath()
 {
+  SgObject env = Sg_Getenv(UC("SAGITTARIUS_DYN_LOADPATH"));
+  SgObject h = SG_NIL, t = SG_NIL;
+
+  if (!SG_FALSEP(env) && SG_STRING_SIZE(env) != 0) {
+    SG_APPEND(h, t, Sg_StringSplitChar(SG_STRING(env), ';'));
+  }
+
   /* this must be initialized when vm is being created. */
   if (win_lib_path == NULL ||
       win_sitelib_path == NULL ||
       win_dynlib_path == NULL) {
     initialize_path();
   }
-  return SG_LIST1(win_dynlib_path);
+  SG_APPEND1(h, t, win_dynlib_path);
+  return h;
 }
 
 SgObject Sg_DirectoryName(SgString *path)
@@ -716,6 +756,13 @@ SgObject Sg_AbsolutePath(SgString *path)
   }
   return SG_FALSE;
 }
+
+int Sg_CopyAccessControl(SgString *src, SgString *dst)
+{
+  /* for now dummy */
+  return TRUE;
+}
+
 /*
   end of file
   Local Variables:

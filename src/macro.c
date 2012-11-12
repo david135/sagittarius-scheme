@@ -31,6 +31,7 @@
  */
 #define LIBSAGITTARIUS_BODY
 #include "sagittarius/macro.h"
+#include "sagittarius/clos.h"
 #include "sagittarius/identifier.h"
 #include "sagittarius/pair.h"
 #include "sagittarius/port.h"
@@ -69,7 +70,8 @@ static void macro_print(SgObject obj, SgPort *port, SgWriteContext *ctx)
 
 SG_DEFINE_BUILTIN_CLASS_SIMPLE(Sg_MacroClass, macro_print);
 
-SgObject Sg_MakeMacro(SgObject name, SgObject transformer, void *data, SgObject env, SgObject maybeLibrary)
+SgObject Sg_MakeMacro(SgObject name, SgObject transformer, 
+		      void *data, SgObject env, SgObject maybeLibrary)
 {
   SgMacro *z = SG_NEW(SgMacro);
   SG_SET_CLASS(z, SG_CLASS_MACRO);
@@ -81,7 +83,38 @@ SgObject Sg_MakeMacro(SgObject name, SgObject transformer, void *data, SgObject 
   return SG_OBJ(z);
 }
 
-static SgObject unwrap_rec(SgObject form, SgObject history)
+static SgObject unrename_symbol(SgObject name, int reversep)
+{
+  /* bit more check */
+  if (reversep &&
+      SG_UNINTERNED_SYMBOL(name) &&
+      SG_SYMBOL(name)->flags & SG_SYMBOL_REVERSIBLE) {
+    /* finds ` which is mark of separator */
+    SgString *s = SG_SYMBOL(name)->name;
+      
+    SgChar *buf = SG_STRING_VALUE(s), tmp[256];
+    int len, size = SG_STRING_SIZE(s), i;
+    for (len = 0; len < size; len++, buf++) {
+      if (*buf == '`') break;
+    }
+    ASSERT(len != size);	/* something wrong */
+    if (len >= 256) {
+      buf = SG_NEW_ATOMIC2(SgChar *, sizeof(SgChar) * (len+1));
+    } else {
+      buf = tmp;
+    }
+    /* copy */
+    for (i = 0; i < len; i++) buf[i] = SG_STRING_VALUE_AT(s, i);
+    buf[i] = 0;
+    /* the copied string must be literal for symbol */
+    s = SG_STRING(Sg_MakeStringEx(buf, SG_LITERAL_STRING, len));
+    return Sg_Intern(s);
+  } else {
+    return name;
+  }
+}
+
+static SgObject unwrap_rec(SgObject form, SgObject history, int reversep)
 {
   SgObject newh;
   if (!SG_PTRP(form)) return form;
@@ -92,8 +125,8 @@ static SgObject unwrap_rec(SgObject form, SgObject history)
   if (SG_PAIRP(form)) {
     SgObject ca, cd;
     newh = Sg_Cons(form, history);
-    ca = unwrap_rec(SG_CAR(form), newh);
-    cd = unwrap_rec(SG_CDR(form), newh);
+    ca = unwrap_rec(SG_CAR(form), newh, reversep);
+    cd = unwrap_rec(SG_CDR(form), newh, reversep);
     if (ca == SG_CAR(form) && cd == SG_CDR(form)) {
       return form;
     } else {
@@ -101,14 +134,17 @@ static SgObject unwrap_rec(SgObject form, SgObject history)
     }
   }
   if (SG_IDENTIFIERP(form)) {
-    return SG_OBJ(SG_IDENTIFIER_NAME(form));
+    return unrename_symbol(SG_IDENTIFIER_NAME(form), reversep);
+  }
+  if (SG_SYMBOLP(form)) {
+    return unrename_symbol(form, reversep);
   }
   if (SG_VECTORP(form)) {
     int i, j, len = SG_VECTOR_SIZE(form);
     SgObject elt, *pelt = SG_VECTOR_ELEMENTS(form);
     newh = Sg_Cons(form, history);
     for (i = 0; i < len; i++, pelt++) {
-      elt = unwrap_rec(*pelt, newh);
+      elt = unwrap_rec(*pelt, newh, reversep);
       if (elt != *pelt) {
 	SgObject newvec = Sg_MakeVector(len, SG_FALSE);
 	pelt = SG_VECTOR_ELEMENTS(form);
@@ -117,7 +153,7 @@ static SgObject unwrap_rec(SgObject form, SgObject history)
 	}
 	SG_VECTOR_ELEMENT(newvec, i) = elt;
 	for (; j < len; j++, pelt++) {
-	  SG_VECTOR_ELEMENT(newvec, j) = unwrap_rec(*pelt, newh);
+	  SG_VECTOR_ELEMENT(newvec, j) = unwrap_rec(*pelt, newh, reversep);
 	}
 	return newvec;
       }
@@ -147,6 +183,7 @@ static SgObject macro_tranform(SgObject *args, int argc, void *data_)
   vm->usageEnv = p1env;
   vm->macroEnv = mac_env;
   if (SG_MACROP(data)) {
+    /* variable transformer */
     result = Sg_Apply4(SG_MACRO(data)->transformer,
 		       data, form, mac_env, SG_MACRO(data)->data);
   } else {
@@ -157,12 +194,13 @@ static SgObject macro_tranform(SgObject *args, int argc, void *data_)
   return result;
 }
 
-static SG_DEFINE_SUBR(macro_tranform_Stub, 2, 0, macro_tranform, SG_FALSE, NULL);
+static SG_DEFINE_SUBR(macro_tranform_Stub, 4, 0, macro_tranform, SG_FALSE, NULL);
 
-SgObject Sg_MakeMacroTransformer(SgObject name, SgObject proc, SgObject env, SgObject library)
+SgObject Sg_MakeMacroTransformer(SgObject name, SgObject proc,
+				 SgObject env, SgObject library)
 {
   if (SG_FALSEP(SG_PROCEDURE_NAME(&macro_tranform_Stub))) {
-    SG_PROCEDURE_NAME(&macro_tranform_Stub) = Sg_MakeString(UC("macro-transform"), SG_LITERAL_STRING);
+    SG_PROCEDURE_NAME(&macro_tranform_Stub) = SG_MAKE_STRING("macro-transform");
   }
   return Sg_MakeMacro(name, &macro_tranform_Stub, proc, env, library);
 }
@@ -262,7 +300,52 @@ SgObject Sg_MacroExpand(SgObject expr, SgObject p1env, int onceP)
 /* convert all identifier to symbol */
 SgObject Sg_UnwrapSyntax(SgObject form)
 {
-  return unwrap_rec(form, SG_NIL);
+  return unwrap_rec(form, SG_NIL, FALSE);
+}
+
+SgObject Sg_UnwrapSyntaxWithReverse(SgObject form)
+{
+  return unwrap_rec(form, SG_NIL, TRUE);
+}
+
+static SgObject macro_name(SgMacro *m)
+{
+  return m->name;
+}
+
+static SgObject macro_trans(SgMacro *m)
+{
+  return m->transformer;
+}
+
+/* be careful */
+static SgObject macro_data(SgMacro *m)
+{
+  return m->data;
+}
+static SgObject macro_env(SgMacro *m)
+{
+  return m->env;
+}
+
+static SgObject macro_library(SgMacro *m)
+{
+  return m->maybeLibrary;
+}
+
+static SgSlotAccessor macro_slots[] = {
+  SG_CLASS_SLOT_SPEC("name", 0, macro_name, NULL),
+  SG_CLASS_SLOT_SPEC("transformer", 1, macro_trans, NULL),
+  SG_CLASS_SLOT_SPEC("data", 2, macro_data, NULL),
+  SG_CLASS_SLOT_SPEC("env", 3, macro_env, NULL),
+  SG_CLASS_SLOT_SPEC("library", 4, macro_library, NULL),
+  { { NULL } }
+};
+
+void Sg__InitMacro()
+{
+  SgLibrary *lib = Sg_FindLibrary(SG_INTERN("(sagittarius clos)"), TRUE);
+  Sg_InitStaticClass(SG_CLASS_MACRO, UC("<macro>"), lib, macro_slots, 0);
 }
 
 /*

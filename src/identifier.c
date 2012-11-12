@@ -51,10 +51,10 @@ static void id_print(SgObject obj, SgPort *port, SgWriteContext *ctx)
   if (SG_WRITE_MODE(ctx) == SG_WRITE_WRITE ||
       SG_WRITE_MODE(ctx) == SG_WRITE_SHARED) {
     char buf[50];
-    snprintf(buf, sizeof(buf), "(%p %p)", (id->parent), id);
+    snprintf(buf, sizeof(buf), "(%p %p %p)", (id->parent), id, id->template_id);
     Sg_Putz(port, buf);
   }
-  /* Sg_Write(id->envs, port, SG_WRITE_SHARED); */
+  Sg_Write(id->envs, port, SG_WRITE_SHARED);
 #endif
   Sg_Putc(port, '>');
 }
@@ -95,7 +95,12 @@ SgObject Sg_CopyIdentifier(SgIdentifier *id)
   SgIdentifier *z = make_identifier();
   z->name = id->name;
   z->library = id->library;
-  z->envs = SG_NIL; /* id->envs; */
+  /* mark is '(symbol) */
+  if (!SG_NULLP(id->envs) && !SG_PAIRP(SG_CAR(id->envs))) {
+    z->envs = id->envs;
+  } else {
+    z->envs = SG_NIL;
+  }
   z->parent = id;
   return SG_OBJ(z);
 }
@@ -135,6 +140,7 @@ typedef struct
   SgVector    *p1env;
   SgHashTable *seen;
   int          lexicalP;
+  SgObject     templ;
 } wrap_ctx;
 
 static SgObject wrap_rec(SgObject form, wrap_ctx *ctx)
@@ -166,6 +172,7 @@ static SgObject wrap_rec(SgObject form, wrap_ctx *ctx)
 	    id = Sg_MakeIdentifier(SG_IDENTIFIER_NAME(form),
 				   SG_IDENTIFIER_ENVS(form),
 				   SG_IDENTIFIER_LIBRARY(form));
+	    SG_IDENTIFIER_TEMPLATE(id) = ctx->templ;
 	  } else {
 	    /* keep pattern variable */
 	    id = form;
@@ -174,6 +181,7 @@ static SgObject wrap_rec(SgObject form, wrap_ctx *ctx)
 	  id = Sg_MakeIdentifier(form,
 				 SG_VECTOR_ELEMENT(p1env, 1),
 				 SG_VECTOR_ELEMENT(p1env, 0));
+	  SG_IDENTIFIER_TEMPLATE(id) = ctx->templ;
 	}
       } else if (!SG_FALSEP(env)) {
 	if (SG_IDENTIFIERP(form)) {
@@ -189,6 +197,7 @@ static SgObject wrap_rec(SgObject form, wrap_ctx *ctx)
 	  }
 	} else {
 	  id = Sg_MakeIdentifier(form, env, SG_VECTOR_ELEMENT(p1env, 0));
+	  SG_IDENTIFIER_TEMPLATE(id) = ctx->templ;
 	}
       } else {
 	/* if it's partial wrap and symbol is not lexical bounded,
@@ -209,7 +218,7 @@ static SgObject wrap_rec(SgObject form, wrap_ctx *ctx)
 
 /* wrap form to identifier */
 SgObject Sg_WrapSyntax(SgObject form, SgVector *p1env, SgObject seen,
-		       int lexicalP)
+		       int lexicalP, SgObject templ)
 {
   wrap_ctx ctx;
   if (!seen) {
@@ -219,6 +228,7 @@ SgObject Sg_WrapSyntax(SgObject form, SgVector *p1env, SgObject seen,
   ctx.seen = seen;
   ctx.p1env = p1env;
   ctx.lexicalP = lexicalP;
+  ctx.templ = templ;
   return wrap_rec(form, &ctx);
 }
 

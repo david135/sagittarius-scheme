@@ -15,7 +15,14 @@
 	    dolist
 	    check-arg
 	    with-library
-	    unwind-protect)
+	    unwind-protect
+	    ;; for convenient
+	    ^a ^b ^c ^d ^e ^f ^g ^h ^i ^j ^k ^l ^m ^n
+	    ^o ^p ^q ^r ^s ^t ^u ^v ^w ^x ^y ^z ^_ ^
+	    ^a* ^b* ^c* ^d* ^e* ^f* ^g* ^h* ^i* ^j* ^k*
+	    ^l* ^m* ^n* ^o* ^p* ^q* ^r* ^s* ^t* ^u* ^v* ^w*
+	    ^x* ^y* ^z* ^_*
+	    )
     (import (core)
 	    (rename (only (core) define) (define define-with-key))
 	    (core base)
@@ -23,6 +30,7 @@
 	    (core syntax)
 	    (core misc)
 	    (match)
+	    (shorten)
 	    (srfi :26 cut)
 	    (sagittarius)
 	    (sagittarius vm))
@@ -125,12 +133,24 @@
             (list pred val))))))
 
   (define-syntax with-library
-    (syntax-rules ()
-      ((_ lib var)
-       (let ((g (find-binding 'lib 'var #f)))
-	 (or (and g (gloc-ref g))
-	     (assertion-violation 'with-library
-				  "unbound variable" 'var))))))
+    (lambda (x)
+      (syntax-case x ()
+	((k lib expr ...)
+	 (let ((real-lib (find-library #'lib #f)))
+	   (unless real-lib
+	     (assertion-violation 'with-library "no such library" #'lib))
+	   (let loop ((e #'(expr ...)))
+	     (if (null? (cdr e))
+	       (if (identifier? (car e))
+		   ;; most likely (with-library (lib) var)
+		   ;; and it must return identifier bounded in the given
+		   ;; library otherwise breaks cache.
+		   (make-identifier (syntax->datum (car e)) '() real-lib)
+		   (let ((r (eval (syntax->datum (car e)) real-lib)))
+		     (datum->syntax #'k r)))
+	       (begin
+		 (eval (car e) real-lib)
+		 (loop (cdr e))))))))))
 
   (define-syntax unwind-protect
     (lambda (x)

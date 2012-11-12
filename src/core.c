@@ -30,13 +30,18 @@
  *  $Id: $
  */
 #include <string.h>
+#include <sagittarius/config.h>
+#ifdef HAVE_UNISTD_H
+# include <unistd.h>
+#endif
 #define LIBSAGITTARIUS_BODY
 #include "sagittarius.h"
 #include "sagittarius/core.h"
 #include "sagittarius/vm.h"
 #include "sagittarius/builtin-symbols.h"
 
-static void finalizable();
+static void finalizable(void);
+
 static void* oom_handler(size_t bytes)
 {
   Sg_Panic("out of memory (%lu). aborting...", bytes);
@@ -65,6 +70,7 @@ extern void Sg__InitIdentifier();
 extern void Sg__InitWrite();
 extern void Sg__InitRegex();
 extern void Sg__InitUnicode();
+extern void Sg__InitMacro();
 
 /* stub files */
 extern void Sg__Init_sagittarius_compiler_procedure();
@@ -90,9 +96,15 @@ void Sg_Init()
   SgObject nullsym, coreBase;
 #ifdef USE_BOEHM_GC
   GC_INIT();
+#if GC_VERSION_MAJOR >= 7 && GC_VERSION_MINOR >= 2
+  GC_set_oom_fn(oom_handler);
+  GC_set_finalize_on_demand(TRUE);
+  GC_set_finalizer_notifier(finalizable);
+#else
   GC_oom_fn = oom_handler;
   GC_finalize_on_demand = TRUE;
   GC_finalizer_notifier = finalizable;
+#endif
 #else
   /* do nothing for now*/
 #endif
@@ -106,10 +118,12 @@ void Sg_Init()
   Sg__InitLibrary();
   Sg__InitLoad();
   Sg__InitUnicode();
+  Sg__InitFile();
 
   Sg__InitVM();
   /* init clos uses findlibrary. so after VM */
   Sg__InitClos();
+  Sg__InitMacro();
   /* port must be after VM to replace std ports. */
   Sg__InitPort();
   Sg__InitWrite();
@@ -130,7 +144,6 @@ void Sg_Init()
 
   Sg__InitInstruction();
   Sg__Initnull();
-  /* Sg__InitFile(); */
   Sg__InitPair();
   Sg__InitCharSet();
 
@@ -302,6 +315,11 @@ void Sg_Exit(int code)
   exit(EXIT_CODE(code));
 }
 
+void Sg_EmergencyExit(int code)
+{
+  exit(EXIT_CODE(code));
+}
+
 struct cleanup_handler_rec
 {
   void (*handler)(void *);
@@ -375,7 +393,12 @@ void Sg_Panic(const char* msg, ...)
 void Sg_Abort(const char* msg)
 {
   int size = (int)strlen(msg);
+#ifndef _MSC_VER
   write(2, msg, size);
+#else
+  DWORD n;
+  WriteConsole(GetStdHandle(STD_ERROR_HANDLE), msg, size, &n, NULL);
+#endif
   _exit(EXIT_CODE(1));
 }
 
@@ -393,6 +416,7 @@ void Sg_AddCondFeature(const SgChar *feature)
   cond_features.list = Sg_Cons(Sg_Intern(Sg_MakeString(feature,
 						       SG_LITERAL_STRING)),
 			       cond_features.list);
+  Sg_AddConstantLiteral(cond_features.list);
   Sg_UnlockMutex(&cond_features.mutex);
 }
 
@@ -418,6 +442,8 @@ static void init_cond_features()
   Sg_AddCondFeature(UC("little-endian"));
 #endif
   Sg_AddCondFeature(UC("sagittarius-"SAGITTARIUS_VERSION));
+  /* maybe it's useful */
+  Sg_AddCondFeature(UC(SAGITTARIUS_TRIPLE));
 }
 
 /* somehow Visual Studio 2010 requires this to create dll.*/
