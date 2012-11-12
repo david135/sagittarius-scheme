@@ -2,7 +2,7 @@
 (library (clos user)
     (export make
 	    initialize
-	    write-object object-equal? object-apply
+	    write-object object-equal? object-apply |setter of object-apply|
 
 	    <top> <object> <class> <generic> <method> <next-method>
 	    <slot-accessor>
@@ -36,7 +36,10 @@
 
 	    define-class
 	    define-method
-	    define-generic)
+	    define-generic
+
+	    call-next-method
+	    )
     (import (rnrs) 
 	    (sagittarius)
 	    (clos core)
@@ -52,6 +55,8 @@
   ;;  slot-option    ::= {:accessor   function-name}
   ;;                   | {:init-value   expr}
   ;;                   | {:init-keyword keyword}
+  ;;                   | {:reader function-name}
+  ;;                   | {:writer function-name}
   ;;  function-name  ::= symbol
   ;; slot-option's options names are taken from Gauche. I think it's clearer
   ;; than CL's initform etc.
@@ -86,26 +91,40 @@
   (define-syntax define-class
     (lambda (x)
       (define (collect-accessor slot-defs)
-	(let loop ((defs (unwrap-syntax slot-defs)) (r '()))
+	(define (check defs target)
+	  (unless (or (not target)
+		      (and (pair? (cdr target)) (identifier? (cadr target))))
+	    (syntax-violation 'define-class
+			      "malformed slot specifier"
+			      (unwrap-syntax x)
+			      (unwrap-syntax (car defs)))))
+	(let loop ((defs (unwrap-syntax slot-defs))
+		   (ra '()) (rr '()) (rw '()))
 	  (syntax-case defs ()
-	    (() r)
+	    (() (values ra rr rw))
 	    (((name . acc) . rest)
 	     (identifier? #'name)
-	     (let ((s (memq :accessor #'acc)))
-	       (cond (s
-		      (unless (and (pair? (cdr s))
-				   (identifier? (cadr s)))
-			(syntax-violation 'define-class
-					  "malformed slot specifier"
-					  (unwrap-syntax x)
-					  (unwrap-syntax (car defs))))
-		      (loop (cdr defs)
-			    (acons (identifier->symbol #'name)
-				   (identifier->symbol (cadr s)) r)))
-		     (else (loop (cdr defs) r)))))
+	     (let ((sa (memq :accessor #'acc))
+		   (sr (memq :reader #'acc))
+		   (sw (memq :writer #'acc)))
+	       (check defs sa) (check defs sr) (check defs sw)
+	       ;; I'm not sure how we should treat if everything is defined.
+	       (loop (cdr defs)
+		     (if sa
+			 (acons (syntax->datum #'name)
+				(syntax->datum (cadr sa)) ra)
+			 ra)
+		     (if sr
+			 (acons (syntax->datum #'name)
+				(syntax->datum (cadr sr)) rr)
+			 rr)
+		     (if sw
+			 (acons (syntax->datum #'name)
+				(syntax->datum (cadr sw)) rw)
+			 rw))))
 	    (((name) . rest)
 	     (identifier? #'name)
-	     (loop (cdr defs) r))
+	     (loop (cdr defs) ra rr rw))
 	    (_ (syntax-violation 'define-class
 				 "malformed slot specifier"
 				 (unwrap-syntax x)
@@ -113,10 +132,10 @@
       (define (build name supers slot-defs options)
 	;; we creates generic accessor and the rest will be
 	;; for generic make
-	(let* ((accessors (collect-accessor slot-defs))
-	       (metaclass (or (get-keyword :metaclass options #f)
-			      #`(%get-default-metaclass 
-				 (list #,@supers)))))
+	(let-values (((accessors readers writers) (collect-accessor slot-defs))
+		     ((metaclass) (or (get-keyword :metaclass options #f)
+				    #`(%get-default-metaclass 
+				       (list #,@supers)))))
 	  (define (process-slot-definition sdef)
 	    (if (pair? sdef)
 		(let loop ((opts (cdr sdef)) (r '()))
@@ -129,9 +148,8 @@
 			   ((:init-form)
 			    (loop (cddr opts)
 				  `((lambda () ,(cadr opts)) :init-thunk ,@r)))
-			   ((:accessor)
-			    (loop (cddr opts) 
-				  `(',(cadr opts) ,(car opts) ,@r)))
+			   ((:accessor :reader :writer)
+			    (loop (cddr opts) `(',(cadr opts) ,(car opts) ,@r)))
 			   (else 
 			    (loop (cddr opts)
 				  (cons* (cadr opts) (car opts) r)))))))
@@ -156,8 +174,27 @@
 				    (slot-ref #,tmp (quote #,slot-name)))
 				  ;; getter
 				  (define-method #,accessor ((#,tmp #,name) obj)
-				    (slot-set! #,tmp (quote #,slot-name) obj)))))
-			  accessors)))))
+				    (slot-set! #,tmp (quote #,slot-name)
+					       obj)))))
+			  accessors))
+	      #,@(if (null? readers)
+		     #`((undefined))
+		     (map (lambda (slot)
+			    (let ((slot-name (car slot))
+				  (reader (cdr slot))
+				  (tmp (gensym)))
+			      #`(define (#,reader #,tmp)
+				  (slot-ref #,tmp (quote #,slot-name)))))
+			  readers))
+	      #,@(if (null? writers)
+		     #`((undefined))
+		     (map (lambda (slot)
+			    (let ((slot-name (car slot))
+				  (writer (cdr slot))
+				  (tmp (gensym)))
+			      #`(define (#,writer #,tmp obj)
+				  (slot-set! #,tmp (quote #,slot-name) obj))))
+			  writers)))))
       (syntax-case x ()
 	((_ ?name () ?slot-defs . ?options)
 	 #'(define-class ?name (<object>) ?slot-defs . ?options))
@@ -168,14 +205,24 @@
 	    'define-class
 	    "malformed define-class" (unwrap-syntax x))))))
 
+
+  ;; never be symbol
+  (define (%make-setter-name name)
+    (string->symbol (format "setter of ~a" (syntax->datum name))))
+  (define (%check-setter-name generic)
+    (syntax-case generic (setter)
+      ((setter name) #`(#,(%make-setter-name #'name) name))
+      (n #'(n #f))))
+
   (define-syntax define-method
     (lambda (x)
       (define (analyse args)
 	(let loop ((ss args) (rs '()))
-	  (cond ((null? ss)        (values (reverse! rs) #f))
-		((not (pair? ss))  (values (reverse! rs) ss))
+	  (cond ((null? ss)          (values (reverse! rs) #f #f))
+		((not (pair? ss))    (values (reverse! rs) ss #f))
+		((keyword? (car ss)) (values (reverse! rs) (gensym) ss))
 		(else (loop (cdr ss) (cons (car ss) rs))))))
-      (define (build qualifier generic qargs opt body)
+      (define (build qualifier generic qargs rest opts body)
 	;; ugly kludge
 	(define (rewrite body)
 	  (let loop ((body body))
@@ -194,27 +241,37 @@
 				    (if (pair? s) (cadr s) '<top>)) qargs))
 	       (reqargs      (map (lambda (s) 
 				    (if (pair? s) (car s) s)) qargs))
-	       (lambda-list  (if opt `(,@reqargs . ,opt) reqargs))
-	       (real-args    (if opt
-				 `(call-next-method ,@reqargs . ,opt)
+	       (lambda-list  (if rest `(,@reqargs . ,rest) reqargs))
+	       (real-args    (if rest
+				 `(call-next-method ,@reqargs . ,rest)
 				 `(call-next-method ,@reqargs)))
-	       (real-body    `(lambda ,real-args ,@(rewrite body)))
-	       (gf           (gensym)))
-	  ;; TODO if generic does not exists, make it
-	  #`(let ((#,gf (%ensure-generic-function
-			 '#,generic (vm-current-library))))
-	      (add-method #,gf
-			  (make <method>
-			    :specializers  (list #,@specializers)
-			    :qualifier     #,qualifier
-			    :generic       #,generic
-			    :lambda-list  '#,lambda-list
-			    :procedure     #,real-body)))))
+	       (real-body (if opts
+			      `(lambda ,real-args 
+				 (apply (lambda ,opts ,@(rewrite body)) ,rest))
+			      `(lambda ,real-args ,@(rewrite body))))
+	       (gf        (gensym)))
+
+	  (with-syntax (((true-name getter-name) (%check-setter-name generic)))
+	    #`(begin
+		(let ((#,gf (%ensure-generic-function
+			     'true-name (vm-current-library))))
+		  (add-method #,gf
+			      (make <method>
+				:specializers  (list #,@specializers)
+				:qualifier     #,qualifier
+				:generic       true-name
+				:lambda-list  '#,lambda-list
+				:procedure     #,real-body))
+		  #,@(if #'getter-name
+			 `((unless (has-setter? ,#'getter-name)
+			     (set! (setter ,#'getter-name) ,gf)))
+			 '())
+		  #,gf)))))
       (syntax-case x ()
 	((_ ?qualifier ?generic ?args . ?body)
 	 (keyword? #'?qualifier)
-	 (let-values (((qargs opt) (analyse #'?args)))
-	   (build #'?qualifier #'?generic qargs opt #'?body)))
+	 (let-values (((qargs rest opt) (analyse #'?args)))
+	   (build #'?qualifier #'?generic qargs rest opt #'?body)))
 	((_ ?generic ?qualifier ?args . ?body)
 	 (keyword? #'?qualifier)
 	 #'(define-method ?qualifier ?generic ?args . ?body))
@@ -222,8 +279,23 @@
 	 #'(define-method :primary ?generic ?args . ?body)))))
 
   (define-syntax define-generic
-    (syntax-rules ()
-      ((_ name)
-       (define name (make <generic> :definition-name 'name)))))
+    (lambda (x)
+      (define (generate-true-name k name)
+	(datum->syntax k (%make-setter-name name)))
+      (syntax-case x (setter)
+	((k (setter name) . options)
+	 (let ((class (get-keyword :class (syntax->datum #'options)
+				   '<generic>)))
+	   (with-syntax ((true-name (generate-true-name #'k #'name))
+			 (class-name (datum->syntax #'k class)))
+	     #'(begin
+		 (define true-name (make class-name 
+				     :definition-name 'true-name))
+		 (set! (setter name) true-name)))))
+	((k name . options)
+	 (let ((class (get-keyword :class (syntax->datum #'options)
+				   '<generic>)))
+	   (with-syntax ((class-name (datum->syntax #'k class)))
+	     #'(define name (make class-name :definition-name 'name))))))))
 
 )

@@ -44,23 +44,32 @@
   (define-class <dbi-odbc-connection> (<dbi-connection>)
     ((hbc :init-keyword :hbc :accessor odbc-connection-odbc-hbc)))
 
-  ;; to make method more specifig
+  ;; to make method more specific
   (define-class <dbi-odbc-query> (<dbi-query>)
     ()) ;; no slot
 
   (define-method dbi-make-connection ((driver <dbi-odbc-driver>)
 				      (options <string>)
 				      (option-alist <list>) . auth)
+    (define (get-option name :optional (default #f))
+      (or (and-let* ((v (assoc name option-alist))) (cdr v))
+	  default))
+    (define (->boolean s)
+      (if (string? s) (not (string=? s "false")) s))
     (let ((env (odbc-driver-env driver))
-	  (server (assoc "server" option-alist)))
+	  (server   (get-option "server"))
+	  (username (get-option "username" ""))
+	  (password (get-option "password" ""))
+	  (auto-commit (get-option "auto-commit" #t)))
       (unless server
 	(assertion-violation 'make-odbc-connection
 			     "server option is required"))
-      (let-keywords auth ((username "")
-			  (password "")
-			  (auto-commit? #t))
+      (let-keywords auth ((username username)
+			  (password password)
+			  (auto-commit? (->boolean auto-commit)))
+	(format #t "~a:~a~%" username password)
 	(make <dbi-odbc-connection>
-	  :hbc (connect! env (cdr server) username password auto-commit?)))))
+	  :hbc (connect! env server username password auto-commit?)))))
 
   (define-method dbi-open? ((conn <dbi-odbc-connection>))
     (let ((c (odbc-connection-odbc-hbc conn)))
@@ -105,7 +114,8 @@
 	     (params args (cdr params)))
 	    ((null? params) #t)
 	  (bind-parameter! stmt i (car params))))
-      (execute! stmt)))
+      (execute! stmt)
+      (row-count stmt)))
 
   (define-method dbi-fetch! ((query <dbi-odbc-query>))
     (let* ((stmt (dbi-query-prepared query))
@@ -134,11 +144,11 @@
 	  (reverse! r))))
 
   (define-method dbi-commit! ((query <dbi-odbc-query>))
-    (let ((c (dbi-query-prepared query)))
+    (let ((c (dbi-query-connection query)))
       (commit! c)))
 
   (define-method dbi-rollback! ((query <dbi-odbc-query>))
-    (let ((c (dbi-query-prepared query)))
+    (let ((c (dbi-query-connection query)))
       (rollback! c)))
 
   (define-method dbi-columns ((query <dbi-odbc-query>))

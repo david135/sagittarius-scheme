@@ -696,7 +696,7 @@ static SgObject get_number(lexer_ctx_t *ctx, int radix, int maxlen,
     }
   }
   if (n != -1) {
-    /* saniti */
+    /* sanity */
     ctx->pos += i;
     return SG_MAKE_INT(n);
   } else {
@@ -1560,6 +1560,7 @@ enum {
   /* condition */
   RX_BRANCH,
   RX_BRANCHA,
+  RX_INST_COUNT
 };
 
 
@@ -1651,13 +1652,16 @@ static void compile_rep_seq(compile_ctx_t *ctx, SgObject seq,
 			    int count, int lastp)
 {
   SgObject h = SG_NIL, t = SG_NIL;
-  int seqp = (SG_PAIRP(seq) && SG_EQ(SG_CAR(seq), SYM_SEQUENCE));
+  /* I don't remenber why I needed to check this, but this causes an error with
+     #/(?:aa?){n}/ pattern.
+   */
+  /* int seqp = (SG_PAIRP(seq) && SG_EQ(SG_CAR(seq), SYM_SEQUENCE)); */
   if (count <= 0) return;
   while (count-- > 0) {
-    /* ugh.. ugly.. */
-    if (seqp) {
-      SG_APPEND(h, t, Sg_CopyList(seq));
-    } else if (SG_PAIRP(seq)) {
+    /* if (seqp) { */
+    /*   SG_APPEND(h, t, Sg_CopyList(seq)); */
+    /* } else */ 
+    if (SG_PAIRP(seq)) {
       SG_APPEND1(h, t, Sg_CopyList(seq));
     } else {
       SG_APPEND1(h, t, seq);
@@ -1714,10 +1718,9 @@ static void compile_min_max(compile_ctx_t *ctx, SgObject type,
   return;
 }
 
-static int calculate_flags(int org, SgObject flags)
+static int calculate_flags(int flag, SgObject flags)
 {
   SgObject cp;
-  int flag = org;
   SG_FOR_EACH(cp, flags) {
     SgObject slot = SG_CAR(cp);
     ASSERT(SG_CHARP(SG_CAR(slot)));
@@ -2281,6 +2284,8 @@ typedef struct thread_rec_t
   const SgChar **capture;
 } thread_t;
 
+static thread_t *filler = (thread_t*)-1;
+
 /* We might want to switch to sparse array,
    so make it as abstract as possible */
 typedef struct
@@ -2288,117 +2293,50 @@ typedef struct
   int size;			/* thread size */
   int n;			/* used size */
   int *order;			/* keep inserted order here */
-  thread_t *threads[1];		/* threads */
+  thread_t *values[1];		/* threads */
 } thread_list_t;
 
 static thread_list_t* alloc_thread_lists(int n)
 {
-  thread_list_t *tq = SG_NEW2(thread_list_t*,
-			      sizeof(thread_list_t) + (n-1)*sizeof(thread_t*));
-  int i;
-  tq->size = n;
+  thread_list_t *tq = 
+    SG_NEW2(thread_list_t*, sizeof(thread_list_t)+(n-1)*sizeof(thread_t*));
+  tq->size = (unsigned int)n;
   tq->order = SG_NEW_ATOMIC2(int *, sizeof(int) * n);
-  for (i = 0; i < n; i++) {
-    tq->order[i] = -1;
-  } 
   return tq;
 }
 
 static void thread_list_clear(thread_list_t *tq)
 {
-  int i;
   if (tq->n > 0) {
-    for (i = 0; i < tq->size; i++) {
-      tq->threads[i] = NULL;
-      tq->order[i] = -1;
+    int i;
+    for (i = 0; i < tq->n; i++) {
+      tq->values[tq->order[i]] = NULL;
     }
     tq->n = 0;
   }
 }
 
-static int thread_list_has_index(thread_list_t *tq, int index)
+static thread_t* thread_list_set_new(thread_list_t *tq, int i, thread_t *t)
 {
-  if (index < 0 || index > tq->size) return FALSE;
-  return tq->threads[index] != NULL;
-}
-
-static thread_t* thread_list_set_new(thread_list_t *tq, int index, thread_t *t)
-{
-  if (index >= tq->size) {
-    /* TODO throw error */
-    ASSERT(FALSE);
-    return NULL;
-  }
-  ASSERT(!thread_list_has_index(tq, index));
-  tq->threads[index] = t;
-  tq->order[tq->n++] = index;
+  tq->values[i] = t;
+  tq->order[tq->n++] = i; 
   return t;
 }
 
-typedef struct
-{
-  int       size;
-  int      *order;
-  int      *current;
-  thread_t *value;
-} threadq_iterator_t;
-
-static thread_t *filler = (thread_t*)-1;
-
-/* auxiliary function */
-static threadq_iterator_t* thread_iterator_search(thread_list_t *tq,
-						  threadq_iterator_t *i)
-{
-  i->value = NULL;
-  if (tq->n == 0 || i->current-i->order >= tq->n) return i;
-  i->value = tq->threads[*i->current];
-  return i;
-}
-
-static threadq_iterator_t* thread_iterator_begin(thread_list_t *tq,
-						 threadq_iterator_t *i)
-{
-  i->current = i->order = tq->order;
-  i->size = tq->n;
-  return thread_iterator_search(tq, i);
-}
-
-static threadq_iterator_t* thread_iterator_next(thread_list_t *tq,
-						threadq_iterator_t *i)
-{
-  i->current++;
-  return thread_iterator_search(tq, i);
-}
-
-static int thread_iterator_end_p(threadq_iterator_t *i)
-{
-  return (*i->current == -1 || i->current >= i->order+i->size);
-}
-
-static int thread_iterator_begin_p(threadq_iterator_t *i)
-{
-  return i->order == i->current;
-}
-
 #define ALLOCATE_THREADQ(n) alloc_thread_lists(n)
-/* TODO use alloca */
-#define ALLOC_TEMPORARY_THREADQ(dst, n)		\
-  (dst) = ALLOCATE_THREADQ(n)
 #define THREADQ_CAPACITY(tq) ((tq)->size)
 #define THREADQ_SIZE(tq)    ((tq)->n)
-#define THREADQ_REF(tq, i)  ((tq)->threads[i])
+#define THREADQ_REF(tq, i)  ((tq)->values[i])
 #define THREADQ_SET(tq, i, v)  thread_list_set_new((tq), (i), (v))
-#define THREADQ_HAS_INDEX(tq, i)   thread_list_has_index(tq, i)
+#define THREADQ_HAS_INDEX(tq, i) ((tq)->values[i] != NULL)
 #define THREADQ_CLEAR(tq)   thread_list_clear(tq)
 #define THREADQ_T           thread_list_t
-#define THREADQ_ITERATOR_T  threadq_iterator_t
-#define THREADQ_BEGIN_P(i)  thread_iterator_begin_p(i)
-#define THREADQ_FOR_EACH(i, tq)						\
-  for (thread_iterator_begin(tq, &(i)); !thread_iterator_end_p(&(i));	\
-       thread_iterator_next(tq, &(i)))
-#define THREADQ_FOR_EACH_FROM_CURRENT(i, tq)				\
-  for (; !thread_iterator_end_p(&(i));					\
-       thread_iterator_next(tq, &(i)))
+
+/* iterator is now mere int */
+#define THREADQ_ITERATOR_T  int
+#define THREADQ_ITERATOR_REF(i, tq) ((tq)->values[(tq)->order[i]])
+#define THREADQ_FOR_EACH(i, tq)	for ((i) = 0; (i) < (tq)->n; (i)++)
+#define THREADQ_FOR_EACH_FROM_CURRENT(i, tq) for (; (i) < (tq)->n; (i)++)
 
 /* match */
 typedef struct
@@ -2415,14 +2353,15 @@ struct match_ctx_rec_t
   add_state_t *astack;
   THREADQ_T   *q0;		/* clist on pike.c */
   THREADQ_T   *q1;		/* nlist on pike.c */
-  int          matched;
   int          ncapture;
   const SgChar **match;
   thread_t    *free_threads;
   inst_t      *start;
   inst_t      *inst;
   const SgChar *lastp;
-  int          wasword;
+  char          wasword : 1;
+  char          matched : 1;
+  char          reserved : 6;
 };
 
 #if (defined DEBUG_REGEX)
@@ -2458,21 +2397,17 @@ static void copy_capture(match_ctx_t *ctx, const SgChar **dst,
 			 const SgChar **src)
 {
   int i;
-  for (i = 0; i < ctx->ncapture; i += 2) {
-    dst[i] = src[i];
-    dst[i+1] = src[i+1];
-  }
+  for (i = 0; i < ctx->ncapture; i++) *dst++ = *src++;
 }
 
 static match_ctx_t* init_match_ctx(match_ctx_t *ctx, SgMatcher *m, int size);
 
-static add_state_t add_state(int id, int j, const SgChar *cap_j)
+static void add_state(add_state_t *a, intptr_t id, intptr_t j,
+		      const SgChar *cap_j)
 {
-  add_state_t a;
-  a.id = id;
-  a.j  = j;
-  a.cap_j = cap_j;
-  return a;
+  a->id = (int)id;
+  a->j  = (int)j;
+  a->cap_j = cap_j;
 }
 
 static void add_to_threadq(match_ctx_t *ctx, THREADQ_T *q, int id0, int flags,
@@ -2480,10 +2415,12 @@ static void add_to_threadq(match_ctx_t *ctx, THREADQ_T *q, int id0, int flags,
 {
   int nstk = 0;
   add_state_t *stk;
+
   if (id0 < 0) return;
 
   stk = ctx->astack;
-  stk[nstk++] = add_state(id0, -1, NULL);
+  add_state(&stk[nstk], id0, -1, NULL);
+  nstk++;
 
   while (nstk > 0) {
     const add_state_t *a = &stk[--nstk];
@@ -2494,9 +2431,7 @@ static void add_to_threadq(match_ctx_t *ctx, THREADQ_T *q, int id0, int flags,
       capture[a->j] = a->cap_j;
 
     if (id < 0) continue;
-    if (THREADQ_HAS_INDEX(q, id)) {
-      continue;
-    }
+    if (THREADQ_HAS_INDEX(q, id)) continue;
 
     /* create entry in q no matter what. we might fill it it in below or
        we might not. Even if now, it is necessary to have it, so that we
@@ -2505,45 +2440,39 @@ static void add_to_threadq(match_ctx_t *ctx, THREADQ_T *q, int id0, int flags,
     tp = &THREADQ_REF(q, id);
     ip = &ctx->inst[id];
     switch (INST_OPCODE(ip)) {
-    default:
-      Sg_Error(UC("[internal] Unhandled opcode in add_to_threadq: %d"),
-	       INST_OPCODE(ip));
-      break;
     case RX_FAIL: break;
     case RX_JMP:
-      stk[nstk++] = add_state(ip->arg.pos.x - ctx->start, -1, NULL);
+      add_state(&stk[nstk], ip->arg.pos.x - ctx->start, -1, NULL);
+      nstk++;
       break;
+      
     case RX_SPLIT:
       /* explore alternatives */
-      stk[nstk++] = add_state(ip->arg.pos.y - ctx->start, -1, NULL);
-      stk[nstk++] = add_state(ip->arg.pos.x - ctx->start, -1, NULL);
+      add_state(&stk[nstk], ip->arg.pos.y - ctx->start, -1, NULL);
+      nstk++;
+      add_state(&stk[nstk], ip->arg.pos.x - ctx->start, -1, NULL);
+      nstk++;
       break;
+
     case RX_SAVE:
       if ((j = ip->arg.n) < ctx->ncapture) {
 	/* push a dummy whose only job is to restore capture[j] */
-	stk[nstk++] = add_state(-1, j, capture[j]);
+	add_state(&stk[nstk], -1, j, capture[j]);
+	nstk++;
 	capture[j] = p;
       }
-      stk[nstk++] = add_state(id+1, -1, NULL);
+      add_state(&stk[nstk], id+1, -1, NULL);
+      nstk++;
       break;
+
     case RX_EMPTY:
       /* printf("\nflags: %x %x, %x %d\n", ip->arg.flags, flags, ~flags, */
       /* 	     (ip->arg.flags & ~flags)); */
       if (ip->arg.flags & ~flags) break;
-      stk[nstk++] = add_state(id+1, -1, NULL);
+      add_state(&stk[nstk], id+1, -1, NULL);
+      nstk++;
       break;
-
-    /* These need to be treated in step. so just add a thread to the queue.*/
-    case RX_NAHEAD:
-    case RX_NBEHIND:
-    case RX_BEHIND:
-    case RX_AHEAD:
-    case RX_RESTORE:
-    case RX_ONCE:
-    case RX_BREF:
-      Sg_Error(UC("[internal] Unexpected opcode in add_to_threadq: %d"),
-	       INST_OPCODE(ip));
-      break;
+      
     case RX_ANY:
     case RX_CHAR:
     case RX_SET:
@@ -2556,8 +2485,12 @@ static void add_to_threadq(match_ctx_t *ctx, THREADQ_T *q, int id0, int flags,
       copy_capture(ctx, t->capture, capture);
       *tp = t;
       break;
+
+    default:
+      Sg_Error(UC("[internal] Unexpected opcode in add_to_threadq: %d"),
+	       INST_OPCODE(ip));
+      break;
     }
-    
   }
 }
 
@@ -2571,18 +2504,19 @@ static int inst_matches(match_ctx_t *ctx, inst_t *inst, SgChar c)
       return TRUE;
     } else if (FLAG_SET(INST_FLAG(inst), SG_CASE_INSENSITIVE)) {
       if (FLAG_SET(INST_FLAG(inst), SG_UNICODE_CASE)) {
-	if (Sg_CharSetContains(SG_CHAR_SET(inst->arg.set), Sg_CharUpCase(c)) ||
-	    Sg_CharSetContains(SG_CHAR_SET(inst->arg.set), Sg_CharDownCase(c))){
-	  return TRUE;
-	}
+	return 
+	  Sg_CharSetContains(SG_CHAR_SET(inst->arg.set), Sg_CharUpCase(c)) ||
+	  Sg_CharSetContains(SG_CHAR_SET(inst->arg.set), Sg_CharDownCase(c));
       } else if (isascii(c)) {
-	if (Sg_CharSetContains(SG_CHAR_SET(inst->arg.set), tolower(c)) ||
-	    Sg_CharSetContains(SG_CHAR_SET(inst->arg.set), toupper(c))) {
-	  return TRUE;
-	}
+	return Sg_CharSetContains(SG_CHAR_SET(inst->arg.set), tolower(c)) ||
+	  Sg_CharSetContains(SG_CHAR_SET(inst->arg.set), toupper(c));
+      } else {
+	return FALSE;
       }
+    } else {
+      return FALSE;
     }
-    return FALSE;
+
   case RX_NSET:
     if (!Sg_CharSetContains(SG_CHAR_SET(inst->arg.set), c)) return TRUE;
     return FALSE;
@@ -2591,20 +2525,19 @@ static int inst_matches(match_ctx_t *ctx, inst_t *inst, SgChar c)
       return TRUE;
     } else if (FLAG_SET(INST_FLAG(inst), SG_CASE_INSENSITIVE)) {
       if (FLAG_SET(INST_FLAG(inst), SG_UNICODE_CASE)) {
-	if (Sg_CharDownCase(inst->arg.c) == Sg_CharDownCase(c)) {
-	  return TRUE;
-	}
+	return Sg_CharDownCase(inst->arg.c) == Sg_CharDownCase(c);
       } else if (isascii(inst->arg.c) && isascii(c)) {
-	if (tolower(inst->arg.c) == tolower(c)) {
-	  return TRUE;
-	}
+	return tolower(inst->arg.c) == tolower(c);
+      } else {
+	return FALSE;
       }
+    } else {
+      return FALSE;
     }
-    return FALSE;
   case RX_ANY:
     if (FLAG_SET(INST_FLAG(inst), SG_DOTALL)) return TRUE;
-    else if (c == '\n') return FALSE;
-    return TRUE;
+    else return c != '\n';
+
   default:
     ASSERT(FALSE);
     return FALSE;		/* dummy */
@@ -2647,54 +2580,104 @@ static int match_step(match_ctx_t *ctx, THREADQ_T *runq, THREADQ_T *nextq,
   debug_printf("(%c).", (c < 0) ? '\0' : c);
 
   THREADQ_FOR_EACH(i, runq) {
-    thread_t *t = i.value;
+    thread_t *t = THREADQ_ITERATOR_REF(i, runq);
     int id;
     inst_t *ip;
-    if (t == filler || t == NULL) continue;
+    if (t == filler) continue;
     id = t->id;
     ip = &ctx->inst[id];
     debug_printf(" %d", id);
     switch (INST_OPCODE(ip)) {
-    default:
-      Sg_Error(UC("[internal] Unhandled opcode in step: id=%d opcode=%d"),
-	       id, INST_OPCODE(ip));
-      break;
     case RX_ANY:
     case RX_CHAR:
     case RX_SET:
     case RX_NSET:
       if (inst_matches(ctx, ip, c)) {
 	debug_printf("->%d", id+1);
-	add_to_threadq(ctx, nextq, id + 1, flags, p+1, t->capture);
+	add_to_threadq(ctx, nextq, id + 1, flags, p, t->capture);
       }
+      free_thread(ctx, t);
       break;
-    case RX_MATCH:
-      {
-	const SgChar *old = t->capture[1];
 
-	t->capture[1] = p;
-	copy_capture(ctx, (const SgChar **)ctx->match, t->capture);
-	t->capture[0] = old;
-	THREADQ_FOR_EACH_FROM_CURRENT(i, runq) {
-	  free_thread(ctx, i.value);
-	}
+    case RX_MATCH: {
+      const SgChar *old = t->capture[1];
 
-	THREADQ_CLEAR(runq);
-	ctx->matched = TRUE;
-	debug_printf(" matched%c", '\n');
-	return -1;
+      t->capture[1] = p-1;
+      copy_capture(ctx, (const SgChar **)ctx->match, t->capture);
+      t->capture[0] = old;
+      /*
+	Cut off the threads that can only find matches worse than the one
+	we just found: don't runt the rest of the current threadq.
+      */
+      THREADQ_FOR_EACH_FROM_CURRENT(i, runq) {
+	free_thread(ctx, THREADQ_ITERATOR_REF(i, runq));
       }
+
+      THREADQ_CLEAR(runq);
+      ctx->matched = TRUE;
+      debug_printf(" matched%c", '\n');
+      return 0;
     }
-    free_thread(ctx, t);
+    default:
+      Sg_Error(UC("[internal] Unhandled opcode in step: id=%d opcode=%d"),
+	       id, INST_OPCODE(ip));
+      break;
+    }
   }
   debug_printf(" %c", '\n');
   THREADQ_CLEAR(runq);
-  return -1;
+  return 0;
 }
 
 #define iswordchar(c) (c <= 0xFF && (isalnum(c) || (c) == '_'))
 
 static int finish_match(match_ctx_t *ctx, int anchor);
+
+/* additional squeezing.
+   adding threadq is heavy process so we just avoid it as much as possible.
+ */
+static inst_t * search_first_atom(inst_t *inst)
+{
+  while (INST_OPCODE(inst) == RX_SAVE) inst++;
+  return inst;
+}
+
+static int can_check(inst_t *inst)
+{
+  switch (INST_OPCODE(inst)) {
+  case RX_CHAR:
+  case RX_SET:
+  case RX_ANY:
+  case RX_NSET:
+    return TRUE;
+  }
+  return FALSE;
+}
+
+static const SgChar * precheck(const SgChar *p, const SgChar *ep, inst_t *inst)
+{
+  int checkp = FALSE;
+  inst_t *inst2 = NULL;
+  inst = search_first_atom(inst);
+
+  if (INST_OPCODE(inst) == RX_SPLIT) {
+    inst2 = inst->arg.pos.y;
+    inst = inst->arg.pos.x;
+    checkp = can_check(inst);
+    checkp &= can_check(inst2);
+  } else {
+    checkp = can_check(inst);
+  }
+
+  if (checkp) {
+    while (p != ep) {
+      if (inst_matches(NULL, inst, *p)) break;
+      if (inst2 && inst_matches(NULL, inst2, *p)) break;
+      p++;
+    }
+  }
+  return p;
+}
 
 static int matcher_match0(match_ctx_t *ctx, int from, int anchor, inst_t *inst)
 {
@@ -2714,8 +2697,8 @@ static int matcher_match0(match_ctx_t *ctx, int from, int anchor, inst_t *inst)
   ctx->inst = inst;
 
   /* check word boundary */
-  for (p = bp; ;p++) {
-    int flag = 0, isword = FALSE, id;
+  for (p = precheck(bp, ep, inst); ;p++) {
+    int flag = 0, isword = FALSE;
 
     /* ^ and \A */
     if (p == otext)
@@ -2740,47 +2723,26 @@ static int matcher_match0(match_ctx_t *ctx, int from, int anchor, inst_t *inst)
     else
       flag |= EmptyNonWordBoundary;
 
-    id = match_step(ctx, runq, nextq, c, flag, p-1);
+    match_step(ctx, runq, nextq, c, flag, p);
 
     /* swap */
     tmp = nextq;
     nextq = runq;
     runq = tmp;
-    /* we don't need runq anymore, so clear */
-    THREADQ_CLEAR(nextq);
-    if (id >= 0) {
-      p = ep;
-      for (;;) {
-	inst_t *ip = &ctx->inst[id];
-	debug_printf(" finishing: %d\n", INST_OPCODE(ip));
-	switch (ip->opcode) {
-	default:
-	  Sg_Error(UC("[internal ]Unexpected opcode in short circuit: %d"),
-		   INST_OPCODE(ip));
-	  break;
-	case RX_SAVE:
-	  ctx->match[ip->arg.n] = p;
-	  id = ip - ctx->start + 1;
-	  continue;
-	case RX_MATCH:
-	  ctx->match[1] = p;
-	  ctx->matched = TRUE;
-	  break;
-	}
-	break;
-      }
-      break;
-    }
     if (p > ep) break;
 
     /* start a new thread if there have not been any matches. */
     if (!ctx->matched && (anchor == UNANCHORED || p == bp)) {
+      /* if the next queue is empty, means we can check forward the same as
+	 starting point. */
+      if (THREADQ_SIZE(runq) == 0) {
+	p = precheck(p, ep, inst);
+      }
       ctx->match[0] = p;
       /* TODO is start always 0? */
       add_to_threadq(ctx, runq, 0, flag, p, (const SgChar**)ctx->match);
       ctx->match[0] = NULL;
     }
-
     /* if all the thread have died, stop early */
     if (THREADQ_SIZE(runq) == 0) break;
 
@@ -2789,8 +2751,9 @@ static int matcher_match0(match_ctx_t *ctx, int from, int anchor, inst_t *inst)
     wasword = isword;
     ctx->lastp = p;
   }
+
   THREADQ_FOR_EACH(i, runq) {
-    free_thread(ctx, i.value);
+    free_thread(ctx, THREADQ_ITERATOR_REF(i, runq));
   }
   return finish_match(ctx, anchor);
 }
@@ -2939,7 +2902,7 @@ static int match_step1(match_ctx_t *ctx, inst_t *inst, int flags,
       flags = saved;
       if (INST_OPCODE(inst) == RX_ONCE) {
 	ctx->wasword = isword;
-	count = ctx->lastp - (bp+i);
+	count = (int)(ctx->lastp - (bp+i));
       }
       else count = 0;
       if (FLAG_SET(flags, LOOK_BEHIND)) count = -count;
@@ -3007,7 +2970,7 @@ static int finish_match(match_ctx_t *ctx, int anchor)
       ctx->matched = FALSE;
       return FALSE;
     }
-    ctx->m->first = ctx->match[0] - SG_STRING_VALUE(ctx->m->text);
+    ctx->m->first = (int)(ctx->match[0] - SG_STRING_VALUE(ctx->m->text));
   }
   return ctx->matched;
 }
@@ -3028,7 +2991,7 @@ static int matcher_match(SgMatcher *m, int from, int anchor)
     ret = matcher_match0(m->match_ctx, from, anchor, m->pattern->prog->root);
   /* sync lastp */
   if (!ret) m->first  = -1;
-  m->last = m->match_ctx->lastp - SG_STRING_VALUE(m->text);
+  m->last = (int)(m->match_ctx->lastp - SG_STRING_VALUE(m->text));
   return ret;
 }
 
@@ -3248,7 +3211,6 @@ static void append_replacement(SgMatcher *m, SgPort *p, SgObject replacement)
 static void append_tail(SgMatcher *m, SgPort *p)
 {
   /* append the rest */
-  int i;
   Sg_WritesUnsafe(p, SG_STRING_VALUE(m->text)+m->lastAppendPosition,
 		  SG_STRING_SIZE(m->text) - m->lastAppendPosition);
 }

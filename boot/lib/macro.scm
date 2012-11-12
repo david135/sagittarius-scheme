@@ -1,17 +1,17 @@
 ;; -*- mode: scheme; coding: utf-8 -*-
 
-(define-constant LEXICAL 0)		; the save as compiler.scm
+;; same variables 
+(define-constant LEXICAL 0)		; the same as compiler.scm
 (define-constant PATTERN 2)		; not LEXICAL nor SYNTAX
-
-;; also the same as compiler.scm
-(define lvar?
-  (lambda (obj)
-    (and (vector? obj) (eq? (vector-ref obj 0) 'lvar))))
+;;(define-constant IN-LIBRARY 3)
 
 (define .vars (make-identifier '.vars '() '(core syntax-case)))
 
 ;; mac-env must be p1env
 (define (lookup-lexical-name id mac-env)
+  ;; the same as compiler.scm, but inlinable...
+  (define (lvar? obj)
+    (and (vector? obj) (eq? (vector-ref obj 0) 'lvar)))
   ;; lookup env and bindings
   ;; first env
   ;; except '_ and '...
@@ -22,84 +22,78 @@
 		    ;; check current library's bindings
 		    ;; TODO correct? 
 		    (find-binding (id-library lvar) (id-name lvar) #f))
-	       => (lambda (gloc) lvar))
+	       lvar)
 	      ((lvar? lvar) id)
 	      (else id)))))
 
-(define bar?
-  (lambda (expr)
-    (and (variable? expr)
-	 (eq? (identifier->symbol expr) '_))))
+(define (bar? expr)
+  (and (variable? expr)
+       (eq? (identifier->symbol expr) '_)))
 
-(define ellipsis?
-  (lambda (expr)
-    (and (variable? expr)
-	 (eq? (identifier->symbol expr) '...))))
+(define (ellipsis? expr)
+  (and (variable? expr)
+       (eq? (identifier->symbol expr) '...)))
 
-(define ellipsis-pair?
-  (lambda (form)
-    (and (pair? form)
-         (pair? (cdr form))
-         (ellipsis? (cadr form)))))
+(define (ellipsis-pair? form)
+  (and (pair? form)
+       (pair? (cdr form))
+       (ellipsis? (cadr form))))
 
-(define ellipsis-splicing-pair?
-  (lambda (form)
-    (and (pair? form)
-         (pair? (cdr form))
-         (ellipsis? (cadr form))
-         (pair? (cddr form))
-         (ellipsis? (caddr form)))))
+(define (ellipsis-splicing-pair? form)
+  (and (pair? form)
+       (pair? (cdr form))
+       (ellipsis? (cadr form))
+       (pair? (cddr form))
+       (ellipsis? (caddr form))))
 
-(define ellipsis-quote?
-  (lambda (form)
-    (and (pair? form)
-         (ellipsis? (car form))
-         (pair? (cdr form))
-         (null? (cddr form)))))
+(define (ellipsis-quote? form)
+  (and (pair? form)
+       (ellipsis? (car form))
+       (pair? (cdr form))
+       (null? (cddr form))))
 
-(define check-pattern
-  (lambda (pat lites)
+(define (check-pattern pat lites)
 
-    (define check-duplicate-variable
-      (lambda (pat lites)
-        (let loop ((lst pat) (pool '()))
-          (cond ((pair? lst)
-                 (loop (cdr lst)
-                       (loop (car lst) pool)))
-                ((ellipsis? lst) pool)
-                ((bar? lst) pool)
-                ((variable?  lst)
-                 (if (id-memq lst lites)
-                     pool
-                     (if (memq lst pool)
-                         (syntax-violation "syntax pattern" "duplicate pattern variables" pat lst)
-                         (cons lst pool))))
-                ((vector? lst)
-                 (loop (vector->list lst) pool))
-                (else pool)))))
+  (define (check-duplicate-variable pat lites)
+    (let loop ((lst pat) (pool '()))
+      (cond ((pair? lst)
+             (loop (cdr lst)
+                   (loop (car lst) pool)))
+            ((ellipsis? lst) pool)
+            ((bar? lst) pool)
+            ((variable?  lst)
+             (if (id-memq lst lites)
+                 pool
+                 (if (memq lst pool)
+                     (syntax-violation "syntax pattern" "duplicate pattern variables" pat lst)
+                     (cons lst pool))))
+            ((vector? lst)
+             (loop (vector->list lst) pool))
+            (else pool))))
 
-    (define check-misplaced-ellipsis
-      (lambda (pat lites)
-        (let loop ((lst pat))
-          (cond ((ellipsis? lst)
-                 (syntax-violation "syntax pattern" "improper use of ellipsis" pat))
-                ((ellipsis-pair? lst)
-                 (and (variable? (car lst))
-                      (id-memq (car lst) lites)
-                      (syntax-violation "syntax pattern" "ellipsis following literal" pat lst))
-                 (let loop2 ((lst (cddr lst)))
-                   (and (pair? lst)
-                        (if (ellipsis? (car lst))
-			    (assertion-violation "syntax pattern" "ambiguous use of ellipsis" pat)
-                            (loop2 (cdr lst))))))
-                ((pair? lst)
-                 (or (loop (car lst)) (loop (cdr lst))))
-                ((vector? lst)
-                 (loop (vector->list lst)))
-                (else #f)))))
+  (define (check-misplaced-ellipsis pat lites)
+    (let loop ((lst pat))
+      (cond ((ellipsis? lst)
+             (syntax-violation "syntax pattern" "improper use of ellipsis" pat))
+            ((ellipsis-pair? lst)
+             (and (variable? (car lst))
+                  (id-memq (car lst) lites)
+                  (syntax-violation "syntax pattern"
+				    "ellipsis following literal" pat lst))
+             (let loop2 ((lst (cddr lst)))
+               (and (pair? lst)
+                    (if (ellipsis? (car lst))
+                        (assertion-violation "syntax pattern"
+					     "ambiguous use of ellipsis" pat)
+                        (loop2 (cdr lst))))))
+            ((pair? lst)
+             (or (loop (car lst)) (loop (cdr lst))))
+            ((vector? lst)
+             (loop (vector->list lst)))
+            (else #f))))
 
-    (check-misplaced-ellipsis pat lites)
-    (check-duplicate-variable pat lites)))
+  (check-misplaced-ellipsis pat lites)
+  (check-duplicate-variable pat lites))
 
 (define (extend-env newframe env)
   (acons PATTERN newframe env))
@@ -109,50 +103,64 @@
 					    '(core syntax-case)))
 (define .list (make-identifier 'list '() '(core syntax-case)))
 
-(define collect-unique-ids ; exclude '...
-  (lambda (expr)
-    (let loop ((lst expr) (ans '()))
-      (cond ((pair? lst)
-             (loop (cdr lst)
-                   (loop (car lst) ans)))
-            ((ellipsis? lst) ans)
-            ((variable? lst)
-             (if (memq lst ans) ans (cons lst ans)))
-            ((vector? lst)
-             (loop (vector->list lst) ans))
-            (else ans)))))
+;; exclude '...
+(define (collect-unique-ids expr)
+  (let loop ((lst expr) (ans '()))
+    (cond ((pair? lst)
+           (loop (cdr lst)
+                 (loop (car lst) ans)))
+          ((ellipsis? lst) ans)
+          ((variable? lst)
+           (if (memq lst ans) ans (cons lst ans)))
+          ((vector? lst)
+           (loop (vector->list lst) ans))
+          (else ans))))
 
-(define collect-vars-ranks
-  (lambda (pat lites depth ranks)
-    (cond ((bar? pat) ranks)
-          ((variable? pat)
-           (if (id-memq pat lites)
-               ranks
-               (acons pat depth ranks)))
-          ((ellipsis-pair? pat)
-           (collect-vars-ranks (cddr pat) lites depth
-                               (if (variable? (car pat))
-                                   (acons (car pat) (+ depth 1) ranks)
-                                   (collect-vars-ranks (car pat) lites
-						       (+ depth 1) ranks))))
-          ((pair? pat)
-           (collect-vars-ranks (cdr pat) lites depth
-                               (collect-vars-ranks (car pat)
-						   lites depth ranks)))
-          ((vector? pat)
-           (collect-vars-ranks (vector->list pat) lites depth ranks))
-          (else ranks))))
+(define (collect-vars-ranks pat lites depth ranks)
+  (cond ((bar? pat) ranks)
+        ((variable? pat)
+         (if (id-memq pat lites)
+             ranks
+             (acons pat depth ranks)))
+        ((ellipsis-pair? pat)
+         (collect-vars-ranks (cddr pat) lites depth
+                             (if (variable? (car pat))
+                                 (acons (car pat) (+ depth 1) ranks)
+                                 (collect-vars-ranks (car pat) lites
+                                                     (+ depth 1) ranks))))
+        ((pair? pat)
+         (collect-vars-ranks (cdr pat) lites depth
+                             (collect-vars-ranks (car pat)
+                                                 lites depth ranks)))
+        ((vector? pat)
+         (collect-vars-ranks (vector->list pat) lites depth ranks))
+        (else ranks)))
 
 (define syntax-quote. (make-identifier 'syntax-quote '()
 				       '(sagittarius compiler)))
 ;; syntax-case compiler
 (define (compile-syntax-case exp-name expr literals clauses library env mac-env)
-  ;; literal must be unwrapped
-  (let ((lites (unwrap-syntax literals)))
+  ;; literal must be unwrapped, otherwise it will be too unique
+  (let ((lites (unwrap-syntax-with-reverse literals)))
     (define (parse-pattern pattern)
       (check-pattern pattern lites)
       (values pattern 
 	      (extend-env (collect-vars-ranks pattern lites 0 '()) env)))
+
+     (define (literal-seen lst seen)
+       (define mark (list 'literal))      
+       (let ((ids (collect-unique-ids lst)))
+	 (let loop ((ids ids))
+	   (unless (null? ids)
+	     (and-let* ((o (memq (car ids) literals))
+			(id (car o))
+			(unrenamed (unwrap-syntax-with-reverse id))
+			(temp-id (make-identifier unrenamed '() library))
+			(id (copy-identifier temp-id mark)))
+	       ;; store unrenamed id to seen for check-pattern
+	       (hashtable-set! seen (car ids)id))
+	     (loop (cdr ids))))
+	 seen))
 
     (or (and (list? lites) (for-all symbol? lites))
 	(syntax-violation 'syntax-case "invalid literals" expr lites))
@@ -163,6 +171,24 @@
     (and (memq '... lites)
 	 (syntax-violation 'syntax-case "... in literals" expr lites))
 
+    ;; literal must be binded
+    ;; FIXME this is a really ugly kludge 
+    (let loop ((lites lites))
+       (unless (null? lites)
+	 (let ((lite (car lites)))
+	   (or (find-binding library lite #f)
+	       (%insert-binding 
+		library lite
+		(make-macro-transformer
+		 lite
+		 (lambda ()
+		   (lambda arg
+		     (syntax-error "misplaced syntactic keyword" arg)))
+		 ;; FIXME 
+		 ;; p1env is just dummy and we can't use mac-env for this.
+		 (vector library '() #f #f)
+		 library))))
+	 (loop (cdr lites))))
     
     (values .match-syntax-case
 	    lites
@@ -172,8 +198,11 @@
 		     (smatch clause
 		       ((p expr)
 			;; we want pattern variables unique, so wrap it
+			;; use syntax-quote so that wrapped syntax won't loose
+			;; the syntax information.
 			(receive (pattern env)
-			    (parse-pattern (wrap-syntax p mac-env seen))
+			    (parse-pattern (wrap-syntax p mac-env
+							(literal-seen p seen)))
 			  (cons `(,.list (,syntax-quote. ,pattern)
 					 #f
 					 (lambda (,.vars)
@@ -181,7 +210,8 @@
 				env)))
 		       ((p fender expr)
 			(receive (pattern env)
-			    (parse-pattern (wrap-syntax p mac-env seen))
+			    (parse-pattern (wrap-syntax p mac-env
+							(literal-seen p seen)))
 			  (cons `(,.list (,syntax-quote. ,pattern)
 					 (lambda (,.vars)
 					   ,(wrap-syntax fender mac-env seen))
@@ -200,136 +230,138 @@
      (lambda (f r c)
        `(apply ,(cadr f) ,@(cddr f)))))))
 
-(define count-pair
-  (lambda (lst)
-    (let loop ((lst lst) (n 0))
-      (if (pair? lst) (loop (cdr lst) (+ n 1)) n))))
+(define (count-pair lst)
+  (let loop ((lst lst) (n 0))
+    (if (pair? lst) (loop (cdr lst) (+ n 1)) n)))
 
-(define match-ellipsis?
-  (lambda (expr pat lites)
-    (or (null? expr)
-        (and (pair? expr)
-             (match-pattern? (car expr) (car pat) lites)
-             (match-ellipsis? (cdr expr) pat lites)))))
+(define (match-ellipsis? expr pat lites)
+  (or (null? expr)
+      (and (pair? expr)
+           (match-pattern? (car expr) (car pat) lites)
+           (match-ellipsis? (cdr expr) pat lites))))
 
-(define match-ellipsis-n?
-  (lambda (expr pat n lites)
-    (or (= n 0)
-        (and (pair? expr)
-             (match-pattern? (car expr) (car pat) lites)
-             (match-ellipsis-n? (cdr expr) pat (- n 1) lites)))))
+(define (match-ellipsis-n? expr pat n lites)
+  (or (= n 0)
+      (and (pair? expr)
+           (match-pattern? (car expr) (car pat) lites)
+           (match-ellipsis-n? (cdr expr) pat (- n 1) lites))))
 
-(define match-pattern?
-  (lambda (expr pat lites)
-    (define (compare a b)
-      (or (identifier=? (current-usage-env) a
-			(current-macro-env) b)
-	  (and (identifier? a) (identifier? b)
-	       (free-identifier=? a b))
-	  (let ((v (find-binding (vm-current-library) 
-				 (identifier->symbol b) #f)))
-	    (and v
-		 (eq? (identifier->symbol a) (gloc-name v))))))
-    (cond ((bar? pat) #t)
-          ((variable? pat)
-           (cond ((id-memq pat lites)
-		  (and (variable? expr)
-		       (compare pat expr)))
-                 (else #t)))
-          ((ellipsis-pair? pat)
-           (if (and (null? (cddr pat)) (list? expr))
-               (or (variable? (car pat))
-                   (match-ellipsis? expr pat lites))
-               (let ((n (- (count-pair expr) (count-pair (cddr pat)))))
-                 (if (= n 0)
-                     (match-pattern? expr (cddr pat) lites)
-                     (and (> n 0)
-                          (match-ellipsis-n? expr pat n lites)
-                          (match-pattern? (list-tail expr n) (cddr pat)
-					  lites))))))
-          ((pair? pat)
-           (and (pair? expr)
-                (match-pattern? (car expr) (car pat) lites)
-                (match-pattern? (cdr expr) (cdr pat) lites)))
-          ((vector? pat)
-           (and (vector? expr)
-                (match-pattern? (vector->list expr) (vector->list pat) lites)))
-          (else (equal? pat expr)))))
+(define (match-pattern? expr pat lites)
+  (define (compare a b)
+    (or (identifier=? (current-usage-env) a
+                      (current-macro-env) b)
+        (and (identifier? a) (identifier? b)
+	     (free-identifier=? a b))
+        (and-let* ((v (find-binding (vm-current-library) 
+				    (identifier->symbol b) #f)))
+	  (eq? (identifier->symbol a) (gloc-name v)))))
+  (cond ((bar? pat) #t)
+        ((variable? pat)
+         (cond ((id-memq pat lites)
+                (and (variable? expr)
+                     (compare pat expr)))
+               (else #t)))
+        ((ellipsis-pair? pat)
+         (if (and (null? (cddr pat)) (list? expr))
+             (or (variable? (car pat))
+                 (match-ellipsis? expr pat lites))
+             (let ((n (- (count-pair expr) (count-pair (cddr pat)))))
+               (if (= n 0)
+                   (match-pattern? expr (cddr pat) lites)
+                   (and (> n 0)
+                        (match-ellipsis-n? expr pat n lites)
+                        (match-pattern? (list-tail expr n) (cddr pat)
+                                        lites))))))
+        ((pair? pat)
+         (and (pair? expr)
+              (match-pattern? (car expr) (car pat) lites)
+              (match-pattern? (cdr expr) (cdr pat) lites)))
+        ((vector? pat)
+         (and (vector? expr)
+              (match-pattern? (vector->list expr) (vector->list pat) lites)))
+        (else (equal? pat expr))))
 
-(define union-vars
-  (lambda (vars evars)
-    (if (null? evars)
+(define (union-vars vars evars)
+  (if (null? evars)
+      vars
+      (union-vars (bind-var! (caar evars) (reverse (cdar evars)) vars)
+                  (cdr evars))))
+
+(define (bind-var! pat expr vars)
+  (cond ((bar? pat) vars)
+        (else
+         (let ((slot (assq pat vars)))
+           (if slot
+               (begin (set-cdr! slot (cons expr (cdr slot))) vars)
+               (acons pat (list expr) vars))))))
+
+(define (bind-null-ellipsis pat lites vars)
+  (let loop ((lst (collect-unique-ids (car pat))) (vars vars))
+    (if (null? lst)
         vars
-        (union-vars (bind-var! (caar evars) (reverse (cdar evars)) vars)
-                    (cdr evars)))))
+        (loop (cdr lst)
+              (if (memq (car lst) lites)
+                  vars
+                  (bind-var! (car lst) '() vars))))))
 
-(define bind-var!
-  (lambda (pat expr vars)
-    (cond ((bar? pat) vars)
-          (else
-           (let ((slot (assq pat vars)))
-             (if slot
-                 (begin (set-cdr! slot (cons expr (cdr slot))) vars)
-                 (acons pat (list expr) vars)))))))
+(define (bind-ellipsis expr pat lites vars evars)
+  (if (null? expr)
+      (if (null? evars)
+          (bind-null-ellipsis pat lites vars)
+          (union-vars vars evars))
+      (bind-ellipsis (cdr expr) pat lites vars
+                     (bind-pattern (car expr) (car pat) lites evars))))
 
-(define bind-null-ellipsis
-  (lambda (pat lites vars)
-    (let loop ((lst (collect-unique-ids (car pat))) (vars vars))
-      (if (null? lst)
-          vars
-          (loop (cdr lst)
-                (if (memq (car lst) lites)
-                    vars
-                    (bind-var! (car lst) '() vars)))))))
+(define (bind-ellipsis-n expr pat lites n vars evars)
+  (if (= n 0)
+      (if (null? evars)
+          (bind-null-ellipsis pat lites vars)
+          (union-vars vars evars))
+      (bind-ellipsis-n (cdr expr) pat lites (- n 1) vars
+                       (bind-pattern (car expr) (car pat) lites evars))))
 
-(define bind-ellipsis
-  (lambda (expr pat lites vars evars)
-    (if (null? expr)
-        (if (null? evars)
-            (bind-null-ellipsis pat lites vars)
-            (union-vars vars evars))
-        (bind-ellipsis (cdr expr) pat lites vars
-                       (bind-pattern (car expr) (car pat) lites evars)))))
-
-(define bind-ellipsis-n
-  (lambda (expr pat lites n vars evars)
-    (if (= n 0)
-        (if (null? evars)
-            (bind-null-ellipsis pat lites vars)
-            (union-vars vars evars))
-        (bind-ellipsis-n (cdr expr) pat lites (- n 1) vars
-                         (bind-pattern (car expr) (car pat) lites evars)))))
-
-(define bind-pattern
-  (lambda (expr pat lites vars)
-    (cond ((variable? pat)
-           (if (id-memq pat lites)
-               vars
-               (bind-var! pat expr vars)))
-          ((ellipsis-pair? pat)
-           (if (and (null? (cddr pat)) (list? expr))
-               (if (variable? (car pat))
-                   (bind-var! (car pat) expr vars)
-                   (bind-ellipsis expr pat lites vars '()))
-               (let ((n (- (count-pair expr) (count-pair (cddr pat)))))
-                 (bind-pattern (list-tail expr n) (cddr pat) lites
-                               (if (and (= n 0) (variable? (car pat)))
-                                   (bind-var! (car pat) '() vars)
-                                   (bind-ellipsis-n expr pat lites n
-						    vars '()))))))
-          ((pair? pat)
-           (bind-pattern (cdr expr) (cdr pat) lites
-                         (bind-pattern (car expr) (car pat) lites vars)))
-          ((vector? pat)
-           (bind-pattern (vector->list expr) (vector->list pat) lites vars))
-          (else vars))))
+(define (bind-pattern expr pat lites vars)
+  (cond ((variable? pat)
+         (if (id-memq pat lites)
+             vars
+             (bind-var! pat expr vars)))
+        ((ellipsis-pair? pat)
+         (if (and (null? (cddr pat)) (list? expr))
+             (if (variable? (car pat))
+                 (bind-var! (car pat) expr vars)
+                 (bind-ellipsis expr pat lites vars '()))
+             (let ((n (- (count-pair expr) (count-pair (cddr pat)))))
+               (bind-pattern (list-tail expr n) (cddr pat) lites
+                             (if (and (= n 0) (variable? (car pat)))
+                                 (bind-var! (car pat) '() vars)
+                                 (bind-ellipsis-n expr pat lites n
+                                                  vars '()))))))
+        ((pair? pat)
+         (bind-pattern (cdr expr) (cdr pat) lites
+                       (bind-pattern (car expr) (car pat) lites vars)))
+        ((vector? pat)
+         (bind-pattern (vector->list expr) (vector->list pat) lites vars))
+        (else vars)))
 
 
 (define (match-syntax-case patvars literals expr . lst)
   (define (match form pat)
     (and (match-pattern? form pat literals)
 	 (bind-pattern form pat literals '())))
-  (let ((form (wrap-syntax expr (current-usage-env) (make-eq-hashtable) #t)))
+  (define (rewrite expr lites)     
+    (let loop ((expr expr))
+      (cond ((null? expr) expr)
+	    ((pair? expr) (cons (loop (car expr)) (loop (cdr expr))))
+	    ((vector? expr) (list->vector (loop (vector->list expr))))
+	    ((and-let* (( (variable? expr) )
+			(v (unwrap-syntax-with-reverse expr)))
+	       (memq v lites)) => car)
+	    (else expr))))
+  ;; we need to local variable unique so that it won't be global.
+  (let* ((lites (unwrap-syntax-with-reverse (collect-unique-ids expr)))
+	 (form (wrap-syntax (rewrite expr 
+				      (lset-intersection eq? lites literals))
+			    (current-usage-env) (make-eq-hashtable) #t)))
     (let loop ((lst lst))
       (if (null? lst)
 	  (syntax-violation (and (pair? form) (car form)) "invalid syntax"
@@ -347,23 +379,21 @@
 
 ;; compile (syntax ...)
 (define .expand-syntax (make-identifier 'expand-syntax '() '(core syntax-case)))
-(define collect-rename-ids
-  (lambda (template ranks)
-    (let ((ids (collect-unique-ids template)))
-      (let loop ((lst ids))
-        (if (null? lst)
-            lst
-            (if (assq (car lst) ranks)
-                (loop (cdr lst))
-                (cons (car lst) (loop (cdr lst)))))))))
+(define (collect-rename-ids template ranks)
+  (let ((ids (collect-unique-ids template)))
+    (let loop ((lst ids))
+      (if (null? lst)
+          lst
+          (if (assq (car lst) ranks)
+              (loop (cdr lst))
+              (cons (car lst) (loop (cdr lst))))))))
 
-(define parse-ellipsis-splicing
-  (lambda (form)
-    (let loop ((len 2) (tail (cdddr form)))
-      (cond ((and (pair? tail) (ellipsis? (car tail)))
-             (loop (+ len 1) (cdr tail)))
-            (else
-             (values (list-head form len) tail len))))))
+(define (parse-ellipsis-splicing form)
+  (let loop ((len 2) (tail (cdddr form)))
+    (cond ((and (pair? tail) (ellipsis? (car tail)))
+           (loop (+ len 1) (cdr tail)))
+          (else
+           (values (list-head form len) tail len)))))
 
 (define (check-template tmpl ranks)
   (define (control-patvar-exists? tmpl depth)
@@ -447,6 +477,16 @@
 	      ((vector? lst)
 	       (loop (vector->list lst) depth))))))
 
+;; exp-name: current expression name for debug
+;; tmpl:     template (if it's in syntax-case, this must be wrapped)
+;; env:      p1env only frame
+;; mac-env:  whole p1env.
+;;
+;; template is wrapped by syntax-case so that we can retrieve pattern
+;; variables from mac-env.
+;; .var is special hidden variable used only in macro expansion phase.
+;; it contains all lexical variables for fender and expander. 
+;; see compile-syntax-case.
 (define (compile-syntax exp-name tmpl env mac-env)
   (let* ((template tmpl)
 	 (ids (collect-unique-ids tmpl))
@@ -459,6 +499,8 @@
     ;; later
     (check-template template ranks)
     (let ((patvar (let ((v (p1env-lookup mac-env .vars LEXICAL)))
+		    ;; if .vars is identifier, then it must be toplevel
+		    ;; so not pattarn variables.
 		    (if (identifier? v)
 			'()
 			.vars)))
@@ -470,17 +512,24 @@
 	  (let ((lex-id (lookup-lexical-name tmpl mac-env)))
 	    (if (eq? template lex-id)
 		(if (null? ranks)
-		    `(,.expand-syntax ,patvar (,syntax-quote. ,template) ()
-				      (,syntax-quote. ,template) ()
+		    `(,.expand-syntax ,patvar
+				      (,syntax-quote. ,template)
+				      ()
+				      (,syntax-quote. ,template)
+				      ()
 				      (,syntax-quote. ,env))
 		    `(,.expand-syntax ,patvar
 				      (,syntax-quote. ,template)
 				      (,syntax-quote. ,(list (cons template 0)))
-				      (,syntax-quote. ,template) ()
+				      (,syntax-quote. ,template)
+				      ()
 				      (,syntax-quote. ,env)))
 		(if (null? ranks)
-		    `(,.expand-syntax ,patvar (,syntax-quote. ,template)
-				      () (,syntax-quote. ,lex-id) ()
+		    `(,.expand-syntax ,patvar
+				      (,syntax-quote. ,template)
+				      ()
+				      (,syntax-quote. ,lex-id)
+				      ()
 				      (,syntax-quote. ,env))
 		    `(,.expand-syntax ,patvar
 				      (,syntax-quote. ,template)
@@ -511,12 +560,18 @@
   (define mac-env (current-macro-env))
   
   (define (lookup-pattern-variable p1env vars id)
-    (define (id=? frame id1 id2)
+    (define (mark-in-same-macro? env)
+      (define (is-mark?) (and (not (null? env)) (symbol? (car env))))
+      (if (is-mark?)
+	  (eq? (vector-ref mac-env 2) (car env))
+	  #t))
+    (define (id=? frame id1 id2 check-env?)
       (or (and-let* ( ( (identifier? id1) )
 		      ( (identifier? id2) ))
-	    (if (or (id-has-parent? id1)
-		    (id-has-parent? id2))
-		(id-has-same-parent? id1 id2)
+	    (if check-env?
+		(and (free-identifier=? id1 id2)
+		     (mark-in-same-macro? (id-envs id1))
+		     (mark-in-same-macro? (id-envs id2)))
 		(free-identifier=? id1 id2)))
 	  (identifier=? use-env id1 frame id2)))
 
@@ -526,8 +581,7 @@
 		  (= (caar frames) PATTERN))
 	     (let loop2 ((frame (cdar frames)))
 	       (cond ((null? frame) (loop (cdr frames)))
-		     ((and (id=? p1env id (caar frame))
-			   #;(identifier=? use-env id frame (caar frame))
+		     ((and (id=? p1env id (caar frame) #f)
 			   (assq (caar frame) vars))
 		       => (lambda (slot)
 			    (let ((a (car slot))
@@ -535,25 +589,24 @@
 			      ;; pattern variable must not be list
 			      ;; so if it's a list, move to next
 			      (if (and (variable? r)
-				       (id=? frame a r))
+				       (id=? frame a r #t))
 				  r
 				  (loop2 (cdr frame))))))
 		     (else (loop2 (cdr frame))))))
 	    (else (loop (cdr frames))))))
 
-  (define contain-identifier?
-    (lambda (lst)
-      (let loop ((lst lst))
-	(cond ((pair? lst)
-	       (or (null? (car lst)) (loop (car lst)) (loop (cdr lst))))
-	      ((identifier? lst))
-	      ((vector? lst)
-	       (let loop2 ((i (- (vector-length lst) 1)))
-		 (and (>= i 0)
-		      (or (loop (vector-ref lst i))
-			  (loop2 (- i 1))))))
-	      (else
-	       (identifier? lst))))))
+  (define (contain-identifier? lst)
+    (let loop ((lst lst))
+      (cond ((pair? lst)
+             (or (null? (car lst)) (loop (car lst)) (loop (cdr lst))))
+            ((identifier? lst))
+            ((vector? lst)
+             (let loop2 ((i (- (vector-length lst) 1)))
+               (and (>= i 0)
+                    (or (loop (vector-ref lst i))
+                        (loop2 (- i 1))))))
+            (else
+             (identifier? lst)))))
 
   (define (wrap-id lst)
     (let loop ((lst lst))
@@ -565,6 +618,19 @@
 	     (list->vector (loop (vector->list lst))))
 	    (else lst))))
 
+   ;; Issue 25.
+   ;; if the binding found in macro env, then it must be wrap with
+   ;; macro env.
+   (define (wrap-symbol sym seen)
+     (if (and (identifier? template)
+	      (not (identifier? (p1env-lookup p1env template PATTERN))))
+	 (wrap-syntax sym use-env seen)
+	 (let* ((lib (vector-ref mac-env 0))
+		(g (find-binding lib sym #f)))
+	   (if (and g (eq? (gloc-library g) lib))
+	       (wrap-syntax sym mac-env seen)
+	       (wrap-syntax sym use-env seen)))))
+
   (define (partial-identifier lst)
     (define renamed-ids (make-eq-hashtable))
     (let loop ((lst lst))
@@ -573,8 +639,7 @@
 		    (let ((a (loop (car lst))) (d (loop (cdr lst))))
 		      (cond ((and (eq? (car lst) a) (eq? (cdr lst) d)) lst)
 			    (else (cons a d)))))
-		   ((and (identifier? lst)
-			 (null? (id-envs lst)))
+		   ((identifier? lst)
 		    (cond ((lookup-pattern-variable p1env vars lst))
 			  (else lst)))
 		   (else lst)))
@@ -586,7 +651,7 @@
 		   ;; we need to replace it.
 		   ;; still we need this. Sucks!!
 		   ((lookup-pattern-variable p1env vars lst))
-		   (else (wrap-syntax lst use-env renamed-ids))))
+		   (else (wrap-symbol lst renamed-ids))))
 	    ((identifier? lst) lst)
 	    ((vector? lst)
 	     (list->vector (loop (vector->list lst))))
@@ -598,63 +663,84 @@
       '()
       (let ((form (transcribe-template template ranks vars)))
 	(cond ((null? form) '())
-	      ((eq? use-env mac-env)
-	       (wrap-id form))
 	      ((identifier? form) form)
 	      ((symbol? form) 
-	       (wrap-syntax form use-env seen))
+	       (wrap-symbol form seen))
+	      ((eq? use-env mac-env) (wrap-id form))
 	      (else
 	       (partial-identifier form))))))
 
 (define (rank-of name ranks)
   (let ((slot (exists (lambda (slot)
 			(if (free-identifier=? name (car slot))
-			    #;(and (eq? (id-envs name) (id-envs (car slot)))
-			    (eq? (id-name name) (id-name (car slot))))
 			    slot
 			    #f))
 		      ranks)))
     (if slot (cdr slot) -1)))
 
-(define collect-ellipsis-vars
-  (lambda (tmpl ranks depth vars)
-    (let ((ids (collect-unique-ids tmpl)))
-      (filter values
-              (map (lambda (slot)
-                     (and (memq (car slot) ids)
-                          (let ((rank (cdr (assq (car slot) ranks))))
-                            (cond ((< rank depth) slot)
-                                  ((null? (cdr slot)) slot)
-                                  (else (cons (car slot) (cadr slot)))))))
-                   vars)))))
+(define (collect-ellipsis-vars tmpl ranks depth vars)
+  (let ((ids (collect-unique-ids tmpl)))
+    (filter values
+            (map (lambda (slot)
+                   (and (memq (car slot) ids)
+                        (let ((rank (cdr (assq (car slot) ranks))))
+                          (cond ((< rank depth) slot)
+                                ((null? (cdr slot)) slot)
+                                (else (cons (car slot) (cadr slot)))))))
+                 vars))))
 
-(define consume-ellipsis-vars
-  (lambda (ranks depth vars)
-    (let ((exhausted #f) (consumed #f))
-      ;; consumed exhausted return
-      ;; #t       #t    --> #f        error, different size of matched subform
-      ;; #t       #f    --> remains   more variable to reveal
-      ;; #f       #t    --> #t        all variable revealed
-      ;; #f       #f    --> ()        no variable revealed
-      (let ((remains
-             (let loop ((lst vars))
-               (cond ((null? lst) lst)
-                     ((< (rank-of (caar lst) ranks) depth)
-                      (cons (car lst) (loop (cdr lst))))
-                     ((null? (cdar lst))
-                      (loop (cdr lst)))
-                     ((null? (cddar lst))
-                      (set! exhausted #t)
-                      (loop (cdr lst)))
-                     (else
-                      (or (circular-list? (cdar lst)) (set! consumed #t))
-                      (acons (caar lst) (cddar lst) (loop (cdr lst))))))))
-        (if consumed
-            (and (not exhausted) remains)
-            (or exhausted '()))))))
+(define (consume-ellipsis-vars ranks depth vars)
+  (let ((exhausted #f) (consumed #f))
+    ;; consumed exhausted return
+    ;; #t       #t    --> #f        error, different size of matched subform
+    ;; #t       #f    --> remains   more variable to reveal
+    ;; #f       #t    --> #t        all variable revealed
+    ;; #f       #f    --> ()        no variable revealed
+    (let ((remains
+           (let loop ((lst vars))
+             (cond ((null? lst) lst)
+                   ((< (rank-of (caar lst) ranks) depth)
+                    (cons (car lst) (loop (cdr lst))))
+                   ((null? (cdar lst))
+                    (loop (cdr lst)))
+                   ((null? (cddar lst))
+                    (set! exhausted #t)
+                    (loop (cdr lst)))
+                   (else
+                    (or (circular-list? (cdar lst)) (set! consumed #t))
+                    (acons (caar lst) (cddar lst) (loop (cdr lst))))))))
+      (if consumed
+          (and (not exhausted) remains)
+          (or exhausted '())))))
 
 (define (transcribe-template in-form ranks vars)
   (define use-env (current-usage-env))
+  (define mac-env (current-macro-env))
+  ;; put macro name as a mark
+  (define current-mark (list (vector-ref (current-macro-env) 2)))
+  ;; TODO this can be done efficiently
+  (define (no-rename-needed? id) 
+    (let ((lib (id-library id))
+	  (name (id-name id)))
+      (or (eq? use-env mac-env)		; toplevel (should be)
+	  (not (null? (id-envs id)))	; obvious case
+	  (find-binding lib name #f)
+	  ;; these things are not defined yet.
+	  (memq name (library-defined lib))
+	  ;; local binded variables must not be renamed either.
+	  (and-let* ((var (p1env-lookup mac-env name LEXICAL))
+		     ;; do we need to check the library as well?
+		     )
+	    (not (identifier? var))))))
+	  
+  (define (rename-or-copy-id id current-mark)
+    (let ((t (if (no-rename-needed? id)
+		 id
+		 (make-identifier (reversible-gensym (id-name id))
+				  (id-envs id)
+				  (vector-ref use-env 0)))))
+      (copy-identifier t current-mark)))
+
   ;; regenerate pattern variable
   (define (rewrite-template t seen vars)
     (cond ((null? t) t)
@@ -663,9 +749,8 @@
 		 (rewrite-template (cdr t) seen vars)))
 	  ((vector? t)
 	   (list->vector (rewrite-template (vector->list t) seen vars)))
-	  ;; could be pattern variable, so keep it
-	  ((and (variable? t)
-		(assq t vars)) => car)
+	  ;; could be a pattern variable, so keep it
+	  ((and (variable? t) (assq t vars)) => car)
 	  (else
 	   ;; rename template variable
 	   (or (and-let* (( (identifier? t) )
@@ -674,7 +759,10 @@
 			  ( (null? (id-envs id)) )
 			  )
 		 (cond ((hashtable-ref seen t #f))
-		       (else (let ((new-id (copy-identifier t)))
+		       ;; mark as template variable so that pattern variable
+		       ;; lookup won't make misjudge.
+		       ;; note: id-envs returns (#t)
+		       (else (let ((new-id (rename-or-copy-id t current-mark)))
 			       (hashtable-set! seen t new-id)
 			       new-id))))
 	       t))))
@@ -778,24 +866,21 @@
       (assertion-violation 
        'datum->syntax 
        (format "expected identifier, but got ~s" template-id)))
-  (let ((env (if (null? (id-envs template-id))
+  (let ((env (if (eq? (vector-ref (current-usage-env) 0)
+		      (id-library template-id))
 		 (current-usage-env)
 		 (current-macro-env))))
-    (wrap-syntax datum env)
-    #;(if (eq? (vector-ref env 0) (id-library template-id))
-	datum
-    (wrap-syntax datum env))))
+    (wrap-syntax datum env (make-eq-hashtable) #f template-id)))
 
 ;; syntax->datum
 (define (syntax->datum syntax)
   (unwrap-syntax syntax))
 
-(define generate-temporaries
-  (lambda (obj)
-    (or (list? obj)
-        (assertion-violation 'generate-temporaries
-			     (format "expected list, but got ~s" obj)))
-    (map (lambda (n) (wrap-syntax (gensym) (current-usage-env))) obj)))
+(define (generate-temporaries obj)
+  (or (list? obj)
+      (assertion-violation 'generate-temporaries
+                           (format "expected list, but got ~s" obj)))
+  (map (lambda (n) (wrap-syntax (gensym) (current-usage-env))) obj))
 
 (define (make-variable-transformer proc)
   (make-macro 'variable-transformer

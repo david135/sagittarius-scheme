@@ -218,14 +218,26 @@ static void show_usage()
 	  "     time        Sort by time\n"
 	  "     count       Sort by count\n"
 #endif
+	  "\n"
+	  "environment variables:\n"
+	  "  SAGITTARIUS_LOADPATH\n"
+	  "    Adds library load path by using environment variable, with ':'\n"
+	  "    (use ';' for Windows) separated paths.\n"
+	  "  SAGITTARIUS_DYN_LOADPATH\n"
+	  "    Adds module load path by using environment variable, with ':'\n"
+	  "    (use ';' for Windows) separated paths.\n"
+	  "\n"
+	  "bug report:\n"
+	  "  http://code.google.com/p/sagittarius-scheme/issues\n"
+	  "  ktakashi@ymail.com"
 	  );
   exit(1);
 }
 
 static void version()
 {
-  printf("Sagittarius scheme shell, version %s\n",
-	 SAGITTARIUS_VERSION);
+  printf("Sagittarius scheme shell, version %s (%s)\n",
+	 SAGITTARIUS_VERSION, SAGITTARIUS_TRIPLE);
   exit(0);
 }
 
@@ -262,7 +274,13 @@ static void cleanup_main(void *data)
   if (stat) {
     fprintf(stderr, "\n;; Statistics (*: main thread only):\n");
     fprintf(stderr, ";;  GC: %zubytes heap, %zubytes allocated, %ld gc occurred\n",
-	    GC_get_heap_size(), GC_get_total_bytes(), GC_gc_no);
+	    GC_get_heap_size(), GC_get_total_bytes(),
+#if GC_VERSION_MAJOR >= 7 && GC_VERSION_MINOR >= 2
+	    GC_get_gc_no()
+#else
+	    GC_gc_no
+#endif
+	    );
   }
 }
 
@@ -330,6 +348,8 @@ int main(int argc, char **argv)
 	SG_VM_SET_FLAG(vm, SG_NO_INLINE_ASM);
 	SG_VM_SET_FLAG(vm, SG_NO_INLINE_LOCAL);
 	SG_VM_SET_FLAG(vm, SG_NO_LAMBDA_LIFT);
+      } else if (strcmp("no-backtrace", optarg) == 0) {
+	SG_VM_SET_FLAG(vm, SG_NO_DEBUG_INFO);
       } else {
 	Sg_Warn(UC("unknown optimize option %A"), Sg_MakeStringC(optarg));
       }
@@ -343,12 +363,24 @@ int main(int argc, char **argv)
       SG_VM_UNSET_FLAG(vm, SG_COMPATIBLE_MODE);
       break;
 #endif
-    case 'L':
-      Sg_AddLoadPath(SG_STRING(Sg_MakeStringC(optarg)));
+    case 'L': {
+      SgObject paths = Sg_Glob(SG_STRING(Sg_MakeStringC(optarg)), 0);
+      SG_FOR_EACH(paths, paths) {
+	if (Sg_DirectoryP(SG_CAR(paths))) {
+	  Sg_AddLoadPath(SG_CAR(paths));
+	}
+      }
       break;
-    case 'D':
-      Sg_AddDynamicLoadPath(SG_STRING(Sg_MakeStringC(optarg)));
+    }
+    case 'D': {
+      SgObject paths = Sg_Glob(SG_STRING(Sg_MakeStringC(optarg)), 0);
+      SG_FOR_EACH(paths, paths) {
+	if (Sg_DirectoryP(SG_CAR(paths))) {
+	  Sg_AddDynamicLoadPath(SG_CAR(paths));
+	}
+      }
       break;
+    }
     case 'p':
       {
 	SgObject log = Sg_OpenFile(SG_STRING(Sg_MakeStringC(optarg)),

@@ -61,11 +61,11 @@ static SgObject condition_printer_rec(SgObject *args, int argc, void *data)
   SgTuple *t;
   int len;
 
-  if (argc != 2) {
+  if ((argc > 2 && !SG_NULLP(args[argc-1])) || argc < 1) {
     Sg_WrongNumberOfArgumentsBetweenViolation(SG_INTERN("condition-printer"),
 					      1, 2, argc, SG_NIL);
   }
-  if (argc == 2) {
+  if (argc >= 2) {
     if (!SG_PORTP(args[1])) {
       Sg_WrongTypeOfArgumentViolation(SG_INTERN("condition-printer"),
 				      SG_MAKE_STRING("port"), args[1], SG_NIL);
@@ -91,7 +91,7 @@ static SgObject condition_printer_rec(SgObject *args, int argc, void *data)
   return SG_UNDEF;
 }
 
-static SG_DEFINE_SUBR(condition_printer_body, 1, 1, condition_printer_rec, SG_FALSE, NULL);
+static SG_DEFINE_SUBR(condition_printer_body, 1, 2, condition_printer_rec, SG_FALSE, NULL);
 
 SgObject Sg_Condition(SgObject components)
 {
@@ -172,7 +172,7 @@ static SgObject condition_predicate_rec(SgObject *args, int argc, void *data)
 SgObject Sg_ConditionPredicate(SgObject rtd)
 {
   SgObject subr = Sg_MakeSubr(condition_predicate_rec, rtd, 1, 0,
-			      Sg_MakeString(UC("condition-predicate"), SG_LITERAL_STRING));
+			      SG_MAKE_STRING("condition-predicate"));
   return subr;
 }
 
@@ -227,6 +227,8 @@ static SgObject make_irritants_condition;
 static SgObject make_warning;
 static SgObject make_lexical_violation;
 static SgObject make_read_error;
+static SgObject make_error;
+static SgObject make_syntax_error;
 
 SgObject Sg_MakeNonContinuableViolation()
 {
@@ -270,7 +272,24 @@ SgObject Sg_MakeReaderCondition(SgObject msg)
 			       Sg_MakeMessageCondition(msg)));
 }
 
-static SgObject list_parents(SgObject rtd)
+SgObject Sg_MakeError(SgObject msg)
+{
+  return Sg_Condition(SG_LIST2(Sg_Apply0(make_error),
+			       Sg_MakeMessageCondition(msg)));
+}
+
+SgObject Sg_MakeSyntaxError(SgObject msg, SgObject form)
+{
+  SgObject subform = SG_FALSE;
+  if (SG_PAIRP(form) && SG_PAIRP(SG_CAR(form))) {
+    subform = SG_CDR(form);
+    form = SG_CAR(form);
+  }
+  return Sg_Condition(SG_LIST2(Sg_Apply2(make_syntax_error, form, subform),
+			       Sg_MakeMessageCondition(msg)));
+}
+
+static SgObject list_parents(SgObject rtd, int namep)
 {
   SgObject lst = SG_NIL;
   for (;;) {
@@ -278,18 +297,42 @@ static SgObject list_parents(SgObject rtd)
     if (SG_FALSEP(p)) {
       return Sg_ReverseX(SG_CDR(lst));
     } else {
-      lst = Sg_Cons(Sg_RtdName(p), lst);
+      lst = Sg_Cons((namep)? Sg_RtdName(p) : p, lst);
       rtd = p;
     }
   }
 }
 
+static SgObject retrieve_fields_rec(SgObject rec, SgObject rtd)
+{
+  SgObject h = SG_NIL, t = SG_NIL, fields, field;
+  int index = 0;
+  fields = Sg_RtdFields(rtd);
+  SG_FOR_EACH(field, fields) {
+    SgObject acc = Sg_RecordAccessor(rtd, index++);
+    SgObject obj, args[1];
+    args[0] = rec;
+    obj = SG_SUBR_FUNC(acc)(args, 1, SG_SUBR_DATA(acc));
+    SG_APPEND1(h, t, Sg_Cons(SG_CDAR(field), obj));
+  }
+  return h;
+}
+
+static SgObject retrieve_fields(SgObject rec, SgObject rtd)
+{
+  SgObject h = SG_NIL, t = SG_NIL, p;
+  SgObject parents = list_parents(rtd, FALSE);
+  /* alist or '() */
+  SG_APPEND(h, t, retrieve_fields_rec(rec, rtd));
+  SG_FOR_EACH(p, parents) {
+    SG_APPEND(h, t, retrieve_fields_rec(rec, SG_CAR(p)));
+  }
+  return h;
+}
+
 SgObject Sg_DescribeCondition(SgObject con)
 {
   if (Sg_ConditionP(con)) {
-    /* SgGloc *g = Sg_FindBinding(SG_INTERN("(core errors)"), SG_INTERN("describe-condition"), SG_FALSE); */
-    /* SgObject proc = SG_GLOC_GET(g); */
-    /* return Sg_Apply1(proc, con); */
     SgObject out = Sg_MakeStringOutputPort(512);
     SgObject lst = Sg_SimpleConditions(con), cp;
     Sg_Printf(out, UC("  #<condition\n"));
@@ -299,34 +342,29 @@ SgObject Sg_DescribeCondition(SgObject con)
       int count;
       rtd = Sg_RecordRtd(rec);
       name = Sg_RtdName(rtd);
-      parents = list_parents(rtd);
-      fields = Sg_RtdFields(rtd);
+      parents = list_parents(rtd, TRUE);
+      fields = retrieve_fields(rec, rtd);
       count = Sg_Length(fields);
       Sg_Printf(out, UC("\n    %A"), name);
       if (SG_PAIRP(parents)) {
 	Sg_Printf(out, UC(" %A"), parents);
       }
       if (count == 1) {
-	SgObject acc = Sg_RecordAccessor(rtd, 0);
-	SgObject obj, args[1];
-	args[0] = rec;
-	obj = SG_SUBR_FUNC(acc)(args, 1, SG_SUBR_DATA(acc));
-	if (SG_STRINGP(obj)) {
-	  Sg_Printf(out, UC(" %A"), obj);
+	SgObject field = SG_CAR(fields);
+	if (SG_STRINGP(SG_CDR(field))) {
+	  Sg_Printf(out, UC(" %A"), SG_CDR(field));
 	} else {
-	  Sg_Printf(out, UC(" %S"), obj);
+	  Sg_Printf(out, UC(" %S"), SG_CDR(field));
 	}
       } else if (count > 1) {
-	SgObject obj, args[1], lst;
-	int i = 0;;
+	SgObject lst;
+	Sg_Printf(out, UC("\n"));
 	SG_FOR_EACH(lst, fields) {
-	  SgObject acc = Sg_RecordAccessor(rtd, i++);
-	  args[0] = rec;
-	  obj = SG_SUBR_FUNC(acc)(args, 1, SG_SUBR_DATA(acc));
-	  if (SG_STRINGP(obj)) {
-	    Sg_Printf(out, UC("      %A: %A"), SG_CAR(lst), obj);
+	  SgObject field = SG_CAR(lst);
+	  if (SG_STRINGP(SG_CDR(field))) {
+	    Sg_Printf(out, UC("      %A: %A\n"), SG_CAR(field), SG_CDR(field));
 	  } else {
-	    Sg_Printf(out, UC("      %A: %S"), SG_CAR(lst), obj);
+	    Sg_Printf(out, UC("      %A: %S\n"), SG_CAR(field), SG_CDR(field));
 	  }
 	}
       }
@@ -375,6 +413,8 @@ static SgRecordType io_file_does_not_exist_type; /* &i/o-file-does-not-exist */
 static SgRecordType io_port_type;		 /* &i/o-port */
 static SgRecordType io_decoding_type;		 /* &i/o-decoding */
 static SgRecordType io_encoding_type;		 /* &i/o-encoding */
+static SgRecordType compile_type;		 /* &compile */
+static SgRecordType import_type;		 /* &import */
 
 void Sg__InitConsitions()
 {
@@ -406,7 +446,8 @@ void Sg__InitConsitions()
 		    SG_RECORD_TYPE_RCD(cparent_), fields_)
 
 #define INTERN_CONDITION_WITH_PARENT(name_, parent_, fields_)		\
-  INTERN_CONDITION_WITH_CNAME(C_COND_NAME(name_), name_, C_COND_NAME(parent_), fields_)
+  INTERN_CONDITION_WITH_CNAME(C_COND_NAME(name_), name_,		\
+			      C_COND_NAME(parent_), fields_)
 
 #define INTERN_CTR(cname_, name_, method_)				\
   ctr = Sg_RecordConstructor(SG_RECORD_TYPE_RCD(cname_));		\
@@ -429,8 +470,8 @@ void Sg__InitConsitions()
   INTERN_CTR_PRED_WITH_CNAME(C_COND_NAME(name_), name_, ctr_, pred_)
 
 
-#define INTERN_COND_ACCE(name_, method_)		\
-  Sg_InsertBinding(nulllib, SG_INTERN(#method_),	\
+#define INTERN_COND_ACCE(name_, method_)				\
+  Sg_InsertBinding(nulllib, SG_INTERN(#method_),			\
 		   Sg_ConditionAccessor(SG_RECORD_TYPE_RTD(C_COND_NAME(name_)), accessor))
 
 
@@ -440,7 +481,8 @@ void Sg__InitConsitions()
   }
   {
     /* &message */
-    SgObject fields = Sg_MakeVector(1, SG_LIST2(SG_INTERN("immutable"), SG_INTERN("message")));
+    SgObject fields = Sg_MakeVector(1, SG_LIST2(SG_INTERN("immutable"),
+						SG_INTERN("message")));
     DeclareAccessor();
     INTERN_CONDITION_WITH_PARENT(&message, &condition, fields);
     INTERN_CTR_PRED(&message, make-message-condition, message-condition?);
@@ -463,6 +505,7 @@ void Sg__InitConsitions()
     /* error */
     INTERN_CONDITION_WITH_PARENT(&error, &serious, nullvec);
     INTERN_CTR_PRED(&error, make-error, error?);
+    make_error = ctr;
   }
   {
     /* violation */
@@ -477,7 +520,8 @@ void Sg__InitConsitions()
   }
   {
     /* irritants */
-    SgObject fields = Sg_MakeVector(1, SG_LIST2(SG_INTERN("immutable"), SG_INTERN("irritants")));
+    SgObject fields = Sg_MakeVector(1, SG_LIST2(SG_INTERN("immutable"),
+						SG_INTERN("irritants")));
     DeclareAccessor();
     INTERN_CONDITION_WITH_PARENT(&irritants, &condition, fields);
     INTERN_CTR_PRED(&irritants, make-irritants-condition, irritants-condition?);
@@ -487,7 +531,8 @@ void Sg__InitConsitions()
   }
   {
     /* who */
-    SgObject fields = Sg_MakeVector(1, SG_LIST2(SG_INTERN("immutable"), SG_INTERN("who")));
+    SgObject fields = Sg_MakeVector(1, SG_LIST2(SG_INTERN("immutable"),
+						SG_INTERN("who")));
     DeclareAccessor();
     INTERN_CONDITION_WITH_PARENT(&who, &condition, fields);
     INTERN_CTR_PRED(&who, make-who-condition, who-condition?);
@@ -505,8 +550,10 @@ void Sg__InitConsitions()
     /* syntax */
     SgObject fields = Sg_MakeVector(2, SG_UNDEF);
     DeclareAccessor();
-    SG_VECTOR_ELEMENT(fields, 0) = SG_LIST2(SG_INTERN("immutable"), SG_INTERN("form"));
-    SG_VECTOR_ELEMENT(fields, 1) = SG_LIST2(SG_INTERN("immutable"), SG_INTERN("subform"));
+    SG_VECTOR_ELEMENT(fields, 0) = SG_LIST2(SG_INTERN("immutable"),
+					    SG_INTERN("form"));
+    SG_VECTOR_ELEMENT(fields, 1) = SG_LIST2(SG_INTERN("immutable"),
+					    SG_INTERN("subform"));
     INTERN_CONDITION_WITH_PARENT(&syntax, &violation, fields);
     INTERN_CTR_PRED(&syntax, make-syntax-violation, syntax-violation?);
     /* this macro is not so smart, we need to manage like this */
@@ -514,6 +561,7 @@ void Sg__InitConsitions()
     INTERN_COND_ACCE(&syntax, syntax-violation-form);
     INTERN_ACCE(&syntax, &syntax-subform, 1);
     INTERN_COND_ACCE(&syntax, syntax-violation-subform);
+    make_syntax_error = ctr;
   }
   {
     /* undefined */
@@ -591,9 +639,11 @@ void Sg__InitConsitions()
   }
   {
     /* &i/o-invalid-position */
-    SgObject fields = Sg_MakeVector(1, SG_LIST2(SG_INTERN("immutable"), SG_INTERN("position")));
+    SgObject fields = Sg_MakeVector(1, SG_LIST2(SG_INTERN("immutable")
+						, SG_INTERN("position")));
     DeclareAccessor();
-    INTERN_CONDITION_WITH_CNAME(&io_invalid_position_type, &i/o-invalid-position, &io_type, fields);
+    INTERN_CONDITION_WITH_CNAME(&io_invalid_position_type,
+				&i/o-invalid-position, &io_type, fields);
     INTERN_CTR_PRED_WITH_CNAME(&io_invalid_position_type, &i/o-invalid-position,
 			       make-i/o-invalid-position-error,
 			       i/o-invalid-position-error?);
@@ -602,9 +652,11 @@ void Sg__InitConsitions()
   }
   {
     /* &i/o-filename */
-    SgObject fields = Sg_MakeVector(1, SG_LIST2(SG_INTERN("immutable"), SG_INTERN("filename")));
+    SgObject fields = Sg_MakeVector(1, SG_LIST2(SG_INTERN("immutable"),
+						SG_INTERN("filename")));
     DeclareAccessor();
-    INTERN_CONDITION_WITH_CNAME(&io_filename_type, &i/o-filename, &io_type, fields);
+    INTERN_CONDITION_WITH_CNAME(&io_filename_type, &i/o-filename,
+				&io_type, fields);
     INTERN_CTR_PRED_WITH_CNAME(&io_filename_type, &i/o-filename,
 			       make-i/o-filename-error,
 			       i/o-filename-error?);
@@ -621,31 +673,38 @@ void Sg__InitConsitions()
   }
   {
     /* &i/o-file-is-read-only */
-    INTERN_CONDITION_WITH_CNAME(&io_file_is_read_only_type, &i/o-file-is-read-only,
+    INTERN_CONDITION_WITH_CNAME(&io_file_is_read_only_type,
+				&i/o-file-is-read-only,
 				&io_file_protection_type, nullvec);
-    INTERN_CTR_PRED_WITH_CNAME(&io_file_is_read_only_type, &i/o-file-is-read-only,
+    INTERN_CTR_PRED_WITH_CNAME(&io_file_is_read_only_type,
+			       &i/o-file-is-read-only,
 			       make-i/o-file-is-read-only-error,
 			       i/o-file-is-read-only-error?);
   }
   {
     /* &i/o-file-already-exists */
-    INTERN_CONDITION_WITH_CNAME(&io_file_already_exists_type, &i/o-file-already-exists,
+    INTERN_CONDITION_WITH_CNAME(&io_file_already_exists_type,
+				&i/o-file-already-exists,
 				&io_filename_type, nullvec);
-    INTERN_CTR_PRED_WITH_CNAME(&io_file_already_exists_type, &i/o-file-already-exists,
+    INTERN_CTR_PRED_WITH_CNAME(&io_file_already_exists_type,
+			       &i/o-file-already-exists,
 			       make-i/o-file-already-exists-error,
 			       i/o-file-already-exists-error?);
   }
   {
     /* &i/o-file-does-not-exist */
-    INTERN_CONDITION_WITH_CNAME(&io_file_does_not_exist_type, &i/o-file-does-not-exist,
+    INTERN_CONDITION_WITH_CNAME(&io_file_does_not_exist_type,
+				&i/o-file-does-not-exist,
 				&io_filename_type, nullvec);
-    INTERN_CTR_PRED_WITH_CNAME(&io_file_does_not_exist_type, &i/o-file-does-not-exist,
+    INTERN_CTR_PRED_WITH_CNAME(&io_file_does_not_exist_type,
+			       &i/o-file-does-not-exist,
 			       make-i/o-file-does-not-exist-error,
 			       i/o-file-does-not-exist-error?);
   }
   {
     /* &i/o-port */
-    SgObject fields = Sg_MakeVector(1, SG_LIST2(SG_INTERN("immutable"), SG_INTERN("port")));
+    SgObject fields = Sg_MakeVector(1, SG_LIST2(SG_INTERN("immutable"),
+						SG_INTERN("port")));
     DeclareAccessor();
     INTERN_CONDITION_WITH_CNAME(&io_port_type, &i/o-port, &io_type, fields);
     INTERN_CTR_PRED_WITH_CNAME(&io_port_type, &i/o-port,
@@ -656,20 +715,49 @@ void Sg__InitConsitions()
   }
   {
     /* &i/o-decoding */
-    INTERN_CONDITION_WITH_CNAME(&io_decoding_type, &i/o-decoding, &io_port_type, nullvec);
+    INTERN_CONDITION_WITH_CNAME(&io_decoding_type, &i/o-decoding,
+				&io_port_type, nullvec);
     INTERN_CTR_PRED_WITH_CNAME(&io_decoding_type, &i/o-decoding,
 			       make-i/o-decoding-error,
 			       i/o-decoding-error?);
   }
   {
     /* &i/o-encoding */
-    SgObject fields = Sg_MakeVector(1, SG_LIST2(SG_INTERN("immutable"), SG_INTERN("char")));
+    SgObject fields = Sg_MakeVector(1, SG_LIST2(SG_INTERN("immutable"),
+						SG_INTERN("char")));
     DeclareAccessor();
-    INTERN_CONDITION_WITH_CNAME(&io_encoding_type, &i/o-encoding, &io_port_type, fields);
+    INTERN_CONDITION_WITH_CNAME(&io_encoding_type, &i/o-encoding,
+				&io_port_type, fields);
     INTERN_CTR_PRED_WITH_CNAME(&io_encoding_type, &i/o-encoding,
 			       make-i/o-encoding-error,
 			       i/o-encoding-error?);
     INTERN_ACCE(&io_encoding, &i/o-encoding-char, 0);
     INTERN_COND_ACCE(&io_encoding, i/o-encoding-error-char);
+  }
+  /* for compiler */
+  {
+    /* &compile */
+    SgObject fields = Sg_MakeVector(2, SG_UNDEF);
+    DeclareAccessor();
+    SG_VECTOR_ELEMENT(fields, 0) = SG_LIST2(SG_INTERN("immutable"),
+					    SG_INTERN("source"));
+    SG_VECTOR_ELEMENT(fields, 1) = SG_LIST2(SG_INTERN("immutable"),
+					    SG_INTERN("program"));
+    INTERN_CONDITION_WITH_PARENT(&compile, &error, fields);
+    INTERN_CTR_PRED(&compile, make-compile-error, compile-error?);
+    INTERN_ACCE(&compile, &compile-source, 0);
+    INTERN_COND_ACCE(&compile, &compile-error-source);
+    INTERN_ACCE(&compile, &compile-program, 1);
+    INTERN_COND_ACCE(&compile, &compile-error-program);
+  }
+  {
+    /* &import */
+    SgObject fields = Sg_MakeVector(1, SG_LIST2(SG_INTERN("immutable"),
+						SG_INTERN("library")));
+    DeclareAccessor();
+    INTERN_CONDITION_WITH_PARENT(&import, &compile, fields);
+    INTERN_CTR_PRED(&import, make-import-error, import-error?);
+    INTERN_ACCE(&import, &import-library, 0);
+    INTERN_COND_ACCE(&import, &import-error-library);
   }
 }

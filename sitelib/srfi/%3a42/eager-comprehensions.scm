@@ -41,10 +41,8 @@
     srfi-42-dispatched srfi-42-do srfi-42-let srfi-42-parallel srfi-42-while srfi-42-until
     srfi-42--dispatch-ref srfi-42--dispatch-set! make-initial-:-dispatch 
     dispatch-union srfi-42-generator-proc)
-  (import (rnrs)
+  (import (except (rnrs) error)
 	  (rnrs r5rs)
-	  ;; since syntax-case is not perfectly working, R6RS syntax-rules
-	  ;; also contains bugs. so until it's fixed we use (core syntax-rules)
 	  (sagittarius)
 	  (match)
 	  (srfi :39 parameters)
@@ -428,7 +426,7 @@
           #t
           ((+ i 1)) ))
     ((_ cc var (index i) arg1 arg2 arg ...)
-     (srfi-42-string cc var (index i) (string-append arg1 arg2 arg ...)) )
+     (srfi-42-string cc var (index i) (string-append arg1 arg2 arg ...)))
     ((_ cc var arg1 arg ...)
      (srfi-42-string cc var (index i) arg1 arg ...) )))
 

@@ -100,11 +100,7 @@
 #endif
 
 /* we need to include config.h here */
-#ifdef HAVE_CONFIG_H
 #include <sagittarius/config.h>
-#else
-#error "config.h is required"
-#endif
 
 /* detect endianness(from boost/detail/endian.hpp) */
 #if defined (__GLIBC__)
@@ -229,7 +225,8 @@ SG_CDECL_END
   immediate:
   nnnn nnnn  nnnn nnnn  nnnn nnnn  nnnn nn01 : fixnum
   cccc cccc  cccc cccc  cccc cccc  0000 0011 : char
-  ---- ----  ---- ----  ---- ----  0000 1011 : #f, #t, '(), eof-object, undefined, unbound
+  ---- ----  ---- ----  ---- ----  0001 0011 : #f, #t, '(), eof-object, undefined, unbound
+  ---- ----  ---- ----  ---- ----  ---- 1011 : immediate flonum
 
   object header:
   ---- ----  ---- ----  ---- ----  ---- --10 : heap object
@@ -326,12 +323,12 @@ typedef enum  {
 #define SG_HTAG(obj)   (SG_TAG3(SG_HDR(obj)->tag))
 
 /* Immediate objects*/
-#define SG_IMMEDIATEP(obj) (SG_TAG8(obj) == 0x0b)
+#define SG_IMMEDIATEP(obj) (SG_TAG8(obj) == 0x13)
 #define SG_ITAG(obj)       (SG_WORD(obj)>>8)
 
 #define SG_MAKEBITS(v, shift)   ((intptr_t)(v)<<shift)
 
-#define SG__MAKE_ITAG(num) (((num)<<8) + 0x0b)
+#define SG__MAKE_ITAG(num) (((num)<<8) + 0x13)
 #define SG_FALSE           SG_OBJ(SG__MAKE_ITAG(0)) /* #f */
 #define SG_TRUE            SG_OBJ(SG__MAKE_ITAG(1)) /* #t */
 #define SG_NIL             SG_OBJ(SG__MAKE_ITAG(2)) /* '() */
@@ -355,9 +352,9 @@ typedef enum  {
 
 /* fixnum */
 #define SG_INTP(obj)       (SG_TAG2(obj) == 1)
-#define SG_INT_VALUE(obj)  (((signed long int)SG_WORD(obj)) >> 2)
-#define SG_MAKE_INT(obj)   SG_OBJ(((intptr_t)(obj) << 2) + 1)
-#define SG_UINTP(obj)      (SG_INTP(obj) && ((signed long int)SG_WORD(obj) >= 0))
+#define SG_INT_VALUE(obj)  (((long)SG_WORD(obj)) >> 2)
+#define SG_MAKE_INT(obj)   SG_OBJ(((long)(obj) << 2) + 1)
+#define SG_UINTP(obj)      (SG_INTP(obj)&&((long)SG_WORD(obj) >= 0))
 #define SG_INT_SIZE        (SIZEOF_LONG * 8 - 3)
 #define SG_INT_MAX         ((1L << SG_INT_SIZE) - 1)
 #define SG_INT_MIN         (-SG_INT_MAX - 1)
@@ -365,9 +362,15 @@ typedef enum  {
 #define SG_CHAR(obj)       ((SgChar)(obj))
 #define SG_CHARP(obj)      (SG_TAG8(obj) == 3)
 #define SG_CHAR_VALUE(obj) SG_CHAR(((unsigned long)SG_WORD(obj)) >> 8)
-#define SG_MAKE_CHAR(obj)  SG_OBJ(((uintptr_t)(obj) << 8) + 0x03)
+#define SG_MAKE_CHAR(obj)  SG_OBJ(((unsigned long)(obj) << 8) + 0x03)
 /* SgChar is typedef of int32_t, so max value is 24 bits  */
 #define SG_CHAR_MAX        (0xffffff)
+
+#ifdef USE_IMMEDIATE_FLONUM
+#define SG_IFLONUM_TAG     0x0b
+#define SG_IFLONUM_MASK    0x0F
+#define SG_IFLONUMP(obj)   (SG_TAG4(obj) == SG_IFLONUM_TAG)
+#endif	/* USE_IMMEDIATE_FLONUM */
 
 /* CLOS */
 #define SG_HOBJP(obj)  (SG_HPTRP(obj)&&(SG_HTAG(obj)==0x7))

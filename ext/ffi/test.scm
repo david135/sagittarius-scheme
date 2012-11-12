@@ -16,13 +16,25 @@
   (define array (u8-list->bytevector '(6 6 1 4 2 9 3 7)))
 
   ;; for now, we do not support annonymous struct
-  (define-c-struct inner
-    (int value2)
-    (char* str))
-  
-  (define-c-struct data-to-store
-    (int value1)
-    (struct inner inner))
+  (cond-expand
+   (x86_64
+    ;; on X86_64 environment, struct alignment was bit different
+    ;; than I expected.
+    (define-c-struct inner
+      (intptr_t value2)
+      (char* str))
+    
+    (define-c-struct data-to-store
+      (intptr_t value1)
+      (struct inner inner)))
+   (else
+    (define-c-struct inner
+      (int value2)
+      (char* str))
+    
+    (define-c-struct data-to-store
+      (int value1)
+      (struct inner inner))))
 
   ;; for test convenience
   (define pointer-ref-c-uint8_t   pointer-ref-c-uint8)
@@ -59,24 +71,31 @@
 				     (string->symbol 
 				      (format "size-of-~a" t))))
 		(msg (datum->syntax #'k m)))
-	     #'(test-assert
-		msg
-		(let ((expect (map (lambda (v)
-				     (if exact?
-					 (exact v)
-					 (inexact v)))
-				   '(0 1 2 3 4 5 6 7 8 9))))
-		  (let ((p (allocate-pointer (* size 10))))
-		    (let loop ((i 0))
-		      (unless (= i 10)
-			(set p (* size i) i)
-			(loop (+ i 1))))
-		    (let loop ((i 0)
-			       (r '()))
-		      (if (= i 10)
-			  (equal? expect (reverse! r))
-			  (loop (+ i 1)
-				(cons (ref p (* size i)) r)))))))))))))
+	     #'(begin
+		 (test-error (string-append msg " null-pointer ref")
+			     assertion-violation?
+			     (ref null-pointer 0))
+		 (test-error (string-append msg " null-pointer set")
+			     assertion-violation?
+			     (set null-pointer 0 1))
+		 (test-assert
+		  msg
+		  (let ((expect (map (lambda (v)
+				       (if exact?
+					   (exact v)
+					   (inexact v)))
+				     '(0 1 2 3 4 5 6 7 8 9))))
+		    (let ((p (allocate-pointer (* size 10))))
+		      (let loop ((i 0))
+			(unless (= i 10)
+			  (set p (* size i) i)
+			  (loop (+ i 1))))
+		      (let loop ((i 0)
+				 (r '()))
+			(if (= i 10)
+			    (equal? expect (reverse! r))
+			    (loop (+ i 1)
+				  (cons (ref p (* size i)) r))))))))))))))
 
   (test-equal "simple call"
 	      3
@@ -94,6 +113,31 @@
 		(qsort array (bytevector-length array) 1 compare)
 		(free-c-callback compare)
 		array))
+
+
+  ;; pointer address
+  (test-equal "address passing"
+	      #\a
+	      (let* ((p (allocate-pointer size-of-char))
+		     (ap (pointer-address p))
+		     (setter (c-function ffi-test-lib void address_passing
+					 (void*))))
+		(setter ap)
+		(integer->char (pointer-ref-c-char p 0))))
+
+  (test-equal "address passing allocate"
+	      "hello"
+	      (let* ((p (empty-pointer))
+		     (setter (c-function ffi-test-lib void
+					 address_passing_string
+					 (void*)))
+		     (dctr (c-function ffi-test-lib void
+					 address_passing_free
+					 (void*))))
+		(setter (address p))
+		(let ((r (pointer->string p)))
+		  (dctr (address p))
+		  r)))
 
   (test-equal "c-struct"
 	      '(100 200 "message from C")
@@ -155,7 +199,11 @@
 			  (reverse! r)
 			  (let* ((s (pointer->string p)))
 			    (loop (+ i 1) (cons s r)))))))))
-
+    
+  (test-error "null-pointer 1" assertion-violation? 
+	      (pointer->string null-pointer))
+  (test-error "null-pointer 2" assertion-violation? 
+	      (deref null-pointer 0))
   )
  (else
   #t))

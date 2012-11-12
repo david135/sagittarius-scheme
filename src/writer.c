@@ -59,7 +59,8 @@
 #define WRITE_CIRCULAR 0x20
 
 /* for convenient */
-static void format_write(SgObject obj, SgPort *port, SgWriteContext *ctx, int sharedp);
+static void format_write(SgObject obj, SgPort *port, SgWriteContext *ctx,
+			 int sharedp);
 static void write_ss_rec(SgObject obj, SgPort *port, SgWriteContext *ctx);
 static void write_ss(SgObject obj, SgPort *port, SgWriteContext *ctx);
 static void write_object(SgObject obj, SgPort *port, SgWriteContext *ctx);
@@ -109,7 +110,6 @@ int Sg_WriteCircular(SgObject obj, SgObject port, int mode, int width)
   if (!SG_OUTPORTP(port) && !SG_INOUTPORTP(port)) {
     Sg_Error(UC("output port required, but got %S"), port);
   }
-  out = Sg_MakeStringOutputPort(0);
   ctx.mode = mode;
   ctx.flags = WRITE_CIRCULAR;
   if (width > 0) {
@@ -127,6 +127,7 @@ int Sg_WriteCircular(SgObject obj, SgObject port, int mode, int width)
     return 0;
   }
 
+  out = Sg_MakeStringOutputPort(0);
   sharedp = SG_WRITE_MODE(&ctx) == SG_WRITE_SHARED;
   format_write(obj, SG_PORT(out), &ctx, sharedp);
   str = SG_STRING(Sg_GetStringFromStringPort(out));
@@ -258,8 +259,9 @@ static void format_sexp(SgPort *out, SgObject arg,
 }
 
 /* ~d, ~b, ~o and ~x */
-static void format_integer(SgPort *out, SgObject arg, SgObject *params, int nparams,
-			   int radix, int delimited, int alwayssign, int use_upper)
+static void format_integer(SgPort *out, SgObject arg, SgObject *params,
+			   int nparams, int radix, int delimited,
+			   int alwayssign, int use_upper)
 {
   int mincol = 0, commainterval = 3;
   SgChar padchar = ' ', commachar = ',';
@@ -268,6 +270,8 @@ static void format_integer(SgPort *out, SgObject arg, SgObject *params, int npar
     SgWriteContext ictx;
     ictx.mode = SG_WRITE_DISPLAY;
     ictx.flags = 0;
+    ictx.table = NULL;
+    ictx.sharedId = 0;
     format_write(arg, out, &ictx, FALSE);
     return;
   }
@@ -294,7 +298,7 @@ static void format_integer(SgPort *out, SgObject arg, SgObject *params, int npar
     }
     colcnt = num_digits % commainterval;
     if (colcnt != 0) {
-      for (i = 0; i < colcnt; i++) {
+      for (i = 0; (unsigned int)i < colcnt; i++) {
 	Sg_Putc(strout, *(ptr + i));
       }
     }
@@ -622,7 +626,15 @@ void write_ss_rec(SgObject obj, SgPort *port, SgWriteContext *ctx)
   SgHashTable *ht = ctx->table;
 
   if (ctx->flags & WRITE_LIMITED) {
-    if (SG_TEXTUAL_PORT(port)->src.buffer.index >= ctx->limit) return;
+    /*
+      if the flag has WRITE_LIMITED, then output port must be
+      string output port
+    */
+    char_buffer *start = SG_TEXTUAL_PORT(port)->src.ostr.start;
+    char_buffer *current = SG_TEXTUAL_PORT(port)->src.ostr.current;
+    size_t count = 0;
+    for (; start != current; start = start->next) count++;
+    if (count >= ctx->limit) return;
   }
 
   if (!obj) {
@@ -656,7 +668,14 @@ void write_ss_rec(SgObject obj, SgPort *port, SgWriteContext *ctx)
 	else if (ch == 0x7f) Sg_PutuzUnsafe(port, UC("delete"));
 	else                 Sg_PutcUnsafe(port, ch);
       }
-    } else {
+
+    } 
+#ifdef USE_IMMEDIATE_FLONUM
+    else if (SG_IFLONUMP(obj)) {
+      write_general(obj, port, ctx);
+    }
+#endif	/* USE_IMMEDIATE_FLONUM */
+    else {
       Sg_Panic("write: got a bogus object: %08x", SG_WORD(obj));
     }
     return;
@@ -698,6 +717,14 @@ void write_ss_rec(SgObject obj, SgPort *port, SgWriteContext *ctx)
 	Sg_PutcUnsafe(port, ',');
       } else if (SG_CAR(obj) == SG_SYMBOL_UNQUOTE_SPLICING) {
 	Sg_PutuzUnsafe(port, UC(",@"));
+      } else if (SG_CAR(obj) == SG_SYMBOL_SYNTAX) {
+	Sg_PutuzUnsafe(port, UC("#'"));
+      } else if (SG_CAR(obj) == SG_SYMBOL_QUASISYNTAX) {
+	Sg_PutuzUnsafe(port, UC("#`"));
+      } else if (SG_CAR(obj) == SG_SYMBOL_UNSYNTAX) {
+	Sg_PutuzUnsafe(port, UC("#,"));
+      } else if (SG_CAR(obj) == SG_SYMBOL_UNSYNTAX_SPLICING) {
+	Sg_PutuzUnsafe(port, UC("#,@"));
       } else {
 	special = FALSE;
       }
@@ -747,6 +774,56 @@ void write_ss_rec(SgObject obj, SgPort *port, SgWriteContext *ctx)
     write_general(obj, port, ctx);
   }
   return;
+}
+
+/* FIXME, merge it */
+static void write_walk_circular(SgObject obj, SgWriteContext *ctx,
+				int cycleonlyp)
+{
+  SgHashTable *ht;
+  SgObject elt;
+
+#define REGISTER(obj)						\
+  do {								\
+    SgObject e = Sg_HashTableRef(ht, (obj), SG_UNBOUND);	\
+    if (SG_INTP(e)) {						\
+      int v = SG_INT_VALUE(e);					\
+      Sg_HashTableSet(ht, (obj), SG_MAKE_INT(v + 1), 0);	\
+      if (v > 0) return;					\
+    } else {							\
+      Sg_HashTableSet(ht, (obj), SG_MAKE_INT(0), 0);		\
+    }								\
+  } while(0)
+
+#define UNREGISTER(obj)						\
+  do {								\
+    if (cycleonlyp) {						\
+      SgObject e = Sg_HashTableRef(ht, (obj), SG_MAKE_INT(0));	\
+      int v = SG_INT_VALUE(e);					\
+      if (v <= 1) {						\
+	Sg_HashTableDelete(ht, (obj));				\
+      }								\
+    }								\
+  } while(0)
+
+  ht = ctx->table;
+  if (SG_PAIRP(obj) || SG_VECTORP(obj)) {
+    REGISTER(obj);
+    if (SG_PAIRP(obj)) {
+      elt = SG_CAR(obj);
+      if (SG_PTRP(elt)) write_walk_circular(elt, ctx, cycleonlyp);
+      write_walk_circular(SG_CDR(obj), ctx, cycleonlyp);
+    } else if (SG_VECTORP(obj) && SG_VECTOR_SIZE(obj) > 0) {
+      int i, len = SG_VECTOR_SIZE(obj);
+      for (i = 0; i < len; i++) {
+	elt = SG_VECTOR_ELEMENT(obj, i);
+	if (SG_PTRP(elt)) write_walk_circular(elt, ctx, cycleonlyp);
+      }
+    }
+    UNREGISTER(obj);
+  }
+#undef REGISTER
+#undef UNREGISTER
 }
 
 static void write_walk(SgObject obj, SgWriteContext *ctx)
@@ -807,7 +884,25 @@ static void write_walk(SgObject obj, SgWriteContext *ctx)
 void write_ss(SgObject obj, SgPort *port, SgWriteContext *ctx)
 {
   ctx->table = Sg_MakeHashTableSimple(SG_HASH_EQ, 0);
-  write_walk(obj, ctx);
+  if (ctx->flags & WRITE_CIRCULAR) {
+    SgObject seen = Sg_MakeHashTableSimple(SG_HASH_EQ, 64);
+    SgHashTable *save = ctx->table;
+    SgHashIter iter;
+    SgHashEntry *e;
+    ctx->table = SG_HASHTABLE(seen);
+    write_walk_circular(obj, ctx, TRUE);
+    /* extract */
+    ctx->table = save;
+    Sg_HashIterInit(SG_HASHTABLE_CORE(seen), &iter);
+    while ((e = Sg_HashIterNext(&iter)) != NULL) {
+      SgObject v = SG_HASH_ENTRY_VALUE(e);
+      if (SG_INT_VALUE(v) > 1) {
+	Sg_HashTableSet(ctx->table, SG_HASH_ENTRY_KEY(e), SG_TRUE, 0);
+      }
+    }
+  } else {
+    write_walk(obj, ctx);
+  }
 
   write_ss_rec(obj, port, ctx);
 }
@@ -821,7 +916,8 @@ void format_write(SgObject obj, SgPort *port, SgWriteContext *ctx, int sharedp)
   }
 }
 
-static void vprintf_proc(SgPort *port, const SgChar *fmt, SgObject args, int sharedp)
+static void vprintf_proc(SgPort *port, const SgChar *fmt, 
+			 SgObject args, int sharedp)
 {
   const SgChar *fmtp = fmt;
   SgObject value;
@@ -863,6 +959,52 @@ static void vprintf_proc(SgPort *port, const SgChar *fmt, SgObject args, int sha
 	  ASSERT(Sg_ExactP(value));
 	  put_tmp_to_buf(c, Sg_GetInteger(value));
 	  Sg_PutzUnsafe(port, buf);
+	  break;
+	}
+      case 'U':
+	{
+	  SgChar ucs4;
+	  SgWriteContext wctx;
+	  wctx.mode = SG_WRITE_WRITE;
+	  wctx.table = NULL;
+	  wctx.flags = 0;
+	  wctx.sharedId = 0;
+
+	  get_value();
+	  ASSERT(SG_CHARP(value));
+	  ucs4 = SG_CHAR_VALUE(value);
+	  if (ucs4 < 128) {
+	    /* put char in '~' or \tab or U+10 */
+	    switch (ucs4) {
+	    case   0: Sg_PutuzUnsafe(port, UC("nul(U+0000)"));         break;
+	    case   7: Sg_PutuzUnsafe(port, UC("alarm(U+0007)"));       break;
+	    case   8: Sg_PutuzUnsafe(port, UC("backspace(U+0008)"));   break;
+	    case   9: Sg_PutuzUnsafe(port, UC("tab(U+0009)"));         break;
+	    case  10: Sg_PutuzUnsafe(port, UC("linefeed(U+000A)"));    break;
+	    case  11: Sg_PutuzUnsafe(port, UC("vtab(U+000B)"));        break;
+	    case  12: Sg_PutuzUnsafe(port, UC("page(U+000C)"));        break;
+	    case  13: Sg_PutuzUnsafe(port, UC("return(U+000D)"));      break;
+	    case  27: Sg_PutuzUnsafe(port, UC("esc(U+001B)"));         break;
+	    case  32: Sg_PutuzUnsafe(port, UC("space(U+0020)"));       break;
+	    case 127: Sg_PutuzUnsafe(port, UC("delete(U+007F)"));      break;
+	    default:
+	      if (ucs4 < 32) {
+		snprintf(buf, sizeof(buf), "U+%04X", ucs4);
+		Sg_PutzUnsafe(port, buf);
+	      } else {
+		Sg_PutcUnsafe(port, '\'');
+		format_write(value, port, &wctx, sharedp);
+		Sg_PutcUnsafe(port, '\'');
+	      }
+	      break;
+	    }
+	  } else {
+	    Sg_PutcUnsafe(port, '\'');
+	    format_write(value, port, &wctx, sharedp);
+	    Sg_PutcUnsafe(port, '\'');
+	    snprintf(buf, sizeof(buf), "(U+%04X)", ucs4);
+	    Sg_PutzUnsafe(port, buf);
+	  }
 	  break;
 	}
       case 'o': case 'u': case 'x': case 'X':
@@ -1028,6 +1170,12 @@ void Sg_Vprintf(SgPort *port, const SgChar *fmt, va_list sp, int sharedp)
 	  SG_APPEND1(h, t, Sg_MakeInteger(value));
 	  break;
 	}
+      case 'U':
+	{
+	  SgChar value = va_arg(sp, SgChar);
+	  SG_APPEND1(h, t, SG_MAKE_CHAR(value));
+	  break;
+	}
       case 'o': case 'u': case 'x': case 'X':
 	{
 	  unsigned long value = va_arg(sp, unsigned long);
@@ -1044,8 +1192,11 @@ void Sg_Vprintf(SgPort *port, const SgChar *fmt, va_list sp, int sharedp)
 	{
 	  SgChar *value = va_arg(sp, SgChar*);
 	  /* for safety */
-	  if (value != NULL) SG_APPEND1(h, t, Sg_MakeString(value, SG_LITERAL_STRING));
-	  else SG_APPEND1(h, t, Sg_MakeString(UC("(null)"), SG_LITERAL_STRING));
+	  if (value != NULL) {
+	    SG_APPEND1(h, t, Sg_MakeString(value, SG_LITERAL_STRING));
+	  } else {
+	    SG_APPEND1(h, t, SG_MAKE_STRING("(null)"));
+	  }
 	  break;
 	}
       case '%':
@@ -1053,7 +1204,7 @@ void Sg_Vprintf(SgPort *port, const SgChar *fmt, va_list sp, int sharedp)
       case 'p':
 	{
 	  void *value = va_arg(sp, void *);
-	  SG_APPEND1(h, t, Sg_MakeIntegerU((uintptr_t)value));
+	  SG_APPEND1(h, t, Sg_MakeIntegerU((unsigned long)value));
 	  break;
 	}
       case 'S': case 'A': case 'L':

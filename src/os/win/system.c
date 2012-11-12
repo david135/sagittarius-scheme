@@ -1,6 +1,6 @@
 /* -*- C -*- */
 /*
- * systam.c
+ * system.c
  *
  *   Copyright (c) 2010  Takashi Kato <ktakashi@ymail.com>
  *
@@ -33,8 +33,11 @@
 #include <shlwapi.h>
 #include <wchar.h>
 #include <io.h>
+#include <iphlpapi.h>
+#include <winsock2.h>
 #if defined(_MSC_VER) || defined(_SG_WIN_SUPPORT)
 #pragma comment(lib, "shlwapi.lib")
+#pragma comment(lib, "iphlpapi.lib")
 #endif
 #define LIBSAGITTARIUS_BODY
 #include "sagittarius/file.h"
@@ -43,6 +46,7 @@
 #include "sagittarius/error.h"
 #include "sagittarius/values.h"
 #include "sagittarius/number.h"
+#include "sagittarius/bytevector.h"
 
 #include "win_util.c"
 
@@ -129,11 +133,13 @@ SgObject Sg_GetenvAlist()
   return ret;
 }
 
+
 SgObject Sg_GetTemporaryDirectory()
 {
   static const wchar_t NAME[] = L"Sagittarius";
-  wchar_t value[MAX_PATH];
+  wchar_t value[MAX_PATH], buf[50] = {0};
   int length;
+  size_t ret;
 #define find_env(e)					\
   do {							\
     length = get_env(UC(e), value, MAX_PATH);		\
@@ -145,17 +151,29 @@ SgObject Sg_GetTemporaryDirectory()
   find_env("TMP");
   return SG_FALSE;
 
+#define create(v)				\
+  if (PathFileExistsW(v)) {			\
+    /* something is exists */			\
+    if (!PathIsDirectoryW(v)) return SG_FALSE;	\
+  } else {					\
+    /* create */				\
+    CreateDirectoryW(v, NULL);			\
+  }
+
  next:
   /* temporary directory path is too long */
   if (length > MAX_PATH) return SG_FALSE;
   PathAppendW(value, NAME);
-  if (PathFileExistsW(value)) {
-    /* something is exists */
-    if (!PathIsDirectoryW(value)) return SG_FALSE;
-  } else {
-    /* create */
-    CreateDirectoryW(value, NULL);
-  }
+  create(value);
+
+  mbstowcs_s(&ret, buf, 50, SAGITTARIUS_VERSION, 50);
+  PathAppendW(value, buf);
+  create(value);
+
+  mbstowcs_s(&ret, buf, 50, SAGITTARIUS_TRIPLE, 50);
+  PathAppendW(value, buf);
+  create(value);
+
   return utf16ToUtf32(value);
 }
 
@@ -167,18 +185,38 @@ SgObject Sg_TimeUsage()
   FILETIME kernel_time;
   FILETIME user_time;
   GetSystemTimeAsFileTime(&real_time);
-  if (GetProcessTimes(GetCurrentProcess(), &creation_time, &exit_time, &kernel_time, &user_time)) {
-    SgObject values = Sg_MakeValues(3);
-    SG_VALUES_ELEMENT(values, 0) = Sg_MakeFlonum(((double)real_time.dwLowDateTime
-						  + (double)real_time.dwHighDateTime
-						  * (double)UINT32_MAX) / 10000000.0);
-    SG_VALUES_ELEMENT(values, 1) = Sg_MakeFlonum(((double)user_time.dwLowDateTime
-						  + (double)user_time.dwHighDateTime
-						  * (double)UINT32_MAX) / 10000000.0);
-    SG_VALUES_ELEMENT(values, 2) = Sg_MakeFlonum(((double)kernel_time.dwLowDateTime
-						  + (double)kernel_time.dwHighDateTime
-						  * (double)UINT32_MAX) / 10000000.0);
-    return values;
+  if (GetProcessTimes(GetCurrentProcess(), &creation_time,
+		      &exit_time, &kernel_time, &user_time)) {
+    return Sg_Values3(Sg_MakeFlonum(((double)real_time.dwLowDateTime
+				     + (double)real_time.dwHighDateTime
+				     * (double)UINT32_MAX) / 10000000.0),
+		      Sg_MakeFlonum(((double)user_time.dwLowDateTime
+				     + (double)user_time.dwHighDateTime
+				     * (double)UINT32_MAX) / 10000000.0),
+		      Sg_MakeFlonum(((double)kernel_time.dwLowDateTime
+				     + (double)kernel_time.dwHighDateTime
+				     * (double)UINT32_MAX) / 10000000.0));
+
   }
   return SG_FALSE;
+}
+
+SgObject Sg_GetMacAddress(int pos)
+{
+#define MAX_IFS 16
+  static SgObject empty_mac = NULL;
+  IP_ADAPTER_INFO adapterInfo[MAX_IFS];
+  DWORD buflen = sizeof(adapterInfo);
+  DWORD status = GetAdaptersInfo(adapterInfo, &buflen);
+  size_t size;
+  if (empty_mac == NULL) {
+    empty_mac = Sg_MakeByteVector(6, 0);
+  }
+  if (status != ERROR_SUCCESS) {
+    return empty_mac;
+  }
+  size = buflen / sizeof(IP_ADAPTER_INFO);
+  if (pos < 0) pos = 0;
+  else if (pos > size) pos = (int)(size-1);
+  return Sg_MakeByteVectorFromU8Array(adapterInfo[pos].Address, 6);
 }

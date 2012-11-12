@@ -48,6 +48,8 @@ SG_CLASS_DECL(Sg_IntegerClass);
 #define SG_CLASS_RATIONAL    (&Sg_RationalClass)
 #define SG_CLASS_INTEGER     (&Sg_IntegerClass)
 
+SG_CDECL_BEGIN
+
 struct SgBignumRec
 {
   SG_HEADER;
@@ -98,8 +100,33 @@ struct SgFlonumRec
   double value;
 };
 
-#define SG_FLONUMP(obj)   SG_XTYPEP(obj, SG_CLASS_REAL)
-#define SG_FLONUM(obj)    ((SgFlonum*)(obj))
+#ifdef USE_IMMEDIATE_FLONUM
+typedef union SgIFlonumRec
+{
+#if SIZEOF_VOIDP == 8
+  double    f;
+#else
+  float     f;
+#endif
+  uintptr_t i;
+} SgIFlonum;
+#define SG_FLONUMP(obj)      (SG_IFLONUMP(obj) || SG_XTYPEP(obj, SG_CLASS_REAL))
+#define SG_FLONUM(obj)    	/* don't use */
+#ifdef __GNUC__
+#define SG_FLONUM_VALUE(obj)						\
+  (SG_IFLONUMP(obj)							\
+   ? ((double)(((SgIFlonum)((uintptr_t)obj&~SG_IFLONUM_MASK)).f))	\
+   : ((SgFlonum*)(obj))->value)
+#else
+#define SG_FLONUM_VALUE(obj) Sg_FlonumValue(obj)
+#endif
+
+SG_EXTERN double Sg_FlonumValue(SgObject obj);
+#else
+#define SG_FLONUMP(obj)      SG_XTYPEP(obj, SG_CLASS_REAL)
+#define SG_FLONUM(obj)       ((SgFlonum*)(obj))
+#define SG_FLONUM_VALUE(obj) (SG_FLONUM(obj)->value)
+#endif	/* USE_IMMEDIATE_FLONUM */
 
 /* number type check */
 #define SG_EXACT_INTP(obj) ((SG_INTP(obj)) || (SG_BIGNUMP(obj)))
@@ -118,8 +145,6 @@ enum ScmClampMode {
 #define isinf(x) (!_finite(x) && !_isnan(x))
 #define isnan(x) _isnan(x)
 #endif
-
-SG_CDECL_BEGIN
 
 SG_EXTERN SgObject Sg_MakeInteger(long x);
 SG_EXTERN SgObject Sg_MakeIntegerU(unsigned long x);
@@ -214,11 +239,16 @@ SG_EXTERN SgObject Sg_Gcd(SgObject x, SgObject y);
 SG_EXTERN SgObject Sg_Magnitude(SgObject obj);
 SG_EXTERN SgObject Sg_Angle(SgObject obj);
 SG_EXTERN SgObject Sg_Log(SgObject obj);
-SG_EXTERN void     Sg_MinMax(SgObject arg0, SgObject args, SgObject *min, SgObject *max);
+SG_EXTERN void     Sg_MinMax(SgObject arg0, SgObject args,
+			     SgObject *min, SgObject *max);
 SG_EXTERN SgObject Sg_IntegerDiv(SgObject x, SgObject y);
 SG_EXTERN SgObject Sg_IntegerDiv0(SgObject x, SgObject y);
 SG_EXTERN SgObject Sg_IntegerMod(SgObject x, SgObject y);
 SG_EXTERN SgObject Sg_IntegerMod0(SgObject x, SgObject y);
+
+/* misc */
+SG_EXTERN SgObject Sg_ModExpt(SgObject x, SgObject e, SgObject m);
+SG_EXTERN SgObject Sg_ModInverse(SgObject x, SgObject m);
 
 enum SgRoundMode {
   SG_ROUND_FLOOR,

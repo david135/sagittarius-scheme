@@ -2,166 +2,7 @@
 ;; for Ypsilon
 #!compatible
 (library (sagittarius) ;; redefine but no problem
-    (export identifier?
-	    identifier=?
-	    id-name
-	    id-memq
-	    identifier->symbol
-
-	    ;; closure
-	    closure? make-toplevel-closure
-
-	    ;; list
-	    circular-list? dotted-list?
-	    reverse! acons append!
-
-	    ;; vector
-	    vector-copy
-
-	    ;; misc
-	    current-exception-handler
-	    parent-exception-handler
-	    variable? arity
-	    unbound undefined undefined?
-	    add-load-path load
-	    gensym unwrap-syntax wrap-syntax
-	    current-dynamic-environment
-	    add-dynamic-load-path
-	    load-dynamic-library
-	    sagittarius-version
-	    report-error
-	    describe-condition
-
-	    interned-symbol?
-	    ;; string
-	    string-scan
-	    ;; for srfi-13
-	    %maybe-substring
-
-	    ;; filesystem
-	    file-size-in-bytes
-	    file-regular?
-	    file-directory?
-	    file-symbolic-link?
-	    file-readable?
-	    file-writable?
-	    file-executable?
-	    file-stat-ctime
-	    file-stat-mtime
-	    create-symbolic-link
-	    create-hard-link
-	    rename-file
-	    change-file-mode
-	    delete-directory
-	    create-directory
-	    read-directory
-	    current-directory
-	    set-current-directory
-	    ;; path utility
-	    build-path
-	    absolute-path?
-	    absolute-path
-	    current-load-path
-
-	    ;; hashtable
-	    hashtable-keys-list hashtable-values-list
-	    hashtable-values
-	    hashtable-type hashtable-compare hashtable-hasher
-	    eqv-hash
-	    ;; extra hashtable
-	    make-equal-hashtable make-string-hashtable
-
-	    ;; error
-	    ;; from Gauche
-	    with-error-handler
-
-	    ;; io
-	    port-closed? format write/ss read/ss
-	    format/ss
-	    make-codec port-info
-	    read-with-case
-	    open-output-bytevector
-	    get-output-bytevector
-	    open-output-string
-	    get-output-string
-
-	    ;; profiler
-	    profiler-start profiler-stop profiler-reset
-	    profiler-raw-result
-	    disasm
-
-	    ;; keyword
-	    make-keyword
-	    keyword?
-	    keyword->symbol
-	    keyword->string
-	    get-keyword
-
-	    ;; cache
-	    clean-cache cachable?
-	    scan-cache-object write-object-cache read-cache-object
-
-	    ;; env
-	    getenv
-	    setenv
-	    getenv-alist
-
-	    ;; bytevector
-	    bytevector->integer
-	    integer->bytevector
-	    ;; env
-	    current-usage-env
-	    current-macro-env
-	    ;; time
-	    time-usage
-	    ;; cond-expand
-	    cond-features
-	    ;; record
-	    make-record-type
-	    record-type?
-	    record-type-rtd
-	    record-type-rcd
-	    ;; charset
-	    char-set? char-set char-set-copy
-	    char-set-contains?
-	    ;; internal use
-	    %char-set-equal?
-	    %char-set<=?
-	    %char-set-add-chars!
-	    %char-set-add-range!
-	    %char-set-add!
-	    %char-set-complement!
-	    %char-set-ranges
-
-	    ;; reader macro
-	    get-macro-character
-	    set-macro-character
-	    get-dispatch-macro-character
-	    set-dispatch-macro-character
-	    %insert-macro-character
-	    %insert-dispatch-macro-character
-	    read-delimited-list
-	    delimited-char?
-
-	    constant-literal?
-	    digit-value
-	    ;; weak pointers
-	    make-weak-vector
-	    weak-vector-length
-	    weak-vector-ref
-	    weak-vector-set!
-
-	    make-weak-eq-hashtable
-	    weak-hashtable-ref
-	    weak-hashtable-set!
-	    weak-hashtable-delete!
-	    weak-hashtable-keys-list
-	    weak-hashtable-values-list
-	    weak-hashtable-copy
-
-	    ;; misc
-	    microsecond
-	    )
+    (export :all)
     (import :null)
 
   (decl-code
@@ -231,7 +72,11 @@
   (define-c-proc circular-list? (lst) ::<boolean>
     (result (SG_CIRCULAR_LISTP lst)))
 
-  (define-c-proc reverse! (lis) ::<top>
+  (define-c-proc reverse! (lis)
+    (when (Sg_ConstantLiteralP lis)
+      (assertion-violation 'reverse!
+			   "attempt to modify constant literal"
+			   lis))
     (result (Sg_ReverseX lis)))
 
   (define-c-proc acons (a b alist) ::<top>
@@ -242,10 +87,15 @@
       (dopairs (cp lst)
 	(when (and (not (SG_PAIRP (SG_CAR cp)))
 		   (SG_NULLP (SG_CDR cp)))
-	  (if (SG_NULLP h)
-	      (set! h (SG_CAR cp))
-	      (SG_SET_CDR t (SG_CAR cp)))
+	  (cond ((SG_NULLP h)
+		 (set! h (SG_CAR cp)))
+		(else
+		 (SG_SET_CDR t (SG_CAR cp))))
 	  (break))
+	(when (and (SG_NULLP h) (Sg_ConstantLiteralP (SG_CAR cp)))
+	  (assertion-violation 'append!
+			       "attempt to modify constant literal"
+			       (SG_CAR cp)))
 	(SG_APPEND h t (SG_CAR cp)))
       (result h)))
 
@@ -254,6 +104,20 @@
 					            (end::<fixnum> -1)
 						    fill) ::<top>
     (result (Sg_VectorCopy vec start end fill)))
+
+  (define-c-proc vector-concatenate (vec-list::<list>) Sg_VectorConcatenate)
+  (define-c-proc vector-append (:rest vec-list) Sg_VectorConcatenate)
+  
+  (define-c-proc vector-reverse!
+    (vec::<vector> :optional (start::<fixnum> 0) (end::<fixnum> -1))
+    (when (Sg_ConstantLiteralP vec)
+      (assertion-violation 'vector-reverse!
+			   "attempt to modify constant literal" vec))
+    (result (Sg_VectorReverseX vec start end)))
+
+  (define-c-proc vector-reverse
+    (vec::<vector> :optional (start::<fixnum> 0) (end::<fixnum> -1))
+    (result (Sg_VectorReverseX (Sg_VectorCopy vec 0 -1 SG_UNBOUND) start end)))
 
   (define-c-proc current-exception-handler (:optional handle) ::<top>
     (if (SG_UNBOUNDP handle)
@@ -273,6 +137,47 @@
   (define-c-proc variable? (o) ::<boolean>
     (result (or (SG_SYMBOLP o)
 		(SG_IDENTIFIERP o))))
+  ;; inexact computation
+  (define-cise-stmt check-number
+    ((_ name v)
+     `(unless (SG_NUMBERP ,v)
+	(wrong-type-of-argument-violation ',name "number" ,v))))
+  ;; if we add IADD or something, these might have meaning to exists.
+  (define-c-proc +. (:rest rest)
+    (let ((a (Sg_MakeFlonum 0.0)))
+      (dolist (x rest)
+	(check-number +. x)
+	(set! a (Sg_Add a (Sg_Inexact x))))
+      (result a)))
+
+  (define-c-proc *. (:rest rest)
+    (let ((a (Sg_MakeFlonum 1.0)))
+      (dolist (x rest)
+	(check-number *. x)
+	(set! a (Sg_Mul a (Sg_Inexact x))))
+      (result a)))
+
+  (define-c-proc -. (arg1::<number> :rest rest)
+    (if (SG_NULLP rest)
+	(result (Sg_Negate (Sg_Inexact arg1)))
+	(let ((a arg1))
+	  (dolist (x rest)
+	    (check-number -. x)
+	    (set! a (Sg_Sub a (Sg_Inexact x))))
+	  (result a))))
+
+  (define-c-proc /. (arg1::<number> :rest rest)
+    (if (SG_NULLP rest)
+	(result (Sg_Inverse (Sg_Inexact arg1)))
+	(let ((a arg1))
+	  (dolist (x rest)
+	    (check-number / x)
+	    (set! a (Sg_Div a (Sg_Inexact x))))
+	  (result a))))
+
+  ;; for performance
+  (define-c-proc mod-inverse (x::<integer> y::<integer>) Sg_ModInverse)
+  (define-c-proc mod-expt (x::<integer> y::<integer> z::<integer>) Sg_ModExpt)
 
   ;; arity returns pair of required and optional arguments count.
   ;; returned pair is structured like this : (<required> . <optional>)
@@ -305,16 +210,16 @@
       (set! prefix NULL))
     (result (Sg_Gensym prefix)))
 
-  (define-c-proc unwrap-syntax (form) ::<top>
-    (result (Sg_UnwrapSyntax form)))
+  (define-c-proc unwrap-syntax (form) Sg_UnwrapSyntax)
+  (define-c-proc unwrap-syntax-with-reverse (form) Sg_UnwrapSyntaxWithReverse)
 
   (define-c-proc wrap-syntax (form p1env::<vector>
 				   :optional seen::<hashtable>
-				             (partialP::<boolean> #f))
-    ::<top>
-    (when (SG_UNBOUNDP seen)
-      (set! seen NULL))
-    (result (Sg_WrapSyntax form p1env seen partialP)))
+				             (partialP::<boolean> #f)
+					     templ::<identifier>)
+    (when (SG_UNBOUNDP seen) (set! seen NULL))
+    (when (SG_UNBOUNDP templ) (set! templ NULL))
+    (result (Sg_WrapSyntax form p1env seen partialP templ)))
 
   (define-c-proc current-dynamic-environment (:optional other::<hashtable>)
     ::<top>
@@ -341,8 +246,20 @@
   (define-c-proc interned-symbol? (s) ::<boolean>
     (result (SG_INTERNED_SYMBOL s)))
 
+  ;; SRFI-17
+  (define-c-proc setter (proc)
+    (setter (proc::<procedure> setter::<procedure>) ::<void>
+	    (Sg_SetterSet proc setter FALSE))
+    Sg_Setter)
+
+  (define-c-proc has-setter? (proc) ::<boolean> Sg_HasSetter)
+
   ;; filesystem
-  (define-c-proc file-size-in-bytes (path::<string>) ::<top>
+  (define-c-proc copy-file
+    (srd::<string> dst::<string> :optional (overwrite?::<boolean> #f)) ::<boolean>
+    Sg_CopyFile)
+
+  (define-c-proc file-size-in-bytes (path::<string>)
     (let ((size (Sg_FileSize path)))
       (if (SG_UNDEFP size)
 	  (Sg_AssertionViolation 'file-size-in-bytes
@@ -394,7 +311,7 @@
 
   (define-c-proc create-symbolic-link (oldpath::<string> newpath::<string>) ::<void>
     (unless (Sg_CreateSymbolicLink oldpath newpath)
-      (Sg_AssertionViolation 'file-stat-atime
+      (Sg_AssertionViolation 'create-symbolic-link
 			     (Sg_GetLastErrorMessage)
 			     (SG_LIST2 oldpath newpath))))
 
@@ -442,8 +359,34 @@
   (define-c-proc absolute-path (path::<string>)
     (result (Sg_AbsolutePath path)))
 
+  (define-cfn retrieve-flags (list) ::int :static
+    (let ((flags::int 0))
+      (dolist (flag list)
+	(cond ((SG_EQ flag 'dot-match) (set! flags (logior flags SG_DOTMATCH)))
+	      ((SG_EQ flag 'noescape)  (set! flags (logior flags SG_NOESCAPE)))
+	      ((SG_EQ flag 'case-fold) (set! flags (logior flags SG_CASEFOLD)))
+	      ((SG_EQ flag 'pathname)  (set! flags (logior flags SG_PATHNAME)))
+	      (else
+	       (assertion-violation 'glob
+				    "unknown flag symbol appeared"
+				    (SG_LIST2 flag list)))))
+      (return flags)))
+
+  (define-c-proc glob (path::<string> :rest flags)
+    ;; for now
+    (result (Sg_Glob path (retrieve-flags flags))))
+
   (define-c-proc current-load-path () ::<top>
     (result (-> (Sg_VM) currentLoadPath)))
+
+  (define-c-proc sagittarius-installed-directory () Sg_InstalledDirectory)
+
+  (define-c-proc copy-access-control (src::<string> dst::<string>) ::<boolean>
+    Sg_CopyAccessControl)
+
+  ;; readonly current library access
+  ;; it's nice to have this
+  (define-c-proc current-library () (result (-> (Sg_VM) currentLibrary)))
 
   ;; string
   (define-c-proc string-scan (s1::<string> s2 :optional (mode 'index)) ::<top>
@@ -465,6 +408,7 @@
 					       "string or char"
 					       s2
 					       (SG_LIST3 s1 s2 mode))))))
+  (define-c-proc string-concatenate (strings::<list>) Sg_StringAppend)
 
   (define-c-proc %maybe-substring (s::<string> :optional (start::<fixnum> 0) (end::<fixnum> -1)) ::<top>
     (result (Sg_MaybeSubstring s start end)))
@@ -547,6 +491,12 @@
     (check-port-open write/ss p)
     (check-output-port write/ss p)
     (Sg_Write o p SG_WRITE_SHARED))
+
+  (define-c-proc write-cyclic 
+    (o :optional (p::<port> (Sg_CurrentOutputPort))) ::<void>
+    (check-port-open write-cyclic p)
+    (check-output-port write-cyclic p)
+    (Sg_WriteCircular o p SG_WRITE_WRITE -1))
 
   (define-c-proc read/ss (:optional (p::<port> (Sg_CurrentInputPort))
 			  :key (source-info?::<boolean> #f))
@@ -748,16 +698,30 @@
 					       value)))
       (Sg_Setenv (SG_STRING_VALUE key) v)))
   
-  (define-c-proc getenv-alist () ::<top>
-    (result (Sg_GetenvAlist)))
+  (define-c-proc getenv-alist () Sg_GetenvAlist)
 
+  (define-c-proc emergency-exit (:optional obj) ::<void>
+    ;; TODO thread
+    (if (SG_UNBOUNDP obj)
+	(Sg_EmergencyExit EXIT_SUCCESS)
+	(cond ((SG_INTP obj)
+	       (Sg_EmergencyExit (SG_INT_VALUE obj)))
+	      ((SG_TRUEP obj)
+	       (Sg_EmergencyExit EXIT_SUCCESS))
+	      (else
+	       (Sg_EmergencyExit EXIT_FAILURE)))))
+  
   ;; bytevector
   (define-c-proc bytevector->integer
-    (bv::<bytevector> :optional (start::<fixnum> 0) (end::<fixnum> -1)) ::<top>
+    (bv::<bytevector> :optional (start::<fixnum> 0) (end::<fixnum> -1))
     (result (Sg_ByteVectorToInteger bv start end)))
 
-  (define-c-proc integer->bytevector (n::<integer>) ::<top>
-    (result (Sg_IntegerToByteVector n)))
+  (define-c-proc integer->bytevector (n::<integer> :optional (size::<fixnum> -1))
+    (result (Sg_IntegerToByteVector n size)))
+
+  (define-c-proc bytevector-append (:rest bv-list) Sg_ByteVectorConcatenate)
+  (define-c-proc bytevector-concatenate (bv-list::<list>)
+    Sg_ByteVectorConcatenate)
 
   (define-c-proc current-usage-env () ::<top>
     (result (-> (Sg_VM) usageEnv)))
@@ -888,6 +852,11 @@
 				   (SG_LIBRARY_READTABLE lib))
     (Sg_SetDispatchMacroCharacter c subc proc (SG_LIBRARY_READTABLE lib)))
 
+  (define-c-proc %library-reader-set! (lib::<library> proc::<procedure>)
+    ::<void>
+    ;; TODO should we forbid overwrite?
+    (set! (SG_LIBRARY_READER lib) proc))
+
   (define-c-proc read-delimited-list 
     (c::<char> :optional
 	       (p::<port> (Sg_CurrentInputPort))
@@ -912,7 +881,8 @@
 					"weak-vector" o))
     (result (-> (SG_WEAK_VECTOR o) size)))
 
-  (define-c-proc weak-vector-ref (wvec k::<fixnum> :optional fallback) ::<top>
+  (define-c-proc weak-vector-ref (wvec k::<fixnum> :optional fallback)
+    (setter weak-vector-set!)
     (unless (SG_WEAK_VECTORP wvec)
       (wrong-type-of-argument-violation 'weak-vector-ref
 					"weak-vector" wvec))
@@ -942,7 +912,9 @@
   (define-c-proc weak-hashtable? (o) ::<boolean>
     (result (SG_WEAK_HASHTABLE_P o)))
 
-  (define-c-proc weak-hashtable-ref (wh::<weak-hashtable> key fallback)
+  (define-c-proc weak-hashtable-ref (wh::<weak-hashtable> key :optional
+							  (fallback #f))
+    (setter weak-hashtable-set!)
     (result (Sg_WeakHashTableRef wh key fallback)))
 
   (define-c-proc weak-hashtable-set! (wh::<weak-hashtable> key value) ::<void>
@@ -960,9 +932,16 @@
   (define-c-proc weak-hashtable-copy (wh::<weak-hashtable>)
     (result (Sg_WeakHashTableCopy wh)))
 
+  (decl-code
+   (.typedef "unsigned long" "ulong"))
   (define-c-proc microsecond ()
-    (let ((sec::long 0)
-	  (usec::long 0))
+    (let ((sec::ulong 0)
+	  (usec::ulong 0))
       (Sg_GetTimeOfDay (& sec) (& usec))
       (result (Sg_MakeIntegerFromS64 (+ (* (cast int64_t sec) 1000000) usec)))))
+
+  (define-c-proc immediate? (o) ::<boolean>
+    (result (not (SG_PTRP o))))
+
+  (define-c-proc get-mac-address (:optional (pos::<fixnum> 0)) Sg_GetMacAddress)
 )

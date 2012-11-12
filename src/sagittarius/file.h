@@ -65,6 +65,13 @@ struct SgFileRec
 #define SG_FILEP(obj) SG_XTYPEP(obj, SG_CLASS_FILE)
 #define SG_FILE(obj)  ((SgFile*)obj)
 
+enum SgGlobFlags {
+  SG_DOTMATCH = 1 << 0,
+  SG_NOESCAPE = 1 << 1,
+  SG_CASEFOLD = 1 << 2,
+  SG_PATHNAME = 1 << 3,
+};
+
 SG_CDECL_BEGIN
 
 /**
@@ -87,6 +94,7 @@ SG_EXTERN SgObject Sg_FindFile(SgString *name, SgObject loadPaths,
 
 SG_EXTERN int      Sg_FileExistP(SgString *path);
 SG_EXTERN int      Sg_DeleteFile(SgString *path);
+SG_EXTERN int      Sg_CopyFile(SgString *src, SgString *dst, int overwriteP);
 /* file stat */
 SG_EXTERN int      Sg_FileWritableP(SgString *path);
 SG_EXTERN int      Sg_FileReadableP(SgString *path);
@@ -111,6 +119,14 @@ SG_EXTERN SgObject Sg_DirectoryName(SgString *path);
 SG_EXTERN SgObject Sg_BuildPath(SgString *path, SgString *file);
 SG_EXTERN int      Sg_AbsolutePathP(SgString *path);
 SG_EXTERN SgObject Sg_AbsolutePath(SgString *path);
+
+SG_EXTERN SgObject Sg_InstalledDirectory();
+
+/* ACL */
+SG_EXTERN int      Sg_CopyAccessControl(SgString *src, SgString *dst);
+
+/* glob */
+SG_EXTERN SgObject Sg_Glob(SgString *path, int flags);
 
 SG_CDECL_END
 

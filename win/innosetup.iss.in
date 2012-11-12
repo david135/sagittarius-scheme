@@ -15,7 +15,7 @@
 ; NOTE: The value of AppId uniquely identifies this application.
 ; Do not use the same AppId value in installers for other applications.
 ; (To generate a new GUID, click Tools | Generate GUID inside the IDE.)
-AppId={{8413617A-84F7-45B0-8CA1-5B9C46DA2217}
+AppId={@SAGITTARIUS_APP_ID@
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 ;AppVerName={#MyAppName} {#MyAppVersion}
@@ -30,6 +30,8 @@ OutputBaseFilename=setup_sagittarius_{#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
 ChangesAssociations=yes
+@SAGITTARIUS_INSTALLER_MODE@
+@SAGITTARIUS_INSTALLER_ARCH@
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -58,7 +60,6 @@ Source: "{#SrcDir}\doc\lib\*"; DestDir: "{app}\doc\lib"; Flags: ignoreversion re
 Source: "{#SrcDir}\ext\socket\*.scm"; DestDir: "{app}\lib"; Excludes: "test.scm"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#SrcDir}\ext\threads\*.scm"; DestDir: "{app}\lib"; Excludes: "test.scm"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#SrcDir}\ext\time\*.scm"; DestDir: "{app}\lib"; Excludes: "test.scm"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#SrcDir}\ext\regex\*.scm"; DestDir: "{app}\lib"; Excludes: "test.scm"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#SrcDir}\ext\process\*.scm"; DestDir: "{app}\lib"; Excludes: "test.scm"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#SrcDir}\ext\ffi\*.scm"; DestDir: "{app}\lib"; Excludes: "test.scm,libffi*"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#SrcDir}\ext\crypto\*.scm"; DestDir: "{app}\lib"; Excludes: "test.scm,libtom*"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -75,7 +76,7 @@ Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\{#MyAppName}"; Fil
 Root: HKCR; Subkey: ".scm"; ValueType: string; ValueName: ""; ValueData: "{#MyAppName}"; Flags: uninsdeletevalue
 Root: HKCR; Subkey: "{#MyAppName}"; ValueType: string; ValueName: ""; ValueData: "{#MyAppName} {#MyAppVersion}"; Flags: uninsdeletekey
 Root: HKCR; Subkey: "{#MyAppName}\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"
-Root: HKCR; Subkey: "{#MyAppName}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""    
+Root: HKCR; Subkey: "{#MyAppName}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"" %*"    
 
 ;[Run]
 ;Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, "&", "&&")}}"; Flags: nowait postinstall skipifsilent

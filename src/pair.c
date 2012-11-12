@@ -154,24 +154,36 @@ SgObject* Sg_ListToArray(SgObject list, int nullTermP)
 #define CXR(cname, sname, body)			\
 SgObject cname (SgObject obj)			\
 {						\
+  static SgObject PROC_NAME = SG_FALSE;		\
   SgObject obj2 = obj;				\
+  if (SG_FALSEP(PROC_NAME)) {			\
+    PROC_NAME = SG_INTERN(sname);		\
+  }						\
   body						\
   return obj2;					\
 }
 
-#define A								\
-  if (!SG_PAIRP(obj2)) Sg_Error(UC("pair required but got: %S"), obj);	\
+#define A							\
+  if (!SG_PAIRP(obj2)) {					\
+    Sg_WrongTypeOfArgumentViolation(PROC_NAME,			\
+				    SG_INTERN("pair"),		\
+				    obj2, obj);			\
+  }								\
   obj2 = SG_CAR(obj2);
 
-#define D								\
-  if (!SG_PAIRP(obj2)) Sg_Error(UC("pair required but got: %S"), obj);	\
+#define D							\
+  if (!SG_PAIRP(obj2)) {					\
+    Sg_WrongTypeOfArgumentViolation(PROC_NAME,			\
+				    SG_INTERN("pair"),		\
+				    obj2, obj);			\
+  }								\
   obj2 = SG_CDR(obj2);
 
 CXR(Sg_Car, "car", A)
 CXR(Sg_Cdr, "cdr", D)
 CXR(Sg_Caar, "caar", A A)
-CXR(Sg_Cadr, "cadr", A D)
-CXR(Sg_Cdar, "cdar", D A)
+CXR(Sg_Cadr, "cadr", D A)
+CXR(Sg_Cdar, "cdar", A D)
 CXR(Sg_Cddr, "cddr", D D)
 /* Maybe add cadr etc.*/
 
@@ -407,69 +419,101 @@ SgObject Sg_Assoc(SgObject obj, SgObject alist)
 */
 
 /* from Ypsilon */
-static SgObject do_transpose(int shortest_len, int argc, SgObject args[])
+static SgObject do_transpose(int shortest_len, SgObject args[])
 {
   SgObject ans = SG_NIL, tail = SG_NIL;
-  int i, n;
+  int i, n, argc = Sg_Length(args[1]);
+  SgObject *rest = Sg_ListToArray(args[1], FALSE);
+
   for (i = 0; i < shortest_len; i++) {
     SgObject elt = SG_NIL, elt_tail = SG_NIL;
     
     SG_APPEND1(elt, elt_tail, SG_CAR(args[0]));
     args[0] = SG_CDR(args[0]);
-    for (n = 1; n < argc; n++) {
-      SG_APPEND1(elt, elt_tail, SG_CAR(args[n]));
-      args[n] = SG_CDR(args[n]);
+    for (n = 0; n < argc; n++) {
+      SG_APPEND1(elt, elt_tail, SG_CAR(rest[n]));
+      rest[n] = SG_CDR(rest[n]);
     }
     SG_APPEND1(ans, tail, elt);
   }
   return ans;
 }
 
+static void improper_list_error(SgObject name, SgObject v, SgObject irr)
+{
+  Sg_WrongTypeOfArgumentViolation(name, SG_MAKE_STRING("proper list"), v, irr);
+}
+
 static SgObject list_transpose_s(SgObject *args, int argc, void *data)
 {
+  SgObject v;
   if (argc < 1) {
     Sg_WrongNumberOfArgumentsAtLeastViolation(SG_INTERN("list-transpose*"),
 					      1, argc, SG_NIL);
   }
+  /* since 0.3.4, optional arguments are packed to list.
+     so argc is always 2.
+   */
+  v = args[0];
   if (SG_LISTP(args[0])) {
-    int each_len = Sg_Length(args[0]), i;
-    for (i = 1; i < argc; i++) {
-      if (SG_LISTP(args[i])) {
-	int len = Sg_Length(args[i]);
-	if (len < each_len) each_len = len;
+    int each_len = Sg_Length(args[0]);
+    SgObject cp;
+    if (each_len < 0 && each_len != SG_LIST_CIRCULAR) goto err;
+    SG_FOR_EACH(cp, args[1]) {
+      v = SG_CAR(cp);
+      if (SG_LISTP(v)) {
+	int len = Sg_Length(v);
+	if (len < 0 && len != SG_LIST_CIRCULAR) goto err;
+	if (len >= 0) {
+	  if (len < each_len) each_len = len;
+	  else if (each_len < 0) each_len = len;
+	}
 	continue;
       }
-      return SG_FALSE;
+      goto err;
     }
-    return do_transpose(each_len, argc, args);
+    return do_transpose(each_len, args);
   }
-  return SG_FALSE;
+ err:
+  improper_list_error(SG_INTERN("list-transpose*"), v, 
+		      Sg_ArrayToList(args, argc));
+  return SG_UNDEF;
 }
 
-static SG_DEFINE_SUBR(list_transpose_s_stub, 1, 0, list_transpose_s,
+static SG_DEFINE_SUBR(list_transpose_s_stub, 1, 1, list_transpose_s,
 		      SG_FALSE, NULL);
 
 static SgObject list_transpose_p(SgObject *args, int argc, void *data)
 {
+  SgObject v;
   if (argc < 1) {
     Sg_WrongNumberOfArgumentsAtLeastViolation(SG_INTERN("list-transpose+"),
 					      1, argc, SG_NIL);
   }
+  v = args[0];
   if (SG_LISTP(args[0])) {
-    int each_len = Sg_Length(args[0]), i;
-    for (i = 1; i < argc; i++) {
-      if (SG_LISTP(args[i])) {
-	int len = Sg_Length(args[i]);
+    int each_len = Sg_Length(args[0]);
+    SgObject cp;
+    if (each_len < 0) goto err;
+    SG_FOR_EACH(cp, args[1]) {
+      v = SG_CAR(cp);
+      if (SG_LISTP(v)) {
+	int len = Sg_Length(v);
+	if (len < 0) goto err;
 	if (len != each_len) return SG_FALSE;
 	continue;
       }
+      return SG_FALSE;
     }
-    return do_transpose(each_len, argc, args);
+    return do_transpose(each_len, args);
   }
-  return SG_FALSE;
+ err:
+  improper_list_error(SG_INTERN("list-transpose+"), v, 
+		      Sg_ArrayToList(args, argc));
+  return SG_UNDEF;
 }
 
-static SG_DEFINE_SUBR(list_transpose_p_stub, 1, 0, list_transpose_p,
+static SG_DEFINE_SUBR(list_transpose_p_stub, 1, 1, list_transpose_p,
 		      SG_FALSE, NULL);
 
 

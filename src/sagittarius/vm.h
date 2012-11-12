@@ -148,6 +148,36 @@ enum {
 #define SG_VM_RUNTIME_FLAG_SET(vm, flag)    ((vm)->runtimeFlags |= (flag))
 #define SG_VM_RUNTIME_FLAG_CLEAR(vm, flag)  ((vm)->runtimeFlags &= ~(flag))
 
+#define DEFAULT_VALUES_SIZE 32
+
+typedef struct values_buffer_t
+{
+  int buffer_size;
+  SgObject values_buffer[1];
+} SgValuesBuffer;
+
+#define SG_ALLOC_VALUES_BUFFER(vm, size)				\
+  do {									\
+    (vm)->extra_values =						\
+      SG_NEW2(SgValuesBuffer*,						\
+	      sizeof(SgValuesBuffer)+sizeof(SgObject)*((size)-1));	\
+    (vm)->extra_values->buffer_size = (size);				\
+  } while (0)
+
+#define SG_VALUES_REF(vm, i)						\
+  (((i) < DEFAULT_VALUES_SIZE)						\
+   ? (vm)->values[i]							\
+   : (vm)->extra_values->values_buffer[(i)-DEFAULT_VALUES_SIZE])
+
+#define SG_VALUES_SET(vm, i, v)						\
+  do {									\
+    if ((i) < DEFAULT_VALUES_SIZE) {					\
+      (vm)->values[i] = (v);						\
+    } else {								\
+      (vm)->extra_values->values_buffer[(i)-DEFAULT_VALUES_SIZE] = (v);	\
+    }									\
+  } while (0)
+
 struct SgVMRec
 {
   SG_HEADER;
@@ -172,8 +202,10 @@ struct SgVMRec
   SgObject *fp;			/* frame pointer */
   SgObject *sp;			/* stack pointer */
   SgContFrame  *cont;     	/* saved continuation frame */
-  /* for convenience */
-  /* int       fpOffset; */
+  /* values buffer */
+  int      valuesCount;
+  SgObject values[DEFAULT_VALUES_SIZE];
+  SgValuesBuffer *extra_values;
 
   /* macro expansion */
   SgObject usageEnv;
@@ -186,11 +218,6 @@ struct SgVMRec
   SgObject loadPath;
   SgObject dynamicLoadPath;
   SgObject currentLoadPath;
-  /*
-    toplevel variables.
-    alist of variable name and gloc.
-   */
-  SgObject toplevelVariables;
   /* 
      command line args.
      this is a list of args
@@ -210,13 +237,6 @@ struct SgVMRec
   SgPort    *currentInputPort;
   SgPort    *currentErrorPort;
   SgPort    *logPort;
-
-  /* closure */
-  SgObject   closureForEvaluate; /* closure for evaluate */
-
-  /* apply closure code */
-  SgWord    *applyCode;
-  SgWord    *callCode;
 
   /* return point */
   SgCStack  *cstack;
@@ -266,12 +286,13 @@ struct SgVMRec
   SgObject cache;
   /* read macro */
   readtable_t *currentReadTable;
+  SgObject     currentReader;
 };
 
 /*
   flag 32bit
-  log level optimization   reader   misc(not defined yet)
-  00000000   00000000     00000000 00000000
+  log level optimization reader/mode   misc(cache)
+  00000000   00000000     00000000    00000000
  */
 typedef enum {
   /* cache mode */
@@ -280,6 +301,7 @@ typedef enum {
   /* reader mode */
   SG_R6RS_MODE        = 0x00000100, /* 00000001 */
   SG_COMPATIBLE_MODE  = 0x00000200, /* 00000010 */
+  SG_NO_OVERWRITE     = 0x00000400, /* 00000100 */
 
   /* optimization */
   SG_NO_INLINE_ASM    = 0x00010000,
@@ -423,18 +445,24 @@ SG_EXTERN SgObject Sg_VMFinalizerRun(SgVM *vm);
 /* debuging */
 SG_EXTERN void     Sg_VMPrintFrame();
 
-/* toplevel variable*/
-SG_EXTERN void     Sg_VMSetToplevelVariable(SgSymbol *name, SgObject value);
-
 /* process time */
 SG_EXTERN void     Sg_VMProcessTime(unsigned long *sec, unsigned long *usec);
 
 /* read macro */
 SG_EXTERN readtable_t* Sg_CurrentReadTable();
 SG_EXTERN void     Sg_SetCurrentReadTable(readtable_t *newtable);
+/* reader */
+SG_EXTERN SgObject Sg_CurrentReader();
+SG_EXTERN void     Sg_SetCurrentReader(SgObject reader);
 
 /* root? */
 SG_EXTERN int      Sg_MainThreadP();
+
+/* values */
+SG_EXTERN SgObject Sg_VMValues(SgVM *vm, SgObject args);
+SG_EXTERN SgObject Sg_VMValues2(SgVM *vm, SgObject v1, SgObject v2);
+SG_EXTERN SgObject Sg_VMValues3(SgVM *vm, SgObject v1,
+				SgObject v2, SgObject v3);
 
 SG_CDECL_END
 

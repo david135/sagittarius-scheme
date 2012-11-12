@@ -1,7 +1,7 @@
 ;;; -*- scheme -*-
 ;;; testing.scm - srfi 64, a Scheme API for test suites
 ;;;  
-;;;   Copyright (c) 2000-2011  Takashi Kato  <ktakashi@ymail.com>
+;;;   Copyright (c) 2010-2011  Takashi Kato  <ktakashi@ymail.com>
 ;;;   
 ;;;   Redistribution and use in source and binary forms, with or without
 ;;;   modification, are permitted provided that the following conditions
@@ -87,7 +87,7 @@
      test-on-bad-count-simple test-on-bad-end-name-simple
      test-on-final-simple test-on-test-end-simple)
     (import
-     (rnrs)
+     (except (rnrs) error)
      (prefix (only (rnrs eval) eval) rnrs:)
      (only (rnrs eval) environment)
      (rnrs mutable-pairs)

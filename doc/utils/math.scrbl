@@ -96,6 +96,18 @@ NOTE: if <secure-random> is implemented, then the pseudo random implementation
 should not return the state.
 }
 
+@define[Function]{@name{read-random-bytes} @args{prng size}}
+@define[Function]{@name{read-random-bytes!} @args{prng bv size}}
+@desc{Reads random bytes from given @var{prng}.
+
+The first form creates fresh bytevector with size @var{size}.
+
+The second form reads random bytes from @var{prng} and sets the result into the
+given @var{bv} destructively.
+
+If the second form is used, @var{bv} must have the length at least @var{size}.
+}
+
 @define[Function]{@name{read-sys-random} @args{bis}}
 @desc{Returns given @var{bits} bits of random bytevector.}
 
@@ -118,12 +130,12 @@ The following example describes how to make it.
   (call-next-method)
   (let ((seed (get-keyword :seed initargs #f)))
     (slot-set! o 'set-seed! mt-set-seed)
-    (slot-set! o 'read-random mt-read-random)
+    (slot-set! o 'read-random! mt-read-random!)
     (when seed
       (mt-set-seed o seed))))
 }
 
-User just need to set the slots @code{set-seed!} and @code{read-random}. Then
+User just need to set the slots @code{set-seed!} and @code{read-random!}. Then
 other process is done by lower layer.
 
 Following describes the meaning of these slots.
@@ -131,8 +143,13 @@ Following describes the meaning of these slots.
 The slot @code{set-seed!} requires a procedure which accepts 2 arguments,
 target pseudo random and @var{seed}. @var{seed} must be bytevector.
 
-The slot @code{read-random} requires a pseudo which accepts 2 arguments,
-target pseudo random and @var{bytes}. @var{bytes} must be a non negative fixnum.
+The slot @code{read-random!} requires a pseudo which accepts 3 arguments,
+target pseudo random @var{buffer} and @var{bytes}. @var{buffer} must be a
+bytevector and have bigger size than given @var{bytes}. @var{bytes} must be
+a non negative fixnum.
+
+NOTE: The custom pseudo random interface has been changed since version 0.3.6.
+Make sure which version of Sagittarius your application using.
 
 @subsubsection[:tag "math.hash"]{Hash operations}
 
@@ -299,8 +316,8 @@ number.
 @define[Library]{@name{(math helper)}}
 @desc{This library exports procedures for misc arithmetic operations.}
 
-@define[Function]{@name{mod-inverse} @args{m k}}
-@desc{Calculates @code{2^@var{k} mod @var{m}}}
+@define[Function]{@name{mod-inverse} @args{x m}}
+@desc{Re exporting @code{mod-inverse} defined in @code{(sagittarius)} library.}
 
-@define[Function]{@name{mod-expt} @args{x n d}}
-@desc{Calculates @code{@var{x}^@var{n} mod @var{d}}}
+@define[Function]{@name{mod-expt} @args{x e m}}
+@desc{Re exporting @code{mod-expt} defined in @code{(sagittarius)} library.}

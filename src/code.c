@@ -64,16 +64,19 @@
 /* 
    f000 0000 0000 0000 0000 0000 iiii iiii
    i = insn
+   For cache, insn must be 32 bits so we can't use whole length of SgWord
+   for 64 bit environment.
  */
 #define SG_INT_FITS_INSN_VALUE(n)				\
-  (((n) <= (1 << (((sizeof(SgWord) << 3) - INSN_VALUE1_SHIFT) -1))) &&	\
-   ((n) >= ~(1 << (((sizeof(SgWord) << 3) - INSN_VALUE1_SHIFT) -1))))
+  (((n) <= (1 << ((31 - INSN_VALUE1_SHIFT)))) &&	\
+   ((n) >= ~(1 << ((31 - INSN_VALUE1_SHIFT)))))
 
 
 static SgCodePacket empty_packet = EMPTY_PACKET;
 
 /* TODO define label object or symbol. */
-#define is_label(o) (SG_VECTORP(o) && Sg_VectorRef((o), 0, SG_FALSE) == SG_MAKE_INT(11))
+#define is_label(o)							\
+  (SG_VECTORP(o) && Sg_VectorRef((o), 0, SG_FALSE) == SG_MAKE_INT(11))
 
 static void push(SgCodeBuilder *cb, SgWord word)
 {
@@ -94,7 +97,9 @@ static void push(SgCodeBuilder *cb, SgWord word)
 
 static void flush(SgCodeBuilder *cb)
 {
-  int insn = MERGE_INSN_VALUE2(cb->packet.insn, cb->packet.arg0, cb->packet.arg1);
+  SgWord insn = MERGE_INSN_VALUE2(cb->packet.insn,
+				  cb->packet.arg0,
+				  cb->packet.arg1);
   switch (cb->packet.type) {
   case EMPTY:
     return;
@@ -270,18 +275,6 @@ static void combineInsnArg1(SgCodeBuilder *cb, SgCodePacket *packet)
     }
     goto flush;
   }
-#if 0
-  case JUMP:
-    switch (cb->packet.insn) {
-    case SHIFTJ:
-      cb->packet.insn = SHIFTJ_JUMP;
-      cb->packet.obj = packet->obj;
-      break;
-    default:
-      goto flush;
-    }
-    break;
-#endif
   default:
   flush:
     flush(cb);
@@ -359,26 +352,28 @@ void Sg_CodeBuilderEmit(SgCodeBuilder *cb, SgWord insn, PacketType type,
 
 void Sg_CodeBuilderAddSrc(SgCodeBuilder *cb, int insn, SgObject src)
 {
-  /*
-    we construct the source info into code-builder:
-    ((index1 . src1) (index2 . src2) ...) ; alist
-   */
-  int index = cb->size;
-  if (SG_FALSEP(cb->src)) {
-    /* first time
-       ((index . src))
-     */
-    cb->src = SG_LIST1(Sg_Cons(SG_MAKE_INT(index), src));
-  } else {
-    /* other
-       ((index . src) !here)
-     */
-    SgObject tail = Sg_Assq(SG_MAKE_INT(index), cb->src);
-    if (!SG_FALSEP(tail)) {
-      SG_SET_CDR(tail, src);
+  if (!SG_FALSEP(src)) {
+    /*
+      we construct the source info into code-builder:
+      ((index1 . src1) (index2 . src2) ...) ; alist
+    */
+    int index = cb->size;
+    if (SG_FALSEP(cb->src)) {
+      /* first time
+	 ((index . src))
+      */
+      cb->src = SG_LIST1(Sg_Cons(SG_MAKE_INT(index), src));
     } else {
-      tail = Sg_LastPair(cb->src);
-      SG_SET_CDR(tail, SG_LIST1(Sg_Cons(SG_MAKE_INT(index), src)));
+      /* other
+	 ((index . src) !here)
+      */
+      SgObject tail = Sg_Assq(SG_MAKE_INT(index), cb->src);
+      if (!SG_FALSEP(tail)) {
+	SG_SET_CDR(tail, src);
+      } else {
+	tail = Sg_LastPair(cb->src);
+	SG_SET_CDR(tail, SG_LIST1(Sg_Cons(SG_MAKE_INT(index), src)));
+      }
     }
   }
 }
@@ -433,9 +428,7 @@ static void finish_builder_rec(SgCodeBuilder *cb)
       for (j = 1; j <= info->argc; j++) {
 	SgObject arg = SG_OBJ(code[i + j]);
 	ret[i + j] = SG_WORD(arg);
-	if (SG_IMMEDIATEP(arg)) {
-	  /* nothing */
-	} else if (SG_CODE_BUILDERP(arg)) {
+	if (SG_CODE_BUILDERP(arg)) {
 	  finish_builder_rec(SG_CODE_BUILDER(arg));
 	}
       }
@@ -445,6 +438,9 @@ static void finish_builder_rec(SgCodeBuilder *cb)
   cb->code = ret;
   cb->size = size;
   code = NULL;			/* gc friendliness */
+  cb->labelDefs = SG_NIL;	/* ditto */
+  cb->labelRefs = SG_NIL;	/* ditto */
+  cb->packet = empty_packet;
 }
 
 SgObject Sg_CodeBuilderFinishBuilder(SgCodeBuilder *cb, int last)

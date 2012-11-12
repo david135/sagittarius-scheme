@@ -176,6 +176,7 @@ struct SgPortRec
   /* for saved flags */
   unsigned int vmFlags;
   readtable_t *readtable;
+  SgObject     reader;
   SgObject     loadPath;
 
   SgInternalMutex lock;
@@ -238,13 +239,15 @@ enum SgCustomPortType {
 #define SG_OUTPORTP(obj)      (SG_PORTP(obj) && SG_PORT(obj)->direction == SG_OUTPUT_PORT)
 #define SG_INOUTPORTP(obj)    (SG_PORTP(obj) && SG_PORT(obj)->direction == SG_IN_OUT_PORT)
 
-#define SG_BINARY_PORTP(obj)  (SG_PORTP(obj) && SG_PORT(obj)->type == SG_BINARY_PORT_TYPE)
+#define SG_BINARY_PORTP(obj)					\
+  (SG_PORTP(obj) && SG_PORT(obj)->type == SG_BINARY_PORT_TYPE)
 #define SG_BINARY_PORT(obj)   (SG_PORT(obj)->impl.bport)
 /* for less confusing, we defined macro */
 #define SG_PORT_HAS_U8_AHEAD(port) (SG_BINARY_PORT(port)->dirty != EOF)
 #define SG_PORT_U8_AHEAD(port)     (SG_BINARY_PORT(port)->dirty)
 
-#define SG_TEXTUAL_PORTP(obj) (SG_PORTP(obj) && SG_PORT(obj)->type == SG_TEXTUAL_PORT_TYPE)
+#define SG_TEXTUAL_PORTP(obj)					\
+  (SG_PORTP(obj) && SG_PORT(obj)->type == SG_TEXTUAL_PORT_TYPE)
 #define SG_TEXTUAL_PORT(obj)  (SG_PORT(obj)->impl.tport)
 
 #define SG_TRANSCODED_PORT_TRANSCODER(obj)	\
@@ -258,27 +261,41 @@ enum SgCustomPortType {
 #define SG_TRNASCODED_PORT_MODE(obj)		\
   (SG_TEXTUAL_PORT(obj)->src.transcoded.transcoder->mode)
 
-#define SG_CUSTOM_PORTP(obj)  (SG_PORTP(obj) && SG_PORT(obj)->type == SG_CUSTOM_PORT_TYPE)
+#define SG_CUSTOM_PORTP(obj)					\
+  (SG_PORTP(obj) && SG_PORT(obj)->type == SG_CUSTOM_PORT_TYPE)
 #define SG_CUSTOM_PORT(obj)   (SG_PORT(obj)->impl.cport)
 
 #define SG_PORT_LOCK(port)	Sg_LockMutex(&port->lock)
 #define SG_PORT_UNLOCK(port)	Sg_UnlockMutex(&port->lock)
 
+#define SG_INIT_PORT(port, d, t, m)		\
+  do {						\
+    SG_SET_CLASS((port), SG_CLASS_PORT);	\
+    (port)->direction = (d);			\
+    (port)->type = (t);				\
+    (port)->bufferMode = (m);			\
+    Sg_InitMutex(&(port)->lock, TRUE);		\
+  } while (0)
+
 SG_CDECL_BEGIN
 
 SG_EXTERN SgObject Sg_MakeFileBinaryInputPort(SgFile *file, int bufferMode);
 SG_EXTERN SgObject Sg_MakeFileBinaryOutputPort(SgFile *file, int bufferMode);
-SG_EXTERN SgObject Sg_MakeFileBinaryInputOutputPort(SgFile *file, int bufferMode);
-/* Sg_MakeByteVectorInputPort is just for bytevector->string to avoid an allocation.
-   so we don't provide output and input/output port for it.
+SG_EXTERN SgObject Sg_MakeFileBinaryInputOutputPort(SgFile *file,
+						    int bufferMode);
+/* Sg_MakeByteVectorInputPort is just for bytevector->string to avoid an
+   allocation. so we don't provide output and input/output port for it.
  */
 SG_EXTERN SgObject Sg_MakeByteVectorInputPort(SgByteVector *bv, int offset);
 SG_EXTERN SgObject Sg_MakeByteArrayInputPort(const uint8_t *src, int64_t size);
 SG_EXTERN SgObject Sg_MakeByteArrayOutputPort(int bufferSize);
 
-SG_EXTERN SgObject Sg_MakeTranscodedInputPort(SgPort *port, SgTranscoder *transcoder);
-SG_EXTERN SgObject Sg_MakeTranscodedOutputPort(SgPort *port, SgTranscoder *transcoder);
-SG_EXTERN SgObject Sg_MakeTranscodedInputOutputPort(SgPort *port, SgTranscoder *transcoder);
+SG_EXTERN SgObject Sg_MakeTranscodedInputPort(SgPort *port,
+					      SgTranscoder *transcoder);
+SG_EXTERN SgObject Sg_MakeTranscodedOutputPort(SgPort *port,
+					       SgTranscoder *transcoder);
+SG_EXTERN SgObject Sg_MakeTranscodedInputOutputPort(SgPort *port,
+						    SgTranscoder *transcoder);
 SG_EXTERN SgObject Sg_MakeStringOutputPort(int bufferSize);
 SG_EXTERN SgObject Sg_MakeStringInputPort(SgString *in, int privatep);
 
@@ -321,7 +338,8 @@ SG_EXTERN int      Sg_Getb(SgPort *port);
 SG_EXTERN int      Sg_Peekb(SgPort *port);
 SG_EXTERN int64_t  Sg_Readb(SgPort *port, uint8_t *buf, int64_t size);
 SG_EXTERN int64_t  Sg_ReadbAll(SgPort *port, uint8_t **buf);
-SG_EXTERN void     Sg_Writeb(SgPort *port, uint8_t *b, int start, int count);
+SG_EXTERN void     Sg_Writeb(SgPort *port, uint8_t *b,
+			     int64_t start, int64_t count);
 SG_EXTERN void     Sg_Putb(SgPort *port, uint8_t b);
 SG_EXTERN SgChar   Sg_Getc(SgPort *port);
 SG_EXTERN SgChar   Sg_Peekc(SgPort *port);
@@ -331,13 +349,13 @@ SG_EXTERN void     Sg_Putuz(SgPort *port, const SgChar *str);
 SG_EXTERN void     Sg_Puts(SgPort *port, SgString *str);
 
 SG_EXTERN void     Sg_PutbUnsafe(SgPort *port, uint8_t b);
-SG_EXTERN void     Sg_WritebUnsafe(SgPort *port, uint8_t *b, int start,
-				   int count);
+SG_EXTERN void     Sg_WritebUnsafe(SgPort *port, uint8_t *b, int64_t start,
+				   int64_t count);
 /* for textual port */
-SG_EXTERN void     Sg_Writes(SgPort *port, SgChar *s, int count);
-SG_EXTERN void     Sg_WritesUnsafe(SgPort *port, SgChar *s, int count);
-SG_EXTERN int64_t  Sg_Reads(SgPort *port, SgChar *s, int count);
-SG_EXTERN int64_t  Sg_ReadsUnsafe(SgPort *port, SgChar *s, int count);
+SG_EXTERN void     Sg_Writes(SgPort *port, SgChar *s, int64_t count);
+SG_EXTERN void     Sg_WritesUnsafe(SgPort *port, SgChar *s, int64_t count);
+SG_EXTERN int64_t  Sg_Reads(SgPort *port, SgChar *s, int64_t count);
+SG_EXTERN int64_t  Sg_ReadsUnsafe(SgPort *port, SgChar *s, int64_t count);
 
 SG_EXTERN void     Sg_PutcUnsafe(SgPort *port, SgChar ch);
 SG_EXTERN void     Sg_PutzUnsafe(SgPort *port, const char *str);

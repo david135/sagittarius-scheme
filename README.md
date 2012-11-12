@@ -1,99 +1,120 @@
 # Sagittarius Scheme System
 
 # What is this?
-This is a free Scheme implementation which mostly support R6RS specification.
+This is a free Scheme implementation, mostly supporting the R6RS
+specification.
 
 # How to build and install?
-Sagittarius is usign CMake for its building mechanism. If you do not have it in
-your platform, please install it.
+Sagittarius uses CMake for its building infrastructure.  If you do not
+have it on your platform, please install it.
 
  - [CMake(must be higher than 2.8.4)](http://www.cmake.org/)
 
-## Preparation for UNIX like environment
-Sagittarius depends on [Boehm GC](http://www.hpl.hp.com/personal/Hans_Boehm/gc/)
-if your environment does not have it, you need to install it with
-`--enable-threads=pthreads` options. If your CPU is not incredibly old, you can
-also specify `--enable-parallel-mark`.
+## Preparation for Unix-like environment
 
-If you are lazy enough to download the archive file of GC, CMake will download
-it for you. Make sure you need to go to the GC directory and type following
-command;
+Sagittarius depends on
+[Boehm GC](http://www.hpl.hp.com/personal/Hans_Boehm/gc/)
+you need to install it with the option `--enable-threads=pthreads`.  If
+your CPU is not incredibly old, you can also specify the option
+`--enable-parallel-mark`.
 
-    % ./configure --enable-threads=pthreads --enable-parallel-mark
+If you are too lazy to download the archive file of GC, CMake will
+download it for you.  Make sure to run the following commands from in GC
+directory:
+
+    % ./configure \
+          --enable-threads=pthreads   \
+          --enable-parallel-mark      \
+          --enable-large-config
     % make
     % make install
 
-NOTE: On CYGWIN, cmake does not find `gc.h` by default (at least on my
-environment), you might need to give `--prefix=/usr` option to configure script.
+Note: most of the Linux distributions already have Boehm GC in their
+package management system, such as `apt-get`.  I recommend to use it as
+long as Sagittarius does not bundle it.
 
-## Build on UNIX like environment
-When you installed CMake, you are ready to build Sagittarius. Type following
-command.
+## Building on Unix-like environment
+
+After installing CMake, you are ready to build Sagittarius; type the
+following command:
 
     % cmake .
 
-If you did not install Boehm GC yet, you need to install it before doing next
-step. Go to `gc-7.1` directory and type commands above and re-run `cmake`
-command. Make sure you delete CMakeCache.txt to re-run `cmake` command.
+Note: The above command assumes you are in the source directory.
+
+It is possible to build Sagittarius in a directory that is not the top
+source directory of the distributed package (out-of-tree building);
+for example:
+
+    % mkdir build
+    % cd build
+    % cmake ${path to Sagittarius' source directory}
+    % make
+
+After installing Boehm GC yet, go to the directory `gc-7.2` and type
+commands below and re-run `cmake`.  Make sure you delete CMakeCache.txt
+to re-run `cmake` command.
 
     % make
     % make test
     % make doc
+
+The command `make doc` creates HTML documentation in the directory
+`doc/`.
+
+After a successful compilation (of both the binary targets and the
+documentation), it is possible to install Sagittarius to the default system
+location with the command:
+
     % make install
 
-The commend `make doc` creates document in the directory `doc/`. It is a HTML
-file and 'make install' does not install it on your environment. 
+or to a temporary location with the command:
 
-You might need to run `ldconfig` to run Sagittarius properly.
+    % make install DESTDIR=/path/to/tmpdir
+
+Note: `make doc` command must be run before `make install` command, otherwise
+installation process will fail
+
+After installation, you might need to run `ldconfig` to run Sagittarius
+properly.
+
+Note: For some reason, you might want to build a 32-bit runtime on a
+64-bit platform.  The following command can be used for this purpose;
+
+    % cmake . \
+        -DCMAKE_CXX_COMPILER=${your 32 bit C++ compiler} \
+        -DCMAKE_C_COMPILER={your 32 bit C compiler}
+
+Make sure you have all the required 32-bit executables and libraries.
+
 
 ## Build on Windows (non Cygwin environment)
-On Windows, you need to create an installer and Sagittarius is using innosetup
-for it. Please install it.
+On Windows, you need to create an installer and Sagittarius is using
+innosetup for it.  Please install it.
  - [Inno Setup](http://www.jrsoftware.org/)
 
-You need to install MSVC preferably Visual Studio 2010 or higher. And if you use
-cmake-gui, it will be much easier. Run `Visual Studio Command Prompt` and go to
-the directory which Sagittarius source codes are expanded.
+You need to install MSVC preferably Visual Studio 2010 or higher.  And
+if you use cmake-gui, it will be much easier.  Run `Visual Studio
+Command Prompt` and go to the directory which Sagittarius source codes
+are expanded.
 
-Note: I usually use `cmake-gui` to configure NMakefile, so following commands
-might not work properly.
+Note: I usually use `cmake-gui` to configure NMakefile, so the following
+commands might not work properly.  Make sure your configuration enables
+multithreading.  (Parallel mark can be optional).
 
     % cmake .
 
-Before generating MakeFile, you might need to add the following line to
-`gc-7.2/CMakeLists.txt` around line number 200.
-
-    ADD_DEFINITIONS("-DGC_WIN32_THREADS")
-
-This is because Sagittarius is using threads but some how current alpha archive
-does not set this macro. 
-
-And if you don't have zlib on your developping environment, you also need to add
-the following line to `ext/zlib/zlib-{current-zlib-version}/CMakeLists.txt`.
-
-    INCLUDE_DIRECTORIES(${CMAKE_CURRENT_SOURCE_DIR})
-
-The place does not matter as long as `cmake` can recognise it. My suggestion is
-after line number 75 (if cmake downloads version 1.2.6) where it adds other
-include directory.
-
-
-If you are using command line `cmake`, make sure you  delete CMakeCache.txt and
-re-run `cmake`. If you are using `cmake-gui`, then just press `Generate` button.
+The final commands are almost the same as in Unix-like environments.
 
     % nmake
     % nmake test
     % nmake doc
 
-After these commands, you need to go to `win/` directory and double click the
-file `innosetup.iss`. Go to [Build] - [Compile], then it will create the
-installer. For more detail, please see Inno Setup's document.
+After these commands, you move to the `win/` directory and double click
+the file `innosetup.iss`.  Go to [Build] - [Compile], then it will
+create the installer.  For more detail, please see Inno Setup's
+document.
 
 # How to develop it?
-We provide `autogen.sh` for developper and it generates boot code, VM
-instrustions and generated code from stub file. For more detail, see the file.
 
-NOTE:
-If Sagittarius itself is so unstable to generate boot code, you can also use
-[Gauche](http://practical-scheme.net/gauche/index.html) for it.
-
+See HACKING file.

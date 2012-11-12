@@ -432,7 +432,7 @@ SgObject Sg_Utf8sToUtf32s(const char *s, int len)
   int64_t r = Sg_ConvertUtf8BufferToUcs4(Sg_MakeUtf8Codec(), (uint8_t*)s, len,
 					 SG_STRING_VALUE(ss), len, NULL,
 					 SG_IGNORE_ERROR, FALSE);
-  SG_STRING_SIZE(ss) = r;
+  SG_STRING_SIZE(ss) = (int)r;
   return ss;
 }
 
@@ -444,7 +444,7 @@ SgObject Sg_Utf16sToUtf32s(const char *s, int len)
 					  (uint8_t*)s, len,
 					  SG_STRING_VALUE(ss), len/2, NULL,
 					  SG_IGNORE_ERROR, FALSE);
-  SG_STRING_SIZE(ss) = r;
+  SG_STRING_SIZE(ss) = (int)r;
   return ss;
 }
 
@@ -543,7 +543,7 @@ size_t ustrlen(const SgChar *value)
     int i;							\
     for (i = 0; i < size; i++) {				\
       if (SG_CPP_CAT(s_, name)[i].in == ch) {			\
-	return SG_CPP_CAT(s_, name)[i].out;			\
+	return (SgChar)(SG_CPP_CAT(s_, name)[i].out);		\
       }								\
     }								\
     return how? ch: 0;						\
@@ -570,10 +570,10 @@ DECLARE_SIMPLE_CASE(compose, FALSE);
 
 DECLARE_BOOL_CASE(compatibility);
 
-#define DECLARE_OTHER_CASE_PRED(name)					\
+#define DECLARE_OTHER_CASE_PRED(name, lo, hi)				\
   static int SG_CPP_CAT(name, _property_p) (SgChar ch)			\
   {									\
-    if (0x345 <= ch && ch <= 0x10A0F) {					\
+    if ((lo) <= ch && ch <= (hi)) {					\
       const int size = array_sizeof(SG_CPP_CAT(s_, name));		\
       int i;								\
       for (i = 0; i < size; i++) {					\
@@ -585,9 +585,10 @@ DECLARE_BOOL_CASE(compatibility);
     }									\
     return FALSE;							\
   }
-DECLARE_OTHER_CASE_PRED(other_alphabetic);
-DECLARE_OTHER_CASE_PRED(other_lowercase);
-DECLARE_OTHER_CASE_PRED(other_uppercase);
+DECLARE_OTHER_CASE_PRED(other_alphabetic, 0x345, 0x10A0F);
+/* since unicode 6.1.0, 0xAA is categorised in Lo */
+DECLARE_OTHER_CASE_PRED(other_lowercase, 0xAA, 0x24E9);
+DECLARE_OTHER_CASE_PRED(other_uppercase, 0x2160, 0x24CF);
 #if 0
 static int other_alphabetic_property_p(SgChar ch)
 {
@@ -696,7 +697,7 @@ int Sg_CharLowerCaseP(SgChar ch)
     switch (Sg_CharGeneralCategory(ch)) {
     case Ll:
       return TRUE;
-    case Lm: case Mn: case Nl: case So:
+    case Lm: case Mn: case Nl: case So: case Lo:
       return other_lowercase_property_p(ch);
     default:
       return FALSE;
@@ -1115,7 +1116,7 @@ static int32_t pair_wise_composition(uint32_t first, uint32_t second)
       return first + tindex;
     } else {
       int64_t val = (first * 0x10000) + second;
-      int32_t r = compose(val);
+      int32_t r = compose((SgChar)val);
       return r ? r : -1;
     }
   }
@@ -1181,7 +1182,7 @@ void Sg__InitUnicode()
   size_t i;
   const size_t size_1 = array_sizeof(s_general_category_1);
   const size_t size_2 = array_sizeof(s_general_category_2);
-  general_category = Sg_MakeHashTableSimple(SG_HASH_EQV, size_1 + size_2);
+  general_category = Sg_MakeHashTableSimple(SG_HASH_EQV, (int)(size_1+size_2));
   for (i = 0; i < size_1; i++) {
     Sg_HashTableSet(general_category,
 		    SG_MAKE_CHAR(s_general_category_1[i].in),

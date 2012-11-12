@@ -1,4 +1,5 @@
 ;; need to move to C++
+#!core
 (cond-expand
  (sagittarius.scheme.vm
   (define (constant-literal? o) #f)
@@ -26,6 +27,8 @@
   (vector-ref id 1))
 (define (id-envs id)
   (vector-ref id 2))
+
+(define (syntax-object=? a b) #f)
 
 (define (unrename-symbol sym)
   (let loop ((lst (string->list (symbol->string sym)))

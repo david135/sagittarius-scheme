@@ -34,7 +34,9 @@ SET(SAGITTARIUS_LIB_SOURCE
   string.c         
   symbol.c
   vector.c         number.c
-  values.c         file.c
+  # values is now not first class object
+  # values.c
+  file.c
   bytevector.c     subr.c
   hashtable.c      reader.c
   # we won't use privious generic anymore.
@@ -92,7 +94,7 @@ IF(${LINK_BOEHM_GC})
     MESSAGE(STATUS "Adding stupid gc related target: ${GC_DEPENDS_TARGET}")
     TARGET_LINK_LIBRARIES(sagittarius ${GC_DEPENDS_TARGET})
   ELSE()
-    TARGET_LINK_LIBRARIES(sagittarius gc)
+    TARGET_LINK_LIBRARIES(sagittarius ${BOEHM_GC_LIBRARIES})
   ENDIF()
 ELSE()
   TARGET_LINK_LIBRARIES(sagittarius taurus)

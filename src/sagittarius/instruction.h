@@ -114,8 +114,9 @@ typedef enum {
   GREF_CAR_PUSH = 0x5f,
   GREF_CDR_PUSH = 0x60,
   CONST_RET = 0x61,
+  APPLY_VALUES = 0x62,
 } Instruction;
-#define INSTRUCTION_COUNT 98 /** number of instructions */
+#define INSTRUCTION_COUNT 99 /** number of instructions */
 typedef struct InsnInfoRec InsnInfo;
 struct InsnInfoRec
 {
@@ -127,11 +128,13 @@ struct InsnInfoRec
   int         label;
 };
 #define INSN(o)            ((o) & INSN_MASK)
-#define INSN_VAL1(v, insn) ((v) = ((int)(insn)) >> INSN_VALUE1_SHIFT)
+#define INSN_VALUE1(insn) (((int)(insn)) >> INSN_VALUE1_SHIFT)
+#define INSN_VALUE2(insn) (((int)(insn)) >> INSN_VALUE2_SHIFT)
+#define INSN_VAL1(v, insn) ((v) = INSN_VALUE1(insn))
 #define INSN_VAL2(v1, v2, insn)	\
   do {				\
-    (v1) = ((((int)(insn)) >> INSN_VALUE1_SHIFT) & INSN_VALUE1_MASK);	\
-    (v2) = ((((int)(insn)) >> INSN_VALUE2_SHIFT) & INSN_VALUE2_MASK);	\
+    (v1) = (INSN_VALUE1(insn) & INSN_VALUE1_MASK);	\
+    (v2) = (INSN_VALUE2(insn) & INSN_VALUE2_MASK);	\
   } while (0)
 #define MERGE_INSN_VALUE1(insn, value)      \
   ((insn) | ((value) << INSN_VALUE1_SHIFT))

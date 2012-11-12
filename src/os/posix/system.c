@@ -1,6 +1,6 @@
 /* -*- C -*- */
 /*
- * systam.c
+ * system.c
  *
  *   Copyright (c) 2010  Takashi Kato <ktakashi@ymail.com>
  *
@@ -40,6 +40,11 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <fcntl.h>
+/* for mac address */
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <netinet/in.h>
 #ifdef HAVE_SCHED_H
 # include <sched.h>
 #endif
@@ -52,6 +57,7 @@
 #include <sagittarius/error.h>
 #include <sagittarius/values.h>
 #include <sagittarius/number.h>
+#include <sagittarius/bytevector.h>
 
 extern char** environ;
 
@@ -74,15 +80,31 @@ SgObject Sg_GetLastErrorMessage()
 
 SgObject Sg_GetDefaultLoadPath()
 {
-  return SG_LIST3(SG_MAKE_STRING(SAGITTARIUS_SITE_LIB_PATH),
-		  SG_MAKE_STRING(SAGITTARIUS_SHARE_SITE_LIB_PATH),
-		  SG_MAKE_STRING(SAGITTARIUS_SHARE_LIB_PATH));
+  SgObject env = Sg_Getenv(UC("SAGITTARIUS_LOADPATH"));
+  SgObject h = SG_NIL, t = SG_NIL;
+  if (!SG_FALSEP(env) && SG_STRING_SIZE(env) != 0) {
+    SG_APPEND(h, t, Sg_StringSplitChar(SG_STRING(env), ':'));
+  }
+
+  SG_APPEND1(h, t, SG_MAKE_STRING(SAGITTARIUS_SITE_LIB_PATH));
+  SG_APPEND1(h, t, SG_MAKE_STRING(SAGITTARIUS_SHARE_SITE_LIB_PATH));
+  SG_APPEND1(h, t, SG_MAKE_STRING(SAGITTARIUS_SHARE_LIB_PATH));
+
+  return h;
 }
 
 SgObject Sg_GetDefaultDynamicLoadPath()
 {
-  return SG_LIST2(SG_MAKE_STRING(SAGITTARIUS_DYNLIB_PATH),
-		  SG_MAKE_STRING(SAGITTARIUS_SITE_DYNLIB_PATH));
+  SgObject env = Sg_Getenv(UC("SAGITTARIUS_DYN_LOADPATH"));
+  SgObject h = SG_NIL, t = SG_NIL;
+
+  if (!SG_FALSEP(env) && SG_STRING_SIZE(env) != 0) {
+    SG_APPEND(h, t, Sg_StringSplitChar(SG_STRING(env), ':'));
+  }
+
+  SG_APPEND1(h, t, SG_MAKE_STRING(SAGITTARIUS_DYNLIB_PATH));
+  SG_APPEND1(h, t, SG_MAKE_STRING(SAGITTARIUS_SITE_DYNLIB_PATH));
+  return h;
 }
 
 int Sg_GetTimeOfDay(unsigned long *sec, unsigned long *usec)
@@ -174,6 +196,8 @@ SgObject Sg_GetTemporaryDirectory()
   static const char *NAME = "/.sagittarius";
   static const char *ENVS[] = {"SAGITTARIUS_CACHE_DIR", "HOME"};
   const char *home;
+  const size_t version_len = strlen(SAGITTARIUS_VERSION);
+  const size_t triple_len = strlen(SAGITTARIUS_TRIPLE);
   int len, i;
   char *real;
   struct stat st;
@@ -189,26 +213,38 @@ SgObject Sg_GetTemporaryDirectory()
   home = "/tmp";
   
  entry:
-  len = strlen(home) + 13;	/* 13 is the length of /.sagittarius */
+  /* 13 is the length of /.sagittarius */
+  len = strlen(home) + 13 + version_len + triple_len + 2;
   real = SG_NEW_ATOMIC2(char *, len + 1);
   /* We know the length, so don't worry */
   strcpy(real, home);
   strcat(real, NAME);
-  if (access(real, F_OK) == 0) {
-    struct stat st;
-    if (stat(real, &st) == 0) {
-      if (S_ISDIR(st.st_mode)) {
-	return Sg_MakeStringC(real);
-      } else {
-	return SG_FALSE;
-      }
-    } else {
-      return SG_FALSE;
-    }
-  } else {
-    /* create */
-    if (mkdir(real, S_IRWXU | S_IRWXG | S_IRWXO) != 0) return SG_FALSE;
+
+#define check(v, finish)						\
+  if (access(real, F_OK) == 0) {					\
+    struct stat st;							\
+    if (stat(v, &st) == 0) {						\
+      if (S_ISDIR(st.st_mode)) {					\
+	if (finish) {							\
+	  return Sg_MakeStringC(real);					\
+	}								\
+      } else {								\
+	return SG_FALSE;						\
+      }									\
+    } else {								\
+      return SG_FALSE;							\
+    }									\
+  } else {								\
+    if (mkdir(v, S_IRWXU | S_IRWXG | S_IRWXO) != 0) return SG_FALSE;	\
   }
+  check(real, FALSE);
+  strcat(real, "/");
+  strcat(real, SAGITTARIUS_VERSION);
+  check(real, FALSE);
+  strcat(real, "/");
+  strcat(real, SAGITTARIUS_TRIPLE);
+  check(real, TRUE);
+
   return Sg_MakeStringC(real);
 }
 
@@ -217,12 +253,50 @@ SgObject Sg_TimeUsage()
 {
   struct timeval tv;
   struct rusage ru;
-  SgObject values;
+
   gettimeofday(&tv, NULL);
   getrusage(RUSAGE_SELF, &ru);
-  values = Sg_MakeValues(3);
-  SG_VALUES_ELEMENT(values, 0) = Sg_MakeFlonum((double)tv.tv_sec + tv.tv_usec / 1000000.0);
-  SG_VALUES_ELEMENT(values, 1) = Sg_MakeFlonum((double)ru.ru_utime.tv_sec + ru.ru_utime.tv_usec / 1000000.0);
-  SG_VALUES_ELEMENT(values, 2) = Sg_MakeFlonum((double)ru.ru_stime.tv_sec + ru.ru_stime.tv_usec / 1000000.0);
-  return values;
+
+  return Sg_Values3(Sg_MakeFlonum((double)tv.tv_sec + tv.tv_usec / 1000000.0),
+		    Sg_MakeFlonum((double)ru.ru_utime.tv_sec +
+				    ru.ru_utime.tv_usec / 1000000.0),
+		    Sg_MakeFlonum((double)ru.ru_stime.tv_sec +
+				    ru.ru_stime.tv_usec / 1000000.0));
+}
+
+SgObject Sg_GetMacAddress(int pos)
+{
+  /* how many should we allocate? */
+#define MAX_IFS 16
+  static SgObject empty_mac = NULL;
+  struct ifreq *ifr;
+  struct ifreq ifreq;
+  struct ifconf ifc;
+  struct ifreq ifs[MAX_IFS];
+  int fd;
+  size_t size;
+  if (empty_mac == NULL) {
+    empty_mac = Sg_MakeByteVector(6, 0);
+  }
+  fd = socket(AF_INET, SOCK_DGRAM, 0);
+  ifc.ifc_len = sizeof(ifs);
+  ifc.ifc_req = ifs;
+  if (ioctl(fd, SIOCGIFCONF, &ifc) < 0) {
+    /* failed, return empty MAC address */
+    return empty_mac;
+  }
+  size = (ifc.ifc_len / sizeof(struct ifreq));
+  if (pos < 0) pos = 0;
+  else if (pos > size) pos = size-1;
+  ifr = &ifs[pos];
+
+  if (ifr->ifr_addr.sa_family == AF_INET) {
+    strncpy(ifreq.ifr_name, ifr->ifr_name, sizeof(ifreq.ifr_name));
+    if (ioctl(fd, SIOCGIFHWADDR, &ifreq) < 0) {
+      return empty_mac;
+    }
+    return Sg_MakeByteVectorFromU8Array((uint8_t *)ifreq.ifr_hwaddr.sa_data, 6);
+  }
+  /* something wrong but return empty MAC address */
+  return empty_mac;
 }

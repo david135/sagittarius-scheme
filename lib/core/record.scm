@@ -3,11 +3,42 @@
 (library (core record)
     (export define-record-type
 	    record-type-descriptor
-	    record-constructor-descriptor)
+	    record-constructor-descriptor
+
+	    fields mutable immutable parent protocol sealed
+	    opaque nongenerative parent-rtd)
     (import (core)
 	    (core base)
 	    (core syntax)
 	    (sagittarius))
+
+  (define-syntax mutable
+    (lambda (x)
+      (syntax-error 'mutable "invalid expression" x)))
+  (define-syntax immutable
+    (lambda (x)
+      (syntax-error 'immutable "invalid expression" x)))
+  (define-syntax parent
+    (lambda (x)
+      (syntax-error 'parent "invalid expression" x)))
+  (define-syntax protocol
+    (lambda (x)
+      (syntax-error 'protocol "invalid expression" x)))
+  (define-syntax parent-rtd
+    (lambda (x)
+      (syntax-error 'parent-rtd "invalid expression" x)))
+  (define-syntax sealed
+    (lambda (x)
+      (syntax-error 'sealed "invalid expression" x)))
+  (define-syntax opaque
+    (lambda (x)
+      (syntax-error 'opaque "invalid expression" x)))
+  (define-syntax nongenerative
+    (lambda (x)
+      (syntax-error 'nongenerative "invalid expression" x)))
+  (define-syntax fields
+    (lambda (x)
+      (syntax-error 'fields "invalid expression" x)))
 
   (define-syntax define-record-type
     (lambda (x)
@@ -30,7 +61,7 @@
              (lambda (c)
                (syntax-case c (parent protocol parent-rtd sealed opaque nongenerative fields)
                  ((parent e1)
-                  (identifier? #'e1)
+		  (identifier? #'e1)
                   (stash-set! 'parent #'e1))
                  ((protocol e1)
                   (stash-set! 'protocol #'e1))
