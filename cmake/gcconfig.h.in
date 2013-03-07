@@ -1,0 +1,9 @@
+#ifndef SAGITTARIUS_GC_CONFIG_H
+#define SAGITTARIUS_GC_CONFIG_H
+
+/* stack grows downward */
+#cmakedefine SG_STACK_GROW_DOWNWARD
+/* stack is controlled */
+#cmakedefine SG_CONTROLLED_STACK
+
+#endif
