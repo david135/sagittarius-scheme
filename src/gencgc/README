@@ -1,0 +1,11 @@
+Generational conservative garbage collection
+==================
+
+This is part of Sagittarius Scheme however to make things easier naming
+convension is not the same as Scheme world sources and most of the 
+procedures are not exported to runtime.
+
+How it works
+==================
+
+TODO write document here for my memo.
