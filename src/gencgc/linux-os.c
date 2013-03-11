@@ -29,6 +29,7 @@
  */
 #include <errno.h>
 #include <string.h>
+#include <unistd.h>
 #define LIBSAGITTARIUS_BODY
 #include <sagittarius/core.h>
 #include "os.h"
@@ -38,20 +39,24 @@
 
 size_t os_page_size;
 void *dynamic_space_start;
-/* FIXME this must be configured in build time */
-size_t dynamic_space_size = 0x09000000UL;
+void *dynamic_space_end;
 
 void os_init()
 {
+  /* assume there is nothing allocated before this called. */
+  void *heap_end;
+#ifndef __CYGWIN__
+  heap_end = sbrk(0);
+#else
+  /* FIXME on Cygwin sbrk doesn't work as we expected.
+     so we use magic number taken from 32 bit SBCL linux. */
+  /* heap_end = (void*)0x09000000UL; */
+  heap_end = NULL;
+#endif
   os_page_size = PAGE_BYTES;
-  /* allocate dynamic space here 
-     FIXME the size should not be hard coded.
-   */
-  dynamic_space_start = mmap(NULL, dynamic_space_size, OS_VM_PROT_ALL,
-			     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  if (dynamic_space_start == MAP_FAILED) {
-    Sg_Panic("dynamic space allocation failed (%s)", strerror(errno));
-  }
+  /* validate the address sbrk(0) returned */
+  dynamic_space_start = os_validate(heap_end, DYNAMIC_SPACE_SIZE);
+  dynamic_space_end = dynamic_space_start + DYNAMIC_SPACE_SIZE;
 }
 
 void * os_validate(void *addr, size_t len)
@@ -62,9 +67,9 @@ void * os_validate(void *addr, size_t len)
   if (actual == MAP_FAILED) {
     Sg_Panic("mmap failed %p (%s)", addr, strerror(errno));
   }
-  if (addr && (addr!=actual)) {
+  if (addr && (addr != actual)) {
     Sg_Panic("mmap: wanted %lu bytes at %p, actually mapped at %p\n",
-	     (unsigned long) len, addr, actual);
+	     (unsigned long)len, addr, actual);
   }
   return actual;
 }

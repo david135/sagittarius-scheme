@@ -31,9 +31,11 @@
 #define SAGITTARIUS_LINUX_OS_H_
 
 #include <sys/mman.h>
+
+#include "target-arch-os.h"
+
 #define OS_VM_PROT_READ    PROT_READ
 #define OS_VM_PROT_WRITE   PROT_WRITE
 #define OS_VM_PROT_EXECUTE PROT_EXEC
-
 
 #endif /* SAGITTARIUS_LINUX-OS_H_ */

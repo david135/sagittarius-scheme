@@ -131,9 +131,13 @@ typedef struct page {
 extern page_index_t page_table_pages;
 extern page_t *page_table;
 
-/* allocation starting point */
+/* allocation starting point 
+   TODO we probably want to make READ_ONLY space for constant literals.
+ */
 extern void *dynamic_space_start;
+extern void *dynamic_space_end;
 extern size_t dynamic_space_size;
+#define DEFAULT_DYNAMIC_SPACE_SIZE (dynamic_space_end - dynamic_space_start)
 
 /* #define READ_ONLY_SPACE_START read_only_space_start */
 #define DYNAMIC_SPACE_START   dynamic_space_start
@@ -176,5 +180,75 @@ static inline int new_space_p(void *obj)
 }
 
 extern void * general_alloc(size_t nbytes, int page_type_flag);
+
+/* registers */
+#define REG(num) num
+#ifdef __i686__
+# define reg_EAX  REG( 0)
+# define reg_ECX  REG( 2)
+# define reg_EDX  REG( 4)
+# define reg_EBX  REG( 6)
+# define reg_ESP  REG( 8)
+# define reg_EBP  REG(10)
+# define reg_ESI  REG(12)
+# define reg_EDI  REG(14)
+# define reg_UESP REG(16)
+# define reg_SP   reg_ESP
+# define reg_FP   reg_EBP
+#elif __x86_64__
+# define reg_RAX REG( 0)
+# define reg_RCX REG( 2)
+# define reg_RDX REG( 4)
+# define reg_RBX REG( 6)
+# define reg_RSP REG( 8)
+# define reg_RBP REG(10)
+# define reg_RSI REG(12)
+# define reg_RDI REG(14)
+# define reg_R8  REG(16)
+# define reg_R9  REG(18)
+# define reg_R10 REG(20)
+# define reg_R11 REG(22)
+# define reg_R12 REG(24)
+# define reg_R13 REG(26)
+# define reg_R14 REG(28)
+# define reg_R15 REG(30)
+# define reg_SP reg_RSP
+# define reg_FP reg_RBP
+#else
+# error "the architecture is not supported"
+#endif
+
+/* we pack the header for better memory usage:
+   32 bit model;
+   xxxx xxxx xxxx xxxx xxxx xxxx xxxx xxrf
+   x = 30 bit finalizer address
+   r = 1  bit reserved
+   f = 1  bit forwarded pointer flag
+   Most probably we can use 3 bits for flags, but i have never
+   checked if the function pointer is located on 8 byte boundary
+   or not. So let's do it safe way so far.
+*/
+typedef struct memory_header {
+  uintptr_t forwarded : 1;
+#if SIZEOF_VOIDP == 8
+  uintptr_t finalizer : 62;
+#else
+  uintptr_t finalizer : 30;
+#endif
+  /* do we need this? */
+  size_t size;
+} memory_header_t;
+typedef struct block {
+  memory_header_t header;
+  uintptr_t body;
+} block_t;
+
+/* we assume this is called that  */
+static inline int forwarding_pointer_p(void *p)
+{
+  memory_header_t *header = (memory_header_t *)(p - sizeof(memory_header_t));
+  return header->forwarded;
+}
+
 
 #endif /* SAGITTARIUS_GC-INTERNAL_H_ */

@@ -288,7 +288,23 @@ struct SgVMRec
 
   /* current loading port */
   SgObject currentLoadingPort;
+
+  /* GENCGC specific data */
+#ifndef USE_BOEHM_GC
+  /* threads (VM) need to be managed for GC */
+  SgVM *next;
+  void *cstackStart;
+  void *cstackEnd;
+  /* we might not need these */
+  int  freeInterruptContextIndex;
+  void *interruptContexts[1];
+#endif
 };
+
+#ifndef USE_BOEHM_GC
+extern SgVM *all_threads;
+#define for_each_thread(th) for ((th)=all_threads;(th);(th)=(th)->next)  
+#endif
 
 /*
   flag 32bit
