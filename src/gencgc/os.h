@@ -35,6 +35,15 @@
 
 #include <target-os.h>
 
+/* compile time definition can be used if there is */
+#ifndef DYNAMIC_SPACE_SIZE
+# if SIZEOF_VOIDP == 8
+#  define DYNAMIC_SPACE_SIZE (1UL<<30)
+# else  /* SIZEOF_VOIDP == 4 */
+#  define DYNAMIC_SPACE_SIZE (1UL<<29)
+# endif
+#endif
+
 #define OS_VM_PROT_ALL						\
   (OS_VM_PROT_READ | OS_VM_PROT_WRITE | OS_VM_PROT_EXECUTE)
 
@@ -48,5 +57,15 @@ extern void   os_invalidate(void *addr, size_t len);
  * whether it's modified by handling the signal. */
 extern void os_protect(void *addr, size_t len, int protection);
 
+/* Given a signal context, return the address for storage of the
+ * register, of the specified offset, for that context. The offset is
+ * defined in the storage class (SC) defined in the Lisp virtual
+ * machine (i.e. the file "vm.lisp" for the appropriate architecture). */
+os_context_register_t *
+os_context_register_addr(os_context_t *context, int offset);
+
+/* Given a signal context, return the address for storage of the
+ * program counter for that context. */
+os_context_register_t *os_context_pc_addr(os_context_t *context);
 
 #endif /* SAGITTARIUS_OS_H_ */

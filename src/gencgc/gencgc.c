@@ -60,6 +60,7 @@ enum {
 #endif
 
 int need_gc = FALSE;
+size_t dynamic_space_size;
 
 /* Largest allocation seen since last GC. */
 static size_t large_allocation = 0;
@@ -1329,6 +1330,11 @@ static SgObject search_dynamic_space(void *pointer)
   start = page_region_start(page_index);
   return gc_search_space(start, (pointer+2)-start, pointer);
 }
+/* unlikely with SBCL we can't determine if the pointer is
+   Scheme object or not plus, GC_malloc would allocate non
+   Scheme object as well. So we only checks if the pointer
+   is in dynamic space. */
+#define possibly_valid_dynamic_space_pointer search_dynamic_space
 
 static inline void *
 general_alloc_internal(size_t nbytes, int page_type_flag,
@@ -1498,6 +1504,428 @@ static void remap_free_pages(page_index_t from, page_index_t to, int forcibly)
   }
 }
 
+/* Un-write-protect all the pages in from_space. This is done at the
+ * start of a GC else there may be many page faults while scavenging
+ * the newspace (I've seen drive the system time to 99%). These pages
+ * would need to be unprotected anyway before unmapping in
+ * free_oldspace; not sure what effect this has on paging.. */
+static void unprotect_oldspace(void)
+{
+  page_index_t i;
+  void *region_addr = NULL;
+  void *page_addr = NULL;
+  uintptr_t region_bytes = 0;
+
+  for (i = 0; i < last_free_page; i++) {
+    if (page_allocated_p(i)
+	&& (page_table[i].bytes_used != 0)
+	&& (page_table[i].gen == from_space)) {
+
+      /* Remove any write-protection. We should be able to rely
+       * on the write-protect flag to avoid redundant calls. */
+      if (page_table[i].write_protected) {
+	page_table[i].write_protected = 0;
+	page_addr = page_address(i);
+	if (!region_addr) {
+	  /* First region. */
+	  region_addr = page_addr;
+	  region_bytes = CARD_BYTES;
+	} else if (region_addr + region_bytes == page_addr) {
+	  /* Region continue. */
+	  region_bytes += CARD_BYTES;
+	} else {
+	  /* Unprotect previous region. */
+	  os_protect(region_addr, region_bytes, OS_VM_PROT_ALL);
+	  /* First page in new region. */
+	  region_addr = page_addr;
+	  region_bytes = CARD_BYTES;
+	}
+      }
+    }
+  }
+  if (region_addr) {
+    /* Unprotect last region. */
+    os_protect(region_addr, region_bytes, OS_VM_PROT_ALL);
+  }
+}
+
+/* FIXME This implementation sucks! */
+static int is_scheme_pointer(void *p)
+{
+  /* TODO check if the given pointer is in static areas */
+  if (SG_HPTRP(p) &&
+      (/* possibly_valid_static_area_pointer(p) || */
+       possibly_valid_dynamic_space_pointer(p)) &&
+      SG_HOBJP(p)) {
+    /* at least it's safe to access to the class pointer */
+    SgClass *clazz = SG_CLASS_OF(p);
+    return clazz->magic == CLASS_MAGIC_VALUE;
+  } else {
+    return FALSE;
+  }
+}
+
+#include "scavenge_dispatcher.c"
+
+/* FIXME: Most calls end up going to some trouble to compute an
+ * 'n_words' value for this function. The system might be a little
+ * simpler if this function used an 'end' parameter instead. */
+static void scavenge(void *start, intptr_t n_words)
+{
+#if 0
+  intptr_t *end = start + n_words;
+  intptr_t *object_ptr;
+  intptr_t n_words_scavenged;
+
+  for (object_ptr = start;
+       object_ptr < end;
+       object_ptr += n_words_scavenged) {
+
+    intptr_t object = *object_ptr;
+    if (forwarding_pointer_p(object_ptr))
+      Sg_Panic("unexpect forwarding pointer in scavenge: %p, start=%p, n=%l\n",
+	       object_ptr, start, n_words);
+    /* FIXME this is not correct! */
+    if (is_scheme_pointer(object)) {
+      if (from_space_p(object)) {
+	/* It currently points to old space. Check for a
+	 * forwarding pointer. */
+	void *ptr = object;
+	if (forwarding_pointer_p(ptr)) {
+	  /* Yes, there's a forwarding pointer. */
+	  *object_ptr = LOW_WORD(forwarding_pointer_value(ptr));
+	  n_words_scavenged = 1;
+	} else {
+	  /* Scavenge that pointer. */
+	  n_words_scavenged = dispatch_pointer(object_ptr, object);
+	}
+      } else {
+	/* It points somewhere other than oldspace. Leave it
+	 * alone. */
+	n_words_scavenged = 1;
+      }
+    } else {
+      /* It's some sort of header object or another. */
+      n_words_scavenged = dispatch_table(object_ptr, object);
+    }
+  }
+#endif
+}
+
+/* comment from SBCL */
+/* If the given page is not write-protected, then scan it for pointers
+ * to younger generations or the top temp. generation, if no
+ * suspicious pointers are found then the page is write-protected.
+ *
+ * Care is taken to check for pointers to the current gc_alloc()
+ * region if it is a younger generation or the temp. generation. This
+ * frees the caller from doing a gc_alloc_update_page_tables(). Actually
+ * the gc_alloc_generation does not need to be checked as this is only
+ * called from scavenge_generation() when the gc_alloc generation is
+ * younger, so it just checks if there is a pointer to the current
+ * region.
+ *
+ * We return 1 if the page was write-protected, else 0. */
+static int update_page_write_prot(page_index_t page)
+{
+  generation_index_t gen = page_table[page].gen;
+  int wp_it = 1;
+  void **page_addr = (void **)page_address(page);
+  intptr_t num_words = page_table[page].bytes_used / N_WORD_BYTES, j;
+
+  /* Shouldn't be a free page. */
+  ASSERT(page_allocated_p(page));
+  ASSERT(page_table[page].bytes_used != 0);
+
+  /* Skip if it's already write-protected, pinned, or unboxed */
+  if (page_table[page].write_protected
+      /* FIXME: What's the reason for not write-protecting pinned pages? */
+      || page_table[page].dont_move
+      || page_unboxed_p(page))
+    return (0);
+
+  /* Scan the page for pointers to younger generations or the
+   * top temp. generation. */
+
+  for (j = 0; j < num_words; j++) {
+    void *ptr = *(page_addr+j);
+    page_index_t index = find_page_index(ptr);
+
+    /* Check that it's in the dynamic space */
+    if (index != -1)
+      if (/* Does it point to a younger or the temp. generation? */
+	  (page_allocated_p(index)
+	   && (page_table[index].bytes_used != 0)
+	   && ((page_table[index].gen < gen)
+	       || (page_table[index].gen == SCRATCH_GENERATION)))
+
+	  /* Or does it point within a current gc_alloc() region? */
+	  || ((boxed_region.start_addr <= ptr)
+	      && (ptr <= boxed_region.free_pointer))
+	  || ((unboxed_region.start_addr <= ptr)
+	      && (ptr <= unboxed_region.free_pointer))) {
+	wp_it = 0;
+	break;
+      }
+  }
+
+  if (wp_it == 1) {
+    /* Write-protect the page. */
+    /*FSHOW((stderr, "/write-protecting page %d gen %d\n", page, gen));*/
+
+    os_protect((void *)page_addr,
+	       CARD_BYTES, OS_VM_PROT_READ|OS_VM_PROT_EXECUTE);
+
+    /* Note the page as protected in the page tables. */
+    page_table[page].write_protected = 1;
+  }
+
+  return wp_it;
+}
+
+/* Scavenge all generations from FROM to TO, inclusive, except for
+ * new_space which needs special handling, as new objects may be
+ * added which are not checked here - use scavenge_newspace generation.
+ *
+ * Write-protected pages should not have any pointers to the
+ * from_space so do need scavenging; thus write-protected pages are
+ * not always scavenged. There is some code to check that these pages
+ * are not written; but to check fully the write-protected pages need
+ * to be scavenged by disabling the code to skip them.
+ *
+ * Under the current scheme when a generation is GCed the younger
+ * generations will be empty. So, when a generation is being GCed it
+ * is only necessary to scavenge the older generations for pointers
+ * not the younger. So a page that does not have pointers to younger
+ * generations does not need to be scavenged.
+ *
+ * The write-protection can be used to note pages that don't have
+ * pointers to younger pages. But pages can be written without having
+ * pointers to younger generations. After the pages are scavenged here
+ * they can be scanned for pointers to younger generations and if
+ * there are none the page can be write-protected.
+ *
+ * One complication is when the newspace is the top temp. generation.
+ */
+static void scavenge_generations(generation_index_t from, generation_index_t to)
+{
+  page_index_t i;
+  page_index_t num_wp = 0;
+
+  for (i = 0; i < last_free_page; i++) {
+    generation_index_t generation = page_table[i].gen;
+    if (page_boxed_p(i)
+	&& (page_table[i].bytes_used != 0)
+	&& (generation != new_space)
+	&& (generation >= from)
+	&& (generation <= to)) {
+      page_index_t last_page, j;
+      int write_protected = 1;
+
+      /* This should be the start of a region */
+      ASSERT(page_table[i].region_start_offset == 0);
+
+      /* Now work forward until the end of the region */
+      for (last_page = i; ; last_page++) {
+	write_protected =
+	  write_protected && page_table[last_page].write_protected;
+	if ((page_table[last_page].bytes_used < CARD_BYTES)
+	    /* Or it is CARD_BYTES and is the last in the block */
+	    || (!page_boxed_p(last_page+1))
+	    || (page_table[last_page+1].bytes_used == 0)
+	    || (page_table[last_page+1].gen != generation)
+	    || (page_table[last_page+1].region_start_offset == 0))
+	  break;
+      }
+      if (!write_protected) {
+	scavenge(page_address(i),
+		 ((uintptr_t)(page_table[last_page].bytes_used
+			      + npage_bytes(last_page-i)))
+		 /N_WORD_BYTES);
+
+	/* Now scan the pages and write protect those that
+	 * don't have pointers to younger generations. */
+	if (enable_page_protection) {
+	  for (j = i; j <= last_page; j++) {
+	    num_wp += update_page_write_prot(j);
+	  }
+	}
+      }
+      i = last_page;
+    }
+  }
+}
+
+static struct new_area new_areas_1[NUM_NEW_AREAS];
+static struct new_area new_areas_2[NUM_NEW_AREAS];
+
+/* Do one full scan of the new space generation. This is not enough to
+ * complete the job as new objects may be added to the generation in
+ * the process which are not scavenged. */
+static void scavenge_newspace_generation_one_scan(generation_index_t generation)
+{
+  page_index_t i;
+  for (i = 0; i < last_free_page; i++) {
+    /* Note that this skips over open regions when it encounters them. */
+    if (page_boxed_p(i)
+	&& (page_table[i].bytes_used != 0)
+	&& (page_table[i].gen == generation)
+	&& ((page_table[i].write_protected == 0)
+	    /* (This may be redundant as write_protected is now
+	     * cleared before promotion.) */
+	    || (page_table[i].dont_move == 1))) {
+      page_index_t last_page;
+      int all_wp=1;
+
+      /* The scavenge will start at the region_start_offset of
+       * page i.
+       *
+       * We need to find the full extent of this contiguous
+       * block in case objects span pages.
+       *
+       * Now work forward until the end of this contiguous area
+       * is found. A small area is preferred as there is a
+       * better chance of its pages being write-protected. */
+      for (last_page = i; ;last_page++) {
+	/* If all pages are write-protected and movable,
+	 * then no need to scavenge */
+	all_wp=all_wp && page_table[last_page].write_protected &&
+	  !page_table[last_page].dont_move;
+
+	/* Check whether this is the last page in this
+	 * contiguous block */
+	if ((page_table[last_page].bytes_used < CARD_BYTES)
+	    /* Or it is CARD_BYTES and is the last in the block */
+	    || (!page_boxed_p(last_page+1))
+	    || (page_table[last_page+1].bytes_used == 0)
+	    || (page_table[last_page+1].gen != generation)
+	    || (page_table[last_page+1].region_start_offset == 0))
+	  break;
+      }
+
+      /* Do a limited check for write-protected pages.  */
+      if (!all_wp) {
+	intptr_t nwords = (((uintptr_t)
+			    (page_table[last_page].bytes_used
+			     + npage_bytes(last_page-i)
+			     + page_table[i].region_start_offset))
+			   / N_WORD_BYTES);
+	new_areas_ignore_page = last_page;
+
+	scavenge(page_region_start(i), nwords);
+
+      }
+      i = last_page;
+    }
+  }
+}
+
+/* Do a complete scavenge of the newspace generation. */
+static void scavenge_newspace_generation(generation_index_t generation)
+{
+  size_t i;
+
+  /* the new_areas array currently being written to by gc_alloc() */
+  struct new_area (*current_new_areas)[] = &new_areas_1;
+  size_t current_new_areas_index;
+
+  /* the new_areas created by the previous scavenge cycle */
+  struct new_area (*previous_new_areas)[] = NULL;
+  size_t previous_new_areas_index;
+
+  /* Flush the current regions updating the tables. */
+  gc_alloc_update_all_page_tables();
+
+  /* Turn on the recording of new areas by gc_alloc(). */
+  new_areas = current_new_areas;
+  new_areas_index = 0;
+
+  /* Don't need to record new areas that get scavenged anyway during
+   * scavenge_newspace_generation_one_scan. */
+  record_new_objects = 1;
+
+  /* Start with a full scavenge. */
+  scavenge_newspace_generation_one_scan(generation);
+
+  /* Record all new areas now. */
+  record_new_objects = 2;
+
+  /* Give a chance to weak hash tables to make other objects live.
+   * FIXME: The algorithm implemented here for weak hash table gcing
+   * is O(W^2+N) as Bruno Haible warns in
+   * http://www.haible.de/bruno/papers/cs/weak/WeakDatastructures-writeup.html
+   * see "Implementation 2". */
+  /* scav_weak_hash_tables(); */
+
+  /* Flush the current regions updating the tables. */
+  gc_alloc_update_all_page_tables();
+
+  /* Grab new_areas_index. */
+  current_new_areas_index = new_areas_index;
+
+  while (current_new_areas_index > 0) {
+    /* Move the current to the previous new areas */
+    previous_new_areas = current_new_areas;
+    previous_new_areas_index = current_new_areas_index;
+
+    /* Scavenge all the areas in previous new areas. Any new areas
+     * allocated are saved in current_new_areas. */
+
+    /* Allocate an array for current_new_areas; alternating between
+     * new_areas_1 and 2 */
+    if (previous_new_areas == &new_areas_1)
+      current_new_areas = &new_areas_2;
+    else
+      current_new_areas = &new_areas_1;
+
+    /* Set up for gc_alloc(). */
+    new_areas = current_new_areas;
+    new_areas_index = 0;
+
+    /* Check whether previous_new_areas had overflowed. */
+    if (previous_new_areas_index >= NUM_NEW_AREAS) {
+      /* Don't need to record new areas that get scavenged
+       * anyway during scavenge_newspace_generation_one_scan. */
+      record_new_objects = 1;
+
+      scavenge_newspace_generation_one_scan(generation);
+
+      /* Record all new areas now. */
+      record_new_objects = 2;
+
+      /* scav_weak_hash_tables(); */
+
+      /* Flush the current regions updating the tables. */
+      gc_alloc_update_all_page_tables();
+
+    } else {
+
+      /* Work through previous_new_areas. */
+      for (i = 0; i < previous_new_areas_index; i++) {
+	page_index_t page = (*previous_new_areas)[i].page;
+	size_t offset = (*previous_new_areas)[i].offset;
+	size_t size = (*previous_new_areas)[i].size / N_WORD_BYTES;
+	ASSERT((*previous_new_areas)[i].size % N_WORD_BYTES == 0);
+	scavenge(page_address(page)+offset, size);
+      }
+
+      /* scav_weak_hash_tables(); */
+
+      /* Flush the current regions updating the tables. */
+      gc_alloc_update_all_page_tables();
+    }
+
+    current_new_areas_index = new_areas_index;
+
+    /*FSHOW((stderr,
+      "The re-scan has finished; current_new_areas_index=%d.\n",
+      current_new_areas_index));*/
+  }
+
+  /* Turn off recording of areas allocated by gc_alloc(). */
+  record_new_objects = 0;
+}
+
 /* Work through all the pages and free any in from_space. This
  * assumes that all objects have been copied or promoted to an older
  * generation. Bytes_allocated and the generation bytes_allocated
@@ -1544,6 +1972,164 @@ static uintptr_t free_oldspace(void)
   return bytes_freed;
 }
 
+/* Take a possible pointer and mark its page in the page_table so that
+ * it will not be relocated during a GC.
+ *
+ * This involves locating the page it points to, then backing up to
+ * the start of its region, then marking all pages dont_move from there
+ * up to the first page that's not full or has a different generation
+ *
+ * It is assumed that all the page static flags have been cleared at
+ * the start of a GC.
+ *
+ * It is also assumed that the current gc_alloc() region has been
+ * flushed and the tables updated. */
+
+static void preserve_pointer(void *addr)
+{
+  page_index_t addr_page_index = find_page_index(addr);
+  page_index_t first_page;
+  page_index_t i;
+  unsigned int region_allocation;
+
+  /* quick check 1: Address is quite likely to have been invalid. */
+  if ((addr_page_index == -1)
+      || page_free_p(addr_page_index)
+      || (page_table[addr_page_index].bytes_used == 0)
+      || (page_table[addr_page_index].gen != from_space)
+      /* Skip if already marked dont_move. */
+      || (page_table[addr_page_index].dont_move != 0))
+    return;
+  ASSERT(!(page_table[addr_page_index].allocated & OPEN_REGION_PAGE_FLAG));
+  /* (Now that we know that addr_page_index is in range, it's
+   * safe to index into page_table[] with it.) */
+  region_allocation = page_table[addr_page_index].allocated;
+
+  /* quick check 2: Check the offset within the page.
+   *
+   */
+  if (((uintptr_t)addr & (CARD_BYTES - 1)) >
+      page_table[addr_page_index].bytes_used)
+    return;
+
+  /* Filter out anything which is not in dynamic space. */
+  if (!(possibly_valid_dynamic_space_pointer(addr)))
+    return;
+
+  /* Find the beginning of the region.  Note that there may be
+   * objects in the region preceding the one that we were passed a
+   * pointer to: if this is the case, we will write-protect all the
+   * previous objects' pages too.     */
+
+  first_page = addr_page_index;
+  while (page_table[first_page].region_start_offset != 0) {
+    --first_page;
+    /* Do some checks. */
+    ASSERT(page_table[first_page].bytes_used == CARD_BYTES);
+    ASSERT(page_table[first_page].gen == from_space);
+    ASSERT(page_table[first_page].allocated == region_allocation);
+  }
+
+  /* Adjust any large objects before promotion as they won't be
+   * copied after promotion. */
+  if (page_table[first_page].large_object) {
+    /* we only have this chance with Bignum, and I don't think it's
+       necessary.*/
+    /* maybe_adjust_large_object(page_address(first_page)); */
+
+    /* If a large object has shrunk then addr may now point to a
+     * free area in which case it's ignored here. Note it gets
+     * through the valid pointer test above because the tail looks
+     * like conses. */
+    if (page_free_p(addr_page_index)
+	|| (page_table[addr_page_index].bytes_used == 0)
+	/* Check the offset within the page. */
+	|| (((uintptr_t)addr & (CARD_BYTES - 1))
+	    > page_table[addr_page_index].bytes_used)) {
+      return;
+    }
+    /* It may have moved to unboxed pages. */
+    region_allocation = page_table[first_page].allocated;
+  }
+
+  /* Now work forward until the end of this contiguous area is found,
+   * marking all pages as dont_move. */
+  for (i = first_page; ;i++) {
+    ASSERT(page_table[i].allocated == region_allocation);
+
+    /* Mark the page static. */
+    page_table[i].dont_move = 1;
+
+    /* Move the page to the new_space. XX I'd rather not do this
+     * but the GC logic is not quite able to copy with the static
+     * pages remaining in the from space. This also requires the
+     * generation bytes_allocated counters be updated. */
+    page_table[i].gen = new_space;
+    generations[new_space].bytes_allocated += page_table[i].bytes_used;
+    generations[from_space].bytes_allocated -= page_table[i].bytes_used;
+
+    /* It is essential that the pages are not write protected as
+     * they may have pointers into the old-space which need
+     * scavenging. They shouldn't be write protected at this
+     * stage. */
+    ASSERT(!page_table[i].write_protected);
+
+    /* Check whether this is the last page in this contiguous block.. */
+    if ((page_table[i].bytes_used < CARD_BYTES)
+	/* ..or it is CARD_BYTES and is the last in the block */
+	|| page_free_p(i+1)
+	|| (page_table[i+1].bytes_used == 0) /* next page free */
+	|| (page_table[i+1].gen != from_space) /* diff. gen */
+	|| (page_table[i+1].region_start_offset == 0))
+      break;
+  }
+
+  /* Check that the page is now static. */
+  ASSERT(page_table[addr_page_index].dont_move != 0);
+}
+
+static void preserve_context_registers (os_context_t *c)
+{
+  void **ptr;
+  /* TODO Should Cygwin be treated the same as Windows?*/
+#if defined(_WIN32) || defined(__CYGWIN__)
+# if defined __i686__
+  preserve_pointer((void*)*os_context_register_addr(c,reg_EAX));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_ECX));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_EDX));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_EBX));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_ESI));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_EDI));
+  preserve_pointer((void*)*os_context_pc_addr(c));
+# elif defined __x86_64__
+  preserve_pointer((void*)*os_context_register_addr(c,reg_RAX));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_RCX));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_RDX));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_RBX));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_RSI));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_RDI));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_R8));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_R9));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_R10));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_R11));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_R12));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_R13));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_R14));
+  preserve_pointer((void*)*os_context_register_addr(c,reg_R15));
+  preserve_pointer((void*)*os_context_pc_addr(c));
+# else
+# error "preserve_context_registers needs to be tweaked for non-x86 Darwin"
+# endif
+#endif
+
+#if !defined(_WIN32) && !defined(__CYGWIN__)
+  for (ptr = ((void **)(c+1))-1; ptr>=(void **)c; ptr--) {
+    preserve_pointer(*ptr);
+  }
+#endif
+}
+
+
 static void
 garbage_collect_generation(generation_index_t generation, int raise)
 {
@@ -1581,21 +2167,90 @@ garbage_collect_generation(generation_index_t generation, int raise)
    * which need to be scavenged. It also helps avoid unnecessary page
    * faults as forwarding pointers are written into them. They need to
    * be un-protected anyway before unmapping later. */
-  /* unprotect_oldspace(); */
+  unprotect_oldspace();
 
   /* Scavenge the stacks' conservative roots. */
-  /* TODO */
+  for_each_thread(th) {
+    void **ptr;
+    void **esp = (void **)-1;
+    if (th->threadState == SG_VM_TERMINATED) continue;
+    /* preserve_thread(th); */	/* pointers are not only on cstack */
+    esp = th->cstackStart;	/* control stack start */
+    if (th == Sg_VM()) {
+      /* Somebody is going to burn in hell for this, but casting it in two
+	 steps shut gcc up about strict aliasing. */
+      esp = (void **)((void *)&raise);
+    } else {
+      /* we might not this process */
+      int i, free;
+      void **esp1;
+      free = th->freeInterruptContextIndex;
+      for (i = free - 1; i >= 0; i--) {
+	os_context_t *c = (os_context_t *)th->interruptContexts[i];
+	esp1 = (void **)*os_context_register_addr(c, reg_SP);
+	if (esp1 >= (void **)th->cstackStart && esp1 < (void **)th->cstackEnd) {
+	  if (esp1 < esp) esp = esp1;
+	  preserve_context_registers(c);
+	}
+      }
+    }
+    if (!esp || esp == (void *)-1) {
+      Sg_Panic("garbage_collect: no SP known for thread %x (OS %x)",
+	       th, th->thread);
+    }
+    for (ptr = ((void **)th->cstackEnd) -1; ptr >= esp; ptr--) {
+      preserve_pointer(*ptr);
+    }
+  }
 
   /* Scavenge all the rest of the roots. */
-  /* TODO */
-
+  /* All generations but the generation being GCed need to be
+   * scavenged. The new_space generation needs special handling as
+   * objects may be moved in - it is handled separately below. */
+  scavenge_generations(generation+1, GENERATIONS);
+  /* Finally scavenge the new_space generation. Keep going until no
+   * more objects are moved into the new generation */
+  scavenge_newspace_generation(new_space);
 
   /* Flush the current regions, updating the tables. */
   gc_alloc_update_all_page_tables();
   
   /* Free the pages in oldspace, but not those marked dont_move. */
   /* we don't collect nor mark yet so if we do this, it will stop... */
-  /* bytes_freed = free_oldspace(); */
+  bytes_freed = free_oldspace();
+
+  /* If the GC is not raising the age then lower the generation back
+   * to its normal generation number */
+  if (!raise) {
+    for (i = 0; i < last_free_page; i++)
+      if ((page_table[i].bytes_used != 0)
+	  && (page_table[i].gen == SCRATCH_GENERATION))
+	page_table[i].gen = generation;
+    ASSERT(generations[generation].bytes_allocated == 0);
+    generations[generation].bytes_allocated =
+      generations[SCRATCH_GENERATION].bytes_allocated;
+    generations[SCRATCH_GENERATION].bytes_allocated = 0;
+  }
+
+  /* Reset the alloc_start_page for generation. */
+  generations[generation].alloc_start_page = 0;
+  generations[generation].alloc_unboxed_start_page = 0;
+  generations[generation].alloc_large_start_page = 0;
+  generations[generation].alloc_large_unboxed_start_page = 0;
+
+  if (generation >= verify_gens) {
+    verify_gc();
+    verify_dynamic_space();
+  }
+
+  generations[generation].gc_trigger =
+    generations[generation].bytes_allocated
+    + generations[generation].bytes_consed_between_gc;
+
+  if (raise)
+    generations[generation].num_gc = 0;
+  else
+    ++generations[generation].num_gc;
 
 }
 
@@ -1735,6 +2390,7 @@ void GC_init()
   page_index_t i;
   /* initialise OS specific variables. */
   os_init();
+  dynamic_space_size = DEFAULT_DYNAMIC_SPACE_SIZE;
 
   Sg_InitMutex(&free_pages_lock, FALSE);
   Sg_InitMutex(&allocation_lock, FALSE);
@@ -1747,9 +2403,7 @@ void GC_init()
     bytes_consed_between_gcs = 1024*1024;
 
   /* The page_table must be allocated using "calloc" to initialize
-   * the page structures correctly. There used to be a separate
-   * initialization loop (now commented out; see below) but that was
-   * unnecessary and did hurt startup time. */
+   * the page structures correctly. */
   page_table = calloc(page_table_pages, sizeof(struct page));
   ASSERT(page_table);
 

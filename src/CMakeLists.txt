@@ -32,13 +32,19 @@ IF (USE_BOEHM_GC)
   SET(GC_SOURCE ${GC_SOURCE})
 ELSE()
   SET(TAEGT_OS_FILE "gencgc/${SAGITTARIUS_OS}-os.c")
+  SET(TAEGT_ARCH_OS_FILE 
+    "gencgc/${SAGITTARIUS_PROCESSOR}-${SAGITTARIUS_OS}-os.c")
   MESSAGE(STATUS "${CMAKE_CURRENT_BINARY_DIR}/target-os.h")
+  MESSAGE(STATUS "${CMAKE_CURRENT_BINARY_DIR}/target-arch-os.h")
   FILE(WRITE "${CMAKE_CURRENT_BINARY_DIR}/target-os.h"
     "#include <${SAGITTARIUS_OS}-os.h>")
+  FILE(WRITE "${CMAKE_CURRENT_BINARY_DIR}/target-arch-os.h"
+    "#include <${SAGITTARIUS_PROCESSOR}-${SAGITTARIUS_OS}-os.h>")
   INCLUDE_DIRECTORIES(${CMAKE_CURRENT_BINARY_DIR})
   SET(GC_SOURCE ${GC_SOURCE}
     # add
     ${TAEGT_OS_FILE}
+    ${TAEGT_ARCH_OS_FILE}
     gencgc/alloc.c
     gencgc/gencgc.c
     )

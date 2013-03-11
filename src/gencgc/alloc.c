@@ -38,6 +38,8 @@
 static void * pa_alloc(int bytes, int page_type_flag)
 {
   void *result;
+  /* 0 byte allocation is not allowed so if it's 0 make it smallest */
+  if (bytes == 0) bytes = ALIGNED_SIZE(1);
   result = general_alloc(bytes, page_type_flag);
   /* TODO trigger GC if needed */
   if (need_gc) GC_collect_garbage(0);

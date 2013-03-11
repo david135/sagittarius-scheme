@@ -66,6 +66,10 @@ static SgInternalMutex global_lock;
 
 static SgVM *rootVM = NULL;
 
+#ifndef USE_BOEHM_GC
+SgVM *all_threads;
+#endif
+
 #if defined(_MSC_VER) || defined(_SG_WIN_SUPPORT)
 static __declspec(thread) SgVM *theVM;
 #else
@@ -2247,6 +2251,13 @@ void Sg__InitVM()
 #if PROF_INSN
   Sg_AddCleanupHandler(show_inst_count, NULL);
 #endif
+#ifndef USE_BOEHM_GC
+  rootVM->next = NULL;
+  rootVM->freeInterruptContextIndex = 0;
+  /* TODO cstackStart and end */
+  all_threads = rootVM;
+#endif
+
 }
 
 /*

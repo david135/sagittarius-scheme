@@ -1,4 +1,4 @@
-/* gencgc.h                                               -*- coding: utf-8; -*-
+/* i686-windows-os.c                                      -*- coding: utf-8; -*-
  *
  *   Copyright (c) 2010-2013  Takashi Kato <ktakashi@ymail.com>
  *
@@ -27,45 +27,29 @@
  *
  *  $Id: $
  */
-#ifndef SAGITTARIUS_GENCGC_H_
-#define SAGITTARIUS_GENCGC_H_
+#include "i686-windows-os.h"
 
-#include <sagittarius/common-macros.h>
-#include <stddef.h>
+os_context_register_t *
+os_context_register_addr(os_context_t *context, int offset)
+{
+  static const size_t offsets[8] = {
+    offsetof(CONTEXT,Eax),
+    offsetof(CONTEXT,Ecx),
+    offsetof(CONTEXT,Edx),
+    offsetof(CONTEXT,Ebx),
+    offsetof(CONTEXT,Esp),
+    offsetof(CONTEXT,Ebp),
+    offsetof(CONTEXT,Esi),
+    offsetof(CONTEXT,Edi),
+  };
+  return
+    (offset >= 0 && offset < 16) ?
+    ((void*)(context->win32_context)) + offsets[offset>>1]  : 0;
+}
 
-/* TODO this must be defined in gcconfig.h during build process. */
-#ifdef __i386__
-# define PAGE_BYTES 4096UL
-#elif __x86_64__
-# define PAGE_BYTES 32768UL
-#else
-# error "non supported architecture"
-#endif
-#define GENERATIONS 6
+os_context_register_t *
+os_context_pc_addr(os_context_t *context)
+{
+  return (void*)&context->win32_context->Eip; /*  REG_EIP */
+}
 
-#ifdef __CYGWIN__
-/* To avoid compilation error we declare cygwin specific variable here  */
-extern void *_data_start__, *_data_end__, *_bss_start__, *_bss_end__;
-#endif
-
-typedef void * (* GC_oom_func)(size_t /* bytes_requested */);
-
-SG_CDECL_BEGIN
-
-/* The GC APIs are similar with Boehm GC for my convenience. 
- */
-SG_EXTERN void   GC_init();
-SG_EXTERN void * GC_malloc(size_t size);
-SG_EXTERN void * GC_malloc_atomic(size_t size);
-SG_EXTERN void * GC_calloc(size_t num, size_t size);
-
-SG_EXTERN void * GC_collect_garbage(int generation);
-
-SG_EXTERN void   GC_set_oom_fn(GC_oom_func handler);
-
-SG_CDECL_END
-
-/* compatible macros */
-#define GC_INIT() GC_init()
-
-#endif /* SAGITTARIUS_GENCGC_H_ */
