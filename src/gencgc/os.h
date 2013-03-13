@@ -68,4 +68,8 @@ os_context_register_addr(os_context_t *context, int offset);
  * program counter for that context. */
 os_context_register_t *os_context_pc_addr(os_context_t *context);
 
+/* this is not os but for now */
+int thread_init(GC_thread_context_t *context);
+int root_context_init(GC_thread_context_t *context);
+
 #endif /* SAGITTARIUS_OS_H_ */

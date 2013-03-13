@@ -66,10 +66,6 @@ static SgInternalMutex global_lock;
 
 static SgVM *rootVM = NULL;
 
-#ifndef USE_BOEHM_GC
-SgVM *all_threads;
-#endif
-
 #if defined(_MSC_VER) || defined(_SG_WIN_SUPPORT)
 static __declspec(thread) SgVM *theVM;
 #else
@@ -234,7 +230,10 @@ SgVM* Sg_NewVM(SgVM *proto, SgObject name)
   Sg_GetTimeOfDay(&sec, &usec);
   v->uptimeSec = sec;
   v->uptimeUsec = usec;
-
+#ifndef USE_BOEHM_GC
+  /* initialise thread context */
+  GC_init_context(&v->context, v);
+#endif
   Sg_RegisterFinalizer(SG_OBJ(v), vm_finalize, NULL);
   return v;
 }
@@ -2251,13 +2250,6 @@ void Sg__InitVM()
 #if PROF_INSN
   Sg_AddCleanupHandler(show_inst_count, NULL);
 #endif
-#ifndef USE_BOEHM_GC
-  rootVM->next = NULL;
-  rootVM->freeInterruptContextIndex = 0;
-  /* TODO cstackStart and end */
-  all_threads = rootVM;
-#endif
-
 }
 
 /*

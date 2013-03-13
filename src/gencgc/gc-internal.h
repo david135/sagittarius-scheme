@@ -45,23 +45,6 @@
 /* 8 byte boundary */
 #define LOWTAG_MASK 0x07
 
-typedef intptr_t page_index_t;
-typedef signed char generation_index_t;
-
-/* Abstract out the data for an allocation region allowing a single routine
-   to be used for allocation and closing. */
-typedef struct alloc_region {
-  /* these two are needed for quick allocation. */
-  void *free_pointer;
-  /* pointer to the byte after the last usable byte*/
-  void *end_addr;
-
-  /* these are needed when closing the region */
-  page_index_t first_page;
-  page_index_t last_page;
-  void *start_addr;
-} alloc_region_t;
-
 extern alloc_region_t boxed_region;
 extern alloc_region_t unboxed_region;
 extern generation_index_t  from_space, new_space;
@@ -138,6 +121,15 @@ extern void *dynamic_space_start;
 extern void *dynamic_space_end;
 extern size_t dynamic_space_size;
 #define DEFAULT_DYNAMIC_SPACE_SIZE (dynamic_space_end - dynamic_space_start)
+
+/* probably enough for Cygwin ... */
+#define MAX_STATIC_ROOT_COUNT 256
+typedef struct static_roots {
+  void *start;
+  void *end;
+} static_roots_t;
+extern int current_static_space_index;
+extern static_roots_t static_spaces[MAX_STATIC_ROOT_COUNT];
 
 /* #define READ_ONLY_SPACE_START read_only_space_start */
 #define DYNAMIC_SPACE_START   dynamic_space_start
@@ -228,13 +220,10 @@ extern void * general_alloc(size_t nbytes, int page_type_flag);
    checked if the function pointer is located on 8 byte boundary
    or not. So let's do it safe way so far.
 */
+
 typedef struct memory_header {
   uintptr_t forwarded : 1;
-#if SIZEOF_VOIDP == 8
-  uintptr_t finalizer : 62;
-#else
-  uintptr_t finalizer : 30;
-#endif
+  uintptr_t finalizer : N_WORD_BITS-2;
   /* do we need this? */
   size_t size;
 } memory_header_t;
@@ -243,12 +232,25 @@ typedef struct block {
   uintptr_t body;
 } block_t;
 
-/* we assume this is called that  */
-static inline int forwarding_pointer_p(void *p)
-{
-  memory_header_t *header = (memory_header_t *)(p - sizeof(memory_header_t));
-  return header->forwarded;
-}
+#define SET_MEMORY_SIZE(block, size_)		\
+  do {						\
+    (block)->header.size = (size_);		\
+    (block)->header.forwarded = FALSE;		\
+  } while (0)
+#define BLOCK(obj)               ((block_t *)obj)
+#define MEMORY_SIZE(block)       BLOCK(block)->header.size
+#define MEMORY_FORWARDED(block)  BLOCK(block)->header.forwarded
+#define ALLOCATED_POINTER(block) ((void *)&(BLOCK(block)->body))
+#define POINTER2BLOCK(p)    ((block_t*)(((uintptr_t)p)-sizeof(memory_header_t)))
+
+/* debugging */
+#define QSHOW 1
+#if QSHOW
+# define FSHOW(args)				\
+  do { fprintf args; } while (0)
+#else
+# define FSHOW(args)
+#endif
 
 
 #endif /* SAGITTARIUS_GC-INTERNAL_H_ */

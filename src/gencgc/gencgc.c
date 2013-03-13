@@ -38,9 +38,14 @@
 #include <sagittarius/vm.h>
 
 size_t bytes_consed_between_gcs = 12*1024*1024;
+int    current_static_space_index = 0;
+static_roots_t static_spaces[MAX_STATIC_ROOT_COUNT];
+
+static GC_thread_context_t root_context = {0}; /* dummy context */
+GC_thread_context_t *all_threads = NULL;
 
 static page_index_t gc_find_freeish_pages(page_index_t *restart_page_ptr,
-					  intptr_t nbytes, int page_type_flag);
+					  size_t nbytes, int page_type_flag);
 /* GC parameters */
 
 /* Generations 0-5 are normal collected generations, 6 is only used as
@@ -232,6 +237,7 @@ page_index_t last_free_page;
 /* mutexes */
 static SgInternalMutex free_pages_lock;
 static SgInternalMutex allocation_lock;
+static SgInternalMutex context_lock;
 
 /* should these be parameters? */
 #define gencgc_release_granularity PAGE_BYTES
@@ -279,7 +285,8 @@ static void write_generation_stats(FILE *file)
 
   /* Print the heap stats. */
   fprintf(file,
-	  " Gen StaPg UbSta LaSta LUbSt Boxed Unboxed LB   LUB  !move  Alloc  Waste   Trig    WP  GCs Mem-age\n");
+	  " Gen    StaPg   UbSta LaSta LUbSt   Boxed Unboxed    LB   LUB"
+	  " !move  Alloc  Waste   Trig    WP  GCs Mem-age\n");
 
   for (i = 0; i < SCRATCH_GENERATION; i++) {
     page_index_t j;
@@ -314,14 +321,14 @@ static void write_generation_stats(FILE *file)
     /* ASSERT(generations[i].bytes_allocated  */
     /* 	   == count_generation_bytes_allocated(i)); */
     fprintf(file,
-	    "   %1d: %5d %5d %5d %5d",
+	    "   %1d: %7d %7d %5d %5d",
 	    i,
 	    generations[i].alloc_start_page,
 	    generations[i].alloc_unboxed_start_page,
 	    generations[i].alloc_large_start_page,
 	    generations[i].alloc_large_unboxed_start_page);
     fprintf(file,
-	    " %5d %5d %5d %5d %5d",
+	    " %7d %7d %5d %5d %5d",
 	    boxed_cnt, unboxed_cnt, large_boxed_cnt,
 	    large_unboxed_cnt, pinned_cnt);
     fprintf(file,
@@ -531,9 +538,8 @@ set_generation_alloc_start_page(generation_index_t generation,
  * allocation call using the same pages, all the pages in the region
  * are allocated, although they will initially be empty.
  */
-static void
-gc_alloc_new_region(intptr_t nbytes, int page_type_flag, 
-		    alloc_region_t *alloc_region)
+static void gc_alloc_new_region(size_t nbytes, int page_type_flag, 
+				alloc_region_t *alloc_region)
 {
   page_index_t first_page;
   page_index_t last_page;
@@ -829,16 +835,18 @@ void gc_alloc_update_page_tables(int page_type_flag,
 }
 
 /* Allocate a possibly large object. */
-void * gc_alloc_large(intptr_t nbytes, int page_type_flag,
+void * gc_alloc_large(size_t reqbytes, int page_type_flag,
 		      alloc_region_t *alloc_region)
 {
   int more;
   page_index_t first_page, next_page, last_page;
   page_bytes_t orig_first_page_bytes_used;
-  size_t byte_cnt;
-  size_t bytes_used;
+  size_t byte_cnt, bytes_used, nbytes;
+  block_t *block;
 
   Sg_LockMutex(&free_pages_lock);
+
+  nbytes = sizeof(memory_header_t) + reqbytes;
 
   first_page = generation_alloc_start_page(gc_alloc_generation,
 					   page_type_flag, TRUE);
@@ -846,7 +854,7 @@ void * gc_alloc_large(intptr_t nbytes, int page_type_flag,
     first_page = alloc_region->last_page+1;
   }
 
-  last_page=gc_find_freeish_pages(&first_page,nbytes, page_type_flag);
+  last_page = gc_find_freeish_pages(&first_page, nbytes, page_type_flag);
 
   ASSERT(first_page > alloc_region->last_page);
 
@@ -874,7 +882,7 @@ void * gc_alloc_large(intptr_t nbytes, int page_type_flag,
   /* Calc. the number of bytes used in this page. This is not
    * always the number of new bytes, unless it was free. */
   more = 0;
-  if ((bytes_used = nbytes+orig_first_page_bytes_used) > CARD_BYTES) {
+  if ((bytes_used = nbytes + orig_first_page_bytes_used) > CARD_BYTES) {
     bytes_used = CARD_BYTES;
     more = 1;
   }
@@ -898,7 +906,7 @@ void * gc_alloc_large(intptr_t nbytes, int page_type_flag,
 
     /* Calculate the number of bytes used in this page. */
     more = 0;
-    bytes_used=(nbytes+orig_first_page_bytes_used)-byte_cnt;
+    bytes_used=(nbytes + orig_first_page_bytes_used) - byte_cnt;
     if (bytes_used > CARD_BYTES) {
       bytes_used = CARD_BYTES;
       more = 1;
@@ -910,14 +918,14 @@ void * gc_alloc_large(intptr_t nbytes, int page_type_flag,
     next_page++;
   }
 
-  ASSERT((byte_cnt-orig_first_page_bytes_used) == nbytes);
+  ASSERT((byte_cnt - orig_first_page_bytes_used) == nbytes);
 
   bytes_allocated += nbytes;
   generations[gc_alloc_generation].bytes_allocated += nbytes;
 
   /* Add the region to the new_areas if requested. */
   if (BOXED_PAGE_FLAG & page_type_flag)
-    add_new_area(first_page,orig_first_page_bytes_used,nbytes);
+    add_new_area(first_page, orig_first_page_bytes_used, nbytes);
 
   /* Bump up last_free_page */
   if (last_page+1 > last_free_page) {
@@ -934,7 +942,9 @@ void * gc_alloc_large(intptr_t nbytes, int page_type_flag,
 
   zero_dirty_pages(first_page, last_page);
 
-  return page_address(first_page);
+  block = (block_t *)page_address(first_page);
+  SET_MEMORY_SIZE(block, reqbytes);
+  return (void *)&block->body;
 }
 
 static page_index_t gencgc_alloc_start_page = -1;
@@ -945,7 +955,7 @@ void GC_set_oom_fn(GC_oom_func handler)
   oom_handler = handler;
 }
 
-void gc_heap_exhausted_error(intptr_t available, intptr_t requested)
+void gc_heap_exhausted_error(intptr_t available, size_t requested)
 {
   /* dump the heap information */
   report_heap_exhaustion(available, requested);
@@ -956,13 +966,12 @@ void gc_heap_exhausted_error(intptr_t available, intptr_t requested)
 
 
 page_index_t
-gc_find_freeish_pages(page_index_t *restart_page_ptr, intptr_t bytes,
+gc_find_freeish_pages(page_index_t *restart_page_ptr, size_t bytes,
                       int page_type_flag)
 {
   page_index_t most_bytes_found_from = 0, most_bytes_found_to = 0;
   page_index_t first_page, last_page, restart_page = *restart_page_ptr;
-  size_t nbytes = bytes;
-  size_t nbytes_goal = nbytes;
+  size_t nbytes = bytes, nbytes_goal = nbytes;
   size_t bytes_found = 0;
   size_t most_bytes_found = 0;
   int small_object = nbytes < CARD_BYTES;
@@ -1051,20 +1060,21 @@ gc_find_freeish_pages(page_index_t *restart_page_ptr, intptr_t bytes,
  * functions will eventually call this  */
 
 static void *
-gc_alloc_with_region(intptr_t nbytes,int page_type_flag, 
+gc_alloc_with_region(size_t reqbytes,int page_type_flag, 
 		     alloc_region_t *my_region, int quick_p)
 {
   void *new_free_pointer;
+  size_t nbytes;
+  if (reqbytes>=large_object_size)
+    return gc_alloc_large(reqbytes, page_type_flag, my_region);
 
-  if (nbytes>=large_object_size)
-    return gc_alloc_large(nbytes, page_type_flag, my_region);
-
+  nbytes = sizeof(memory_header_t) + reqbytes;
   /* Check whether there is room in the current alloc region. */
   new_free_pointer = my_region->free_pointer + nbytes;
 
   if (new_free_pointer <= my_region->end_addr) {
     /* If so then allocate from the current alloc region. */
-    void *new_obj = my_region->free_pointer;
+    block_t *new_obj = (block_t *)my_region->free_pointer;
     my_region->free_pointer = new_free_pointer;
 
     /* Unless a `quick' alloc was requested, check whether the
@@ -1076,8 +1086,8 @@ gc_alloc_with_region(intptr_t nbytes,int page_type_flag,
       /* Set up a new region. */
       gc_alloc_new_region(32 /*bytes*/, page_type_flag, my_region);
     }
-
-    return((void *)new_obj);
+    SET_MEMORY_SIZE(new_obj, reqbytes);
+    return (void *)&new_obj->body;
   }
 
   /* Else not enough free space in the current region: retry with a
@@ -1089,7 +1099,7 @@ gc_alloc_with_region(intptr_t nbytes,int page_type_flag,
 }
 
 static inline void *
-gc_general_alloc(intptr_t nbytes, int page_type_flag, int quick_p)
+gc_general_alloc(size_t nbytes, int page_type_flag, int quick_p)
 {
   alloc_region_t *my_region;
   if (UNBOXED_PAGE_FLAG == page_type_flag) {
@@ -1106,27 +1116,27 @@ gc_general_alloc(intptr_t nbytes, int page_type_flag, int quick_p)
 /* these are only used during GC: all allocation from the mutator calls
  * alloc() -> gc_alloc_with_region() with the appropriate per-thread
  * region */
-static inline void * gc_quick_alloc(uintptr_t nbytes)
+static inline void * gc_quick_alloc(size_t nbytes)
 {
   return gc_general_alloc(nbytes, BOXED_PAGE_FLAG, ALLOC_QUICK);
 }
 
 
-static inline void * gc_alloc_unboxed(uintptr_t nbytes)
+static inline void * gc_alloc_unboxed(size_t nbytes)
 {
   return gc_general_alloc(nbytes, UNBOXED_PAGE_FLAG, FALSE);
 }
 
-static inline void * gc_quick_alloc_unboxed(uintptr_t nbytes)
+static inline void * gc_quick_alloc_unboxed(size_t nbytes)
 {
   return gc_general_alloc(nbytes, UNBOXED_PAGE_FLAG, ALLOC_QUICK);
 }
 
 
-static inline SgObject
-gc_general_copy_object(SgObject object, long nwords, int page_type_flag)
+static inline void *
+gc_general_copy_object(void *object, size_t nwords, int page_type_flag)
 {
-  SgObject newobj;
+  void *newobj;
   /* TODO check */
   /* ASSERT(is_lisp_pointer(object)); */
   ASSERT(from_space_p(object));
@@ -1147,8 +1157,8 @@ gc_general_copy_object(SgObject object, long nwords, int page_type_flag)
  *
  * Bignums and vectors may have shrunk. If the object is not copied
  * the space needs to be reclaimed, and the page_tables corrected. */
-static SgObject
-general_copy_large_object(SgObject object, uintptr_t nwords, int boxedp)
+static void *
+general_copy_large_object(void *object, size_t nwords, int boxedp)
 {
   page_index_t first_page;
   /* TODO how to check? */
@@ -1272,23 +1282,23 @@ general_copy_large_object(SgObject object, uintptr_t nwords, int boxedp)
   }
 }
 
-SgObject copy_large_object(SgObject object, intptr_t nwords)
+void * copy_large_object(void *object, size_t nwords)
 {
   return general_copy_large_object(object, nwords, TRUE);
 }
 
-SgObject copy_large_unboxed_object(SgObject object, intptr_t nwords)
+void * copy_large_unboxed_object(void *object, size_t nwords)
 {
   return general_copy_large_object(object, nwords, FALSE);
 }
 
 /* to copy unboxed objects */
-SgObject copy_unboxed_object(SgObject object, intptr_t nwords)
+void * copy_unboxed_object(void *object, size_t nwords)
 {
   return gc_general_copy_object(object, nwords, UNBOXED_PAGE_FLAG);
 }
 
-SgObject gc_search_space(void *start, size_t words, void *pointer)
+void * gc_search_space(void *start, size_t words, void *pointer)
 {
   while (words > 0) {
     size_t count = 1;
@@ -1319,7 +1329,7 @@ SgObject gc_search_space(void *start, size_t words, void *pointer)
 
 /* a faster version for searching the dynamic space. This will work even
  * if the object is in a current allocation region. */
-static SgObject search_dynamic_space(void *pointer)
+static void * search_dynamic_space(void *pointer)
 {
   page_index_t page_index = find_page_index(pointer);
   void *start;
@@ -1336,14 +1346,31 @@ static SgObject search_dynamic_space(void *pointer)
    is in dynamic space. */
 #define possibly_valid_dynamic_space_pointer search_dynamic_space
 
+/* we don't check if the pointer is strictly there or not.
+   all we want is actually *accessible* address
+ */
+static int possibly_valid_static_area_pointer(void *pointer)
+{
+  int i;
+  for (i = 0; i < current_static_space_index; i++) {
+    void *start = static_spaces[i].start;
+    void *end = static_spaces[i].end;
+    if (start < pointer && pointer < end) return TRUE;
+  }
+  return FALSE;
+}
+
 static inline void *
-general_alloc_internal(size_t nbytes, int page_type_flag,
+general_alloc_internal(size_t reqbytes, int page_type_flag,
 		       alloc_region_t *region, SgVM *vm)
 {
-  void *new_obj, *new_free_pointer;
-  size_t trigger_bytes = 0;
+  block_t *new_block;
+  void *new_free_pointer;
+  size_t trigger_bytes = 0, nbytes;
 
-  ASSERT(nbytes > 0);
+  nbytes = sizeof(memory_header_t) + reqbytes;
+  /* never be 0 */
+  /* ASSERT(nbytes > 0); */
   ASSERT((((uintptr_t)region->free_pointer & LOWTAG_MASK) == 0)
 	 && ((nbytes & LOWTAG_MASK) == 0));
 
@@ -1351,9 +1378,10 @@ general_alloc_internal(size_t nbytes, int page_type_flag,
   /* maybe we can do this quickly ... */
   new_free_pointer = region->free_pointer + nbytes;
   if (new_free_pointer <= region->end_addr) {
-    new_obj = (void*)(region->free_pointer);
+    new_block = (block_t *)(region->free_pointer);
     region->free_pointer = new_free_pointer;
-    return new_obj;        /* yup */
+    SET_MEMORY_SIZE(new_block, reqbytes);
+    return (void *)&new_block->body;        /* yup */
   }
 
   /* We don't want to count nbytes against auto_gc_trigger unless we
@@ -1371,15 +1399,20 @@ general_alloc_internal(size_t nbytes, int page_type_flag,
     /* well if we need gc then we need gc anytime, so just set the flag. */
     need_gc = TRUE;    
   }
-  return gc_alloc_with_region(nbytes, page_type_flag, region, 0);
+  return gc_alloc_with_region(reqbytes, page_type_flag, region, 0);
 }
 
 void * general_alloc(size_t nbytes, int page_type_flag)
 {
   SgVM *vm = Sg_VM();
   if (BOXED_PAGE_FLAG & page_type_flag) {
-    /* TODO thread */
-    alloc_region_t *region = &boxed_region;
+    /* The initialisation time doesn't have VM yet, so check if the
+       VM is already there. 
+       TODO after VM initialisation we must have region there
+       remove the check.
+    */
+    GC_thread_context_t *context = vm ? &vm->context : NULL;
+    alloc_region_t *region = context ? &context->alloc_region : &boxed_region;
     return general_alloc_internal(nbytes, page_type_flag, region, vm);
   } else if (UNBOXED_PAGE_FLAG & page_type_flag) {
     void *obj;
@@ -1411,13 +1444,11 @@ static intptr_t update_dynamic_space_free_pointer(void)
 static void gc_alloc_update_all_page_tables(void)
 {
   /* Flush the alloc regions updating the tables. */
-  /* TODO multithread */
-#if 0
-  struct thread *th;
+  GC_thread_context_t *th;
   for_each_thread(th) {
-    gc_alloc_update_page_tables(BOXED_PAGE_FLAG, &th->alloc_region);
+    gc_alloc_update_page_tables(BOXED_PAGE_FLAG, 
+				(alloc_region_t *)&th->alloc_region);
   }
-#endif
   gc_alloc_update_page_tables(UNBOXED_PAGE_FLAG, &unboxed_region);
   gc_alloc_update_page_tables(BOXED_PAGE_FLAG, &boxed_region);
 }
@@ -1554,12 +1585,16 @@ static int is_scheme_pointer(void *p)
 {
   /* TODO check if the given pointer is in static areas */
   if (SG_HPTRP(p) &&
-      (/* possibly_valid_static_area_pointer(p) || */
+      (possibly_valid_static_area_pointer(p) ||
        possibly_valid_dynamic_space_pointer(p)) &&
       SG_HOBJP(p)) {
     /* at least it's safe to access to the class pointer */
     SgClass *clazz = SG_CLASS_OF(p);
-    return clazz->magic == CLASS_MAGIC_VALUE;
+    if (possibly_valid_static_area_pointer(clazz)) {
+      return clazz->magic == CLASS_MAGIC_VALUE;
+    } else {
+      return FALSE;
+    }
   } else {
     return FALSE;
   }
@@ -1567,49 +1602,73 @@ static int is_scheme_pointer(void *p)
 
 #include "scavenge_dispatcher.c"
 
-/* FIXME: Most calls end up going to some trouble to compute an
- * 'n_words' value for this function. The system might be a little
- * simpler if this function used an 'end' parameter instead. */
+/* 
+   Assuming the following memory structure
+
+ start
+   +--------+------------+
+   | header | body       | ;; a block_t
+   +--------+------------+
+   | header | body       |
+   +--------+------------+
+            :
+   +--------+------------+
+   | header | body       |
+   +--------+------------+< end
+
+   If there is no forwarding pointer, then header contains requested
+   object size, however if the pointer must forward then it should
+   contain only word size.
+
+   NOTE: alignment might not be this much aligned.
+ */
 static void scavenge(void *start, intptr_t n_words)
 {
-#if 0
   intptr_t *end = start + n_words;
   intptr_t *object_ptr;
-  intptr_t n_words_scavenged;
-
+  size_t n_words_scavenged;
+  /* ASSUME 'start' indicates the proper memory structure */
   for (object_ptr = start;
        object_ptr < end;
-       object_ptr += n_words_scavenged) {
-
-    intptr_t object = *object_ptr;
-    if (forwarding_pointer_p(object_ptr))
+       object_ptr = (uintptr_t)object_ptr + 
+	 n_words_scavenged + sizeof(memory_header_t)) {
+    /* object == body so get body from block */
+    intptr_t object = (intptr_t)ALLOCATED_POINTER(object_ptr);
+    block_t *block;
+    size_t block_size;
+    /* check first */
+    if (MEMORY_FORWARDED(object_ptr))
       Sg_Panic("unexpect forwarding pointer in scavenge: %p, start=%p, n=%l\n",
 	       object_ptr, start, n_words);
+    /* compute offset of block. block might be the same as object_ptr 
+       TODO: what if the object is not in heap but allocated by something else?
+     */
+    block = POINTER2BLOCK(object);
+    block_size = MEMORY_SIZE(block);
     /* FIXME this is not correct! */
-    if (is_scheme_pointer(object)) {
-      if (from_space_p(object)) {
+    if (is_scheme_pointer((void *)object)) {
+      if (from_space_p((void *)object)) {
 	/* It currently points to old space. Check for a
 	 * forwarding pointer. */
-	void *ptr = object;
-	if (forwarding_pointer_p(ptr)) {
+	if (MEMORY_FORWARDED(block)) {
 	  /* Yes, there's a forwarding pointer. */
-	  *object_ptr = LOW_WORD(forwarding_pointer_value(ptr));
+	  /* to keep the memory structure forward with header  */
+	  *object_ptr = (intptr_t)block;
 	  n_words_scavenged = 1;
 	} else {
 	  /* Scavenge that pointer. */
-	  n_words_scavenged = dispatch_pointer(object_ptr, object);
+	  n_words_scavenged = dispatch_pointer(object_ptr, block);
 	}
       } else {
 	/* It points somewhere other than oldspace. Leave it
 	 * alone. */
-	n_words_scavenged = 1;
+	n_words_scavenged = block_size;
       }
     } else {
       /* It's some sort of header object or another. */
-      n_words_scavenged = dispatch_table(object_ptr, object);
+      n_words_scavenged = dispatch_pointer(object_ptr, block);
     }
   }
-#endif
 }
 
 /* comment from SBCL */
@@ -1750,6 +1809,9 @@ static void scavenge_generations(generation_index_t from, generation_index_t to)
 	    num_wp += update_page_write_prot(j);
 	  }
 	}
+	/* FSHOW((stderr, */
+	/*        "/write protected %d pages within generation %d\n", */
+	/*        num_wp, generation)); */
       }
       i = last_page;
     }
@@ -1765,6 +1827,10 @@ static struct new_area new_areas_2[NUM_NEW_AREAS];
 static void scavenge_newspace_generation_one_scan(generation_index_t generation)
 {
   page_index_t i;
+
+  /* FSHOW((stderr, */
+  /* 	 "/starting one full scan of newspace generation %d:%d\n", */
+  /* 	 generation, last_free_page)); */
   for (i = 0; i < last_free_page; i++) {
     /* Note that this skips over open regions when it encounters them. */
     if (page_boxed_p(i)
@@ -1789,7 +1855,7 @@ static void scavenge_newspace_generation_one_scan(generation_index_t generation)
       for (last_page = i; ;last_page++) {
 	/* If all pages are write-protected and movable,
 	 * then no need to scavenge */
-	all_wp=all_wp && page_table[last_page].write_protected &&
+	all_wp = all_wp && page_table[last_page].write_protected &&
 	  !page_table[last_page].dont_move;
 
 	/* Check whether this is the last page in this
@@ -1812,12 +1878,16 @@ static void scavenge_newspace_generation_one_scan(generation_index_t generation)
 			   / N_WORD_BYTES);
 	new_areas_ignore_page = last_page;
 
+	/* FSHOW((stderr, "scavenging region(%d) %d words\n", i, nwords)); */
 	scavenge(page_region_start(i), nwords);
 
       }
       i = last_page;
     }
   }
+  /* FSHOW((stderr, */
+  /* 	 "/done with one full scan of newspace generation %d\n", */
+  /* 	 generation)); */
 }
 
 /* Do a complete scavenge of the newspace generation. */
@@ -1846,7 +1916,6 @@ static void scavenge_newspace_generation(generation_index_t generation)
 
   /* Start with a full scavenge. */
   scavenge_newspace_generation_one_scan(generation);
-
   /* Record all new areas now. */
   record_new_objects = 2;
 
@@ -1862,6 +1931,10 @@ static void scavenge_newspace_generation(generation_index_t generation)
 
   /* Grab new_areas_index. */
   current_new_areas_index = new_areas_index;
+
+  /* FSHOW((stderr, */
+  /* 	 "The first scan is finished; current_new_areas_index=%d.\n", */
+  /* 	 current_new_areas_index)); */
 
   while (current_new_areas_index > 0) {
     /* Move the current to the previous new areas */
@@ -1884,12 +1957,13 @@ static void scavenge_newspace_generation(generation_index_t generation)
 
     /* Check whether previous_new_areas had overflowed. */
     if (previous_new_areas_index >= NUM_NEW_AREAS) {
+      /* FSHOW((stderr, "new_areas overflow, doing full scavenge\n")); */
       /* Don't need to record new areas that get scavenged
        * anyway during scavenge_newspace_generation_one_scan. */
       record_new_objects = 1;
 
       scavenge_newspace_generation_one_scan(generation);
-
+      /* FSHOW((stderr, "new_areas overflow, doing full scavenge done\n")); */
       /* Record all new areas now. */
       record_new_objects = 2;
 
@@ -2090,7 +2164,6 @@ static void preserve_pointer(void *addr)
 
 static void preserve_context_registers (os_context_t *c)
 {
-  void **ptr;
   /* TODO Should Cygwin be treated the same as Windows?*/
 #if defined(_WIN32) || defined(__CYGWIN__)
 # if defined __i686__
@@ -2123,6 +2196,7 @@ static void preserve_context_registers (os_context_t *c)
 #endif
 
 #if !defined(_WIN32) && !defined(__CYGWIN__)
+  void **ptr;
   for (ptr = ((void **)(c+1))-1; ptr>=(void **)c; ptr--) {
     preserve_pointer(*ptr);
   }
@@ -2135,8 +2209,8 @@ garbage_collect_generation(generation_index_t generation, int raise)
 {
   uintptr_t bytes_freed;
   page_index_t i;
-  uintptr_t static_space_size;
-  SgVM *th;
+  /* uintptr_t static_space_size; */
+  GC_thread_context_t *th;
 
   ASSERT(generation <= GENERATIONS-1);
     /* The oldest generation can't be raised. */
@@ -2173,10 +2247,10 @@ garbage_collect_generation(generation_index_t generation, int raise)
   for_each_thread(th) {
     void **ptr;
     void **esp = (void **)-1;
-    if (th->threadState == SG_VM_TERMINATED) continue;
+    if (SG_VM(th->thread)->threadState == SG_VM_TERMINATED) continue;
     /* preserve_thread(th); */	/* pointers are not only on cstack */
     esp = th->cstackStart;	/* control stack start */
-    if (th == Sg_VM()) {
+    if (th->thread == Sg_VM()) {
       /* Somebody is going to burn in hell for this, but casting it in two
 	 steps shut gcc up about strict aliasing. */
       esp = (void **)((void *)&raise);
@@ -2202,16 +2276,21 @@ garbage_collect_generation(generation_index_t generation, int raise)
       preserve_pointer(*ptr);
     }
   }
-
+  /* FSHOW((stderr, */
+  /* 	 "/scavenge_generations(%d %d)\n", generation+1, GENERATIONS)); */
   /* Scavenge all the rest of the roots. */
   /* All generations but the generation being GCed need to be
    * scavenged. The new_space generation needs special handling as
    * objects may be moved in - it is handled separately below. */
   scavenge_generations(generation+1, GENERATIONS);
+
+  /* FSHOW((stderr, */
+  /* 	 "/scavenge_newspace_generation(%d)\n", new_space)); */
   /* Finally scavenge the new_space generation. Keep going until no
-   * more objects are moved into the new generation */
+   * more objects are moved into the new generation */ 
   scavenge_newspace_generation(new_space);
 
+  /* FSHOW((stderr, "/gc_alloc_update_all_page_tables()\n")); */
   /* Flush the current regions, updating the tables. */
   gc_alloc_update_all_page_tables();
   
@@ -2237,12 +2316,12 @@ garbage_collect_generation(generation_index_t generation, int raise)
   generations[generation].alloc_unboxed_start_page = 0;
   generations[generation].alloc_large_start_page = 0;
   generations[generation].alloc_large_unboxed_start_page = 0;
-
+#if 0
   if (generation >= verify_gens) {
     verify_gc();
     verify_dynamic_space();
   }
-
+#endif
   generations[generation].gc_trigger =
     generations[generation].bytes_allocated
     + generations[generation].bytes_consed_between_gc;
@@ -2263,7 +2342,7 @@ garbage_collect_generation(generation_index_t generation, int raise)
  *
  * We stop collecting at gencgc_oldest_gen_to_gc, even if this is less than
  * last_gen (oh, and note that by default it is NUM_GENERATIONS-1) */
-void * GC_collect_garbage(int last_gen)
+void GC_collect_garbage(int last_gen)
 {
   generation_index_t gen = 0, i;
   int raise, more = 0;
@@ -2272,9 +2351,13 @@ void * GC_collect_garbage(int last_gen)
    * remap_free_pages was called. */
   static page_index_t high_water_mark = 0;
   /* log_generation_stats(gc_logfile, "=== GC Start ==="); */
+  /* FSHOW((stderr, "/entering GC_collect_garbage(%d)\n", last_gen)); */
 
   gc_active_p = TRUE;
   if (last_gen > GENERATIONS) {
+    /* FSHOW((stderr, */
+    /* 	   "/collect_garbage: last_gen = %d, doing a level 0 GC\n", */
+    /* 	   last_gen)); */
     last_gen = 0;
   }
 
@@ -2302,6 +2385,14 @@ void * GC_collect_garbage(int last_gen)
 	raise = more;
       }
     }
+    /* FSHOW((stderr, */
+    /* 	   "starting GC of generation %d with raise=%d alloc=%d trig=%d GCs=%d\n", */
+    /* 	   gen, */
+    /* 	   raise, */
+    /* 	   generations[gen].bytes_allocated, */
+    /* 	   generations[gen].gc_trigger, */
+    /* 	   generations[gen].num_gc)); */
+
     /* If an older generation is being filled, then update its
      * memory age. */
     if (raise == 1) {
@@ -2313,6 +2404,9 @@ void * GC_collect_garbage(int last_gen)
 
     /* Reset the memory age cum_sum. */
     generations[gen].cum_sum_bytes_allocated = 0;
+
+    /* FSHOW((stderr, "GC of generation %d finished:\n", gen)); */
+
     gen++;
   } while ((gen <= gencgc_oldest_gen_to_gc)
 	   && ((gen < last_gen)
@@ -2384,55 +2478,82 @@ void * GC_collect_garbage(int last_gen)
   /* log_generation_stats(gc_logfile, "=== GC End ==="); */
 }
 
+void GC_init_context(GC_thread_context_t *context, void *thread)
+{
+  Sg_LockMutex(&context_lock);
+  if (all_threads) {
+    all_threads->next = context;
+  } else {
+    all_threads = context;
+    /* the context must be root context so set it */
+    *context = root_context;
+  }
+  gc_set_region_empty(&context->alloc_region);
+  context->thread = thread;
+  context->freeInterruptContextIndex = 0;
+  Sg_UnlockMutex(&context_lock);
+}
+
+void GC_init_thread(GC_thread_context_t *context)
+{
+  thread_init(context);
+}
+
 /* will be called in GC_init */
+static int initialised = FALSE;
 void GC_init()
 {
-  page_index_t i;
-  /* initialise OS specific variables. */
-  os_init();
-  dynamic_space_size = DEFAULT_DYNAMIC_SPACE_SIZE;
+  if (!initialised) {
+    page_index_t i;
+    /* initialise OS specific variables. */
+    os_init();
+    root_context_init(&root_context);
+    dynamic_space_size = DEFAULT_DYNAMIC_SPACE_SIZE;
 
-  Sg_InitMutex(&free_pages_lock, FALSE);
-  Sg_InitMutex(&allocation_lock, FALSE);
+    Sg_InitMutex(&free_pages_lock, FALSE);
+    Sg_InitMutex(&allocation_lock, FALSE);
+    Sg_InitMutex(&context_lock, FALSE);
 
-  page_table_pages = dynamic_space_size / CARD_BYTES;
-  ASSERT(dynamic_space_size == npage_bytes(page_table_pages));
+    page_table_pages = dynamic_space_size / CARD_BYTES;
+    ASSERT(dynamic_space_size == npage_bytes(page_table_pages));
 
-  bytes_consed_between_gcs = dynamic_space_size/(size_t)20;
-  if (bytes_consed_between_gcs < (1024*1024))
-    bytes_consed_between_gcs = 1024*1024;
+    bytes_consed_between_gcs = dynamic_space_size/(size_t)20;
+    if (bytes_consed_between_gcs < (1024*1024))
+      bytes_consed_between_gcs = 1024*1024;
 
-  /* The page_table must be allocated using "calloc" to initialize
-   * the page structures correctly. */
-  page_table = calloc(page_table_pages, sizeof(struct page));
-  ASSERT(page_table);
+    /* The page_table must be allocated using "calloc" to initialize
+     * the page structures correctly. */
+    page_table = calloc(page_table_pages, sizeof(struct page));
+    ASSERT(page_table);
 
-  heap_base = DYNAMIC_SPACE_START;
+    heap_base = DYNAMIC_SPACE_START;
 
-  bytes_allocated = 0;
+    bytes_allocated = 0;
 
-  /* Initialize the generations. */
-  for (i = 0; i < NUM_GENERATIONS; i++) {
-    generations[i].alloc_start_page = 0;
-    generations[i].alloc_unboxed_start_page = 0;
-    generations[i].alloc_large_start_page = 0;
-    generations[i].alloc_large_unboxed_start_page = 0;
-    generations[i].bytes_allocated = 0;
-    generations[i].gc_trigger = 2000000;
-    generations[i].num_gc = 0;
-    generations[i].cum_sum_bytes_allocated = 0;
-    /* the tune-able parameters */
-    generations[i].bytes_consed_between_gc
-      = bytes_consed_between_gcs/(size_t)GENERATIONS-1;
-    generations[i].number_of_gcs_before_promotion = 1;
-    generations[i].minimum_age_before_gc = 0.75;
+    /* Initialize the generations. */
+    for (i = 0; i < NUM_GENERATIONS; i++) {
+      generations[i].alloc_start_page = 0;
+      generations[i].alloc_unboxed_start_page = 0;
+      generations[i].alloc_large_start_page = 0;
+      generations[i].alloc_large_unboxed_start_page = 0;
+      generations[i].bytes_allocated = 0;
+      generations[i].gc_trigger = 2000000;
+      generations[i].num_gc = 0;
+      generations[i].cum_sum_bytes_allocated = 0;
+      /* the tune-able parameters */
+      generations[i].bytes_consed_between_gc
+	= bytes_consed_between_gcs/(size_t)GENERATIONS-1;
+      generations[i].number_of_gcs_before_promotion = 1;
+      generations[i].minimum_age_before_gc = 0.75;
+    }
+
+    gc_alloc_generation = 0;
+    gc_set_region_empty(&boxed_region);
+    gc_set_region_empty(&unboxed_region);
+
+    last_free_page = 0;
+    /* to set auto_gc_trigger, later ... */
+    GC_collect_garbage(0);
+    initialised = TRUE;
   }
-
-  gc_alloc_generation = 0;
-  gc_set_region_empty(&boxed_region);
-  gc_set_region_empty(&unboxed_region);
-
-  last_free_page = 0;
-  /* to set auto_gc_trigger, later ... */
-  /* GC_collect_garbage(0); */
 }

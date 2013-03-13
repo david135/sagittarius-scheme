@@ -28,6 +28,7 @@
  *  $Id: $
  */
 #include "i686-windows-os.h"
+#include "sagittarius/gencgc.h"
 
 os_context_register_t *
 os_context_register_addr(os_context_t *context, int offset)
@@ -53,3 +54,32 @@ os_context_pc_addr(os_context_t *context)
   return (void*)&context->win32_context->Eip; /*  REG_EIP */
 }
 
+/* from http://stackoverflow.com/questions/1740888/determining-stack-space-with-visual-studio/1747499#1747499 */
+static size_t get_stack_usage(void **stack)
+{
+  MEMORY_BASIC_INFORMATION mbi;
+  VirtualQuery(&mbi, &mbi, sizeof(mbi));
+  /* now mbi.AllocationBase = reserved stack memory base address */
+
+  VirtualQuery(mbi.AllocationBase, &mbi, sizeof(mbi));
+  /* now (mbi.BaseAddress, mbi.RegionSize) describe reserved 
+     (uncommitted) portion of the stack skip it */
+
+  VirtualQuery((char*)mbi.BaseAddress + mbi.RegionSize, &mbi, sizeof(mbi));
+  /* now (mbi.BaseAddress, mbi.RegionSize) describe the guard page */
+  /* skip it */
+
+  VirtualQuery((char*)mbi.BaseAddress + mbi.RegionSize, &mbi, sizeof(mbi));
+  /* now (mbi.BaseAddress, mbi.RegionSize) describe the committed
+     (i.e. accessed) portion of the stack */
+  *stack = mbi.BaseAddress;
+  return mbi.RegionSize;
+}
+
+int root_context_init(GC_thread_context_t *context)
+{
+  void *stack;
+  size_t size = get_stack_usage(&stack);
+  context->cstackStart = stack;
+  context->cstackEnd = (uintptr_t)stack + size;
+}
