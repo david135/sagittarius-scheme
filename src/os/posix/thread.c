@@ -37,6 +37,7 @@
 #define LIBSAGITTARIUS_BODY
 #include <sagittarius/thread.h>
 #include <sagittarius/core.h>
+#include <sagittarius/vm.h>
 
 /* Thank you Debian, we need this stupid kludge */
 #ifndef HAVE_MUTEX_RECURSIVE
@@ -77,13 +78,47 @@ void Sg_DestroyMutex(SgInternalMutex *mutex)
   pthread_mutex_destroy(&mutex->mutex);
 }
 
-int Sg_InternalThreadStart(SgInternalThread *thread, SgThreadEntryFunc *entry, void *param)
+#ifndef USE_BOEHM_GC
+/* GENCGC need to wrap the thread entry to get csp */
+typedef struct ThreadParams
+{
+  SgThreadEntryFunc *start;
+  void *arg;
+} ThreadParams;
+
+static void * wrap_thread_entry(ThreadParams *params)
+{
+  SgThreadEntryFunc *start = params->start;
+  /* ASSUME given parameter is VM instance. */
+  SgVM *vm = SG_VM(params->arg);
+  free(params);
+
+  GC_init_thread(&vm->context);
+  return (*start)(vm);
+}
+#endif
+
+int Sg_InternalThreadStart(SgInternalThread *thread, 
+			   SgThreadEntryFunc *entry, void *param)
 {
   int ok = TRUE;
   pthread_attr_t thattr;
+#ifndef USE_BOEHM_GC
+  ThreadParams *p = (ThreadParams *)malloc(sizeof(ThreadParams));
+  p->start = entry;
+  p->arg = param;
+#endif
+
   pthread_attr_init(&thattr);
   pthread_attr_setdetachstate(&thattr, PTHREAD_CREATE_DETACHED);
-  if (pthread_create(&thread->thread, &thattr, entry, param) != 0) {
+
+  if (pthread_create(&thread->thread, &thattr, 
+#ifndef USE_BOEHM_GC
+		     (void *(*)(void*))wrap_thread_entry, p
+#else
+		     entry, param
+#endif
+		     ) != 0) {
     ok = FALSE;
   }
   pthread_attr_destroy(&thattr);
