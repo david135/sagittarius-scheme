@@ -1,4 +1,4 @@
-/* scavenge_dispatcher.c                                  -*- coding: utf-8; -*-
+/* pthread.c                                              -*- coding: utf-8; -*-
  *
  *   Copyright (c) 2010-2013  Takashi Kato <ktakashi@ymail.com>
  *
@@ -27,12 +27,22 @@
  *
  *  $Id: $
  */
+#include "os.h"
+#include <pthread.h>
+#define LIBSAGITTARIUS_BODY
+#include <sagittarius/vm.h>
 
-/*
-  dispatch scavenge process to proper procedures.
-  assume the 'block' is in dynamic space.
- */
-static int dispatch_pointer(void **where, block_t *block)
+
+int thread_init(GC_thread_context_t *context)
 {
-  return MEMORY_SIZE(block);
+  pthread_attr_t attr;
+  void *stack_addr;
+  size_t stack_size;
+  SgVM *vm = SG_VM(context->thread);
+  /* this is pthread_t */
+  pthread_getattr_np(vm->thread.thread, &attr);
+  pthread_attr_getstack(&attr, &stack_addr, &stack_size);
+
+  context->cstackStart = stack_addr;
+  context->cstackEnd = (void *)(((uintptr_t)stack_size) + stack_size);
 }

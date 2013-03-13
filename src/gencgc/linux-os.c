@@ -41,10 +41,53 @@ size_t os_page_size;
 void *dynamic_space_start;
 void *dynamic_space_end;
 
+#ifdef __CYGWIN__
+static void init_data_start()
+{
+#define DATASTART (_data_start__ < _bss_start__ ?			\
+		   (void *)_data_start__ : (void *)_bss_start__)
+#define DATAEND (_data_end__ > _bss_end__ ?			\
+		 (void *)_data_end__ : (void *)_bss_end__)
+  int index = current_static_space_index++;
+  static_spaces[index].start = DATASTART;
+  static_spaces[index].end = DATAEND;
+#undef DATASTART
+#undef DATAEND
+}
+
+#else
+# pragma weak __data_start
+extern int __data_start[];
+# pragma weak data_start
+extern int data_start[];
+extern int _end[];
+
+static void init_data_start()
+{
+  int index = current_static_space_index++;
+  /* end is always easy... */
+  static_spaces[index].end = (void *)_end;
+  /* Try the easy approaches first: */
+  if (__data_start) {
+    static_spaces[index].start = (void *)(__data_start);
+    return;
+  }
+  if (data_start) {
+    static_spaces[index].start = (void *)(data_start);
+    return;
+  }
+  /* OK, we don't support this... */
+  Sg_Panic("Platform does not have neither __data_start nor data_end");
+}
+#endif
+
 void os_init()
 {
   /* assume there is nothing allocated before this called. */
   void *heap_end;
+
+  /* setup initial static roots */
+  init_data_start();
 #ifndef __CYGWIN__
   heap_end = sbrk(0);
 #else
@@ -57,6 +100,16 @@ void os_init()
   /* validate the address sbrk(0) returned */
   dynamic_space_start = os_validate(heap_end, DYNAMIC_SPACE_SIZE);
   dynamic_space_end = dynamic_space_start + DYNAMIC_SPACE_SIZE;
+
+  /* FOR DEBUGGING remove it after
+     TODO if we can detect if the process is running on GDB
+     it might be the better solution
+   */
+#if 1
+  dynamic_space_start = mmap(heap_end, DYNAMIC_SPACE_SIZE,
+			     OS_VM_PROT_ALL,
+			     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#endif
 }
 
 void * os_validate(void *addr, size_t len)

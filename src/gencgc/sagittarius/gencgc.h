@@ -32,6 +32,7 @@
 
 #include <sagittarius/common-macros.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /* TODO this must be defined in gcconfig.h during build process. */
 #ifdef __i386__
@@ -50,6 +51,40 @@ extern void *_data_start__, *_data_end__, *_bss_start__, *_bss_end__;
 
 typedef void * (* GC_oom_func)(size_t /* bytes_requested */);
 
+/* I actually don't want to show this but thread context need to hold
+   the region. */
+typedef intptr_t page_index_t;
+typedef signed char generation_index_t;
+
+/* Abstract out the data for an allocation region allowing a single routine
+   to be used for allocation and closing. */
+typedef struct alloc_region {
+  /* these two are needed for quick allocation. */
+  void *free_pointer;
+  /* pointer to the byte after the last usable byte*/
+  void *end_addr;
+
+  /* these are needed when closing the region */
+  page_index_t first_page;
+  page_index_t last_page;
+  void *start_addr;
+} alloc_region_t;
+
+typedef struct GC_context {
+  struct GC_context *next;
+  alloc_region_t alloc_region;
+  void *thread;			/* VM */
+  void *cstackStart;
+  void *cstackEnd;
+  /* we might not need these */
+  int   freeInterruptContextIndex;
+  void *interruptContexts[1];
+} GC_thread_context_t;
+
+/* all thread context */
+extern GC_thread_context_t *all_threads;
+#define for_each_thread(th) for ((th)=all_threads;(th);(th)=(th)->next)
+
 SG_CDECL_BEGIN
 
 /* The GC APIs are similar with Boehm GC for my convenience. 
@@ -59,9 +94,12 @@ SG_EXTERN void * GC_malloc(size_t size);
 SG_EXTERN void * GC_malloc_atomic(size_t size);
 SG_EXTERN void * GC_calloc(size_t num, size_t size);
 
-SG_EXTERN void * GC_collect_garbage(int generation);
+SG_EXTERN void   GC_collect_garbage(int generation);
 
 SG_EXTERN void   GC_set_oom_fn(GC_oom_func handler);
+/* this must be called explicitly for each thread. */
+SG_EXTERN void   GC_init_context(GC_thread_context_t *context, void *thread);
+SG_EXTERN void   GC_init_thread(GC_thread_context_t *context);
 
 SG_CDECL_END
 
