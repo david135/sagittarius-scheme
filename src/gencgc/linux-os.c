@@ -100,21 +100,16 @@ void os_init()
   /* validate the address sbrk(0) returned */
   dynamic_space_start = os_validate(heap_end, DYNAMIC_SPACE_SIZE);
   dynamic_space_end = dynamic_space_start + DYNAMIC_SPACE_SIZE;
-
-  /* FOR DEBUGGING remove it after
-     TODO if we can detect if the process is running on GDB
-     it might be the better solution
-   */
-#if 1
-  dynamic_space_start = mmap(heap_end, DYNAMIC_SPACE_SIZE,
-			     OS_VM_PROT_ALL,
-			     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-#endif
 }
 
 void * os_validate(void *addr, size_t len)
 {
-  int flags =  MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
+  int flags =  MAP_PRIVATE | MAP_ANONYMOUS
+    /* probably only Cygwin requires swap area. */
+#ifndef __CYGWIN__
+    | MAP_NORESERVE
+#endif
+    ;
   void *actual;
   actual = mmap(addr, len, OS_VM_PROT_ALL, flags, -1, 0);
   if (actual == MAP_FAILED) {
