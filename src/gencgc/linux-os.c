@@ -41,6 +41,8 @@ size_t os_page_size;
 void *dynamic_space_start;
 void *dynamic_space_end;
 
+static int initialized = FALSE;
+
 #ifdef __CYGWIN__
 static void init_data_start()
 {
@@ -48,9 +50,7 @@ static void init_data_start()
 		   (void *)_data_start__ : (void *)_bss_start__)
 #define DATAEND (_data_end__ > _bss_end__ ?			\
 		 (void *)_data_end__ : (void *)_bss_end__)
-  int index = current_static_space_index++;
-  static_spaces[index].start = DATASTART;
-  static_spaces[index].end = DATAEND;
+  add_static_root(DATASTART, DATAEND);
 #undef DATASTART
 #undef DATAEND
 }
@@ -65,41 +65,44 @@ extern int _end[];
 static void init_data_start()
 {
   int index = current_static_space_index++;
+  void *start = NULL;
   /* end is always easy... */
   static_spaces[index].end = (void *)_end;
   /* Try the easy approaches first: */
   if (__data_start) {
-    static_spaces[index].start = (void *)(__data_start);
-    return;
+    start = (void *)(__data_start);
+  } else if (data_start) {
+    start = (void *)(data_start);
+  } else {
+    /* OK, we don't support this... */
+    Sg_Panic("Platform does not have neither __data_start nor data_end");
   }
-  if (data_start) {
-    static_spaces[index].start = (void *)(data_start);
-    return;
-  }
-  /* OK, we don't support this... */
-  Sg_Panic("Platform does not have neither __data_start nor data_end");
+  add_static_root(start, end);
 }
 #endif
 
 void os_init()
 {
-  /* assume there is nothing allocated before this called. */
-  void *heap_end;
-
-  /* setup initial static roots */
-  init_data_start();
+  if (!initialized) {
+    /* assume there is nothing allocated before this called. */
+    void *heap_end;
 #ifndef __CYGWIN__
-  heap_end = sbrk(0);
+    heap_end = sbrk(0);
 #else
-  /* FIXME on Cygwin sbrk doesn't work as we expected.
-     so we use magic number taken from 32 bit SBCL linux. */
-  /* heap_end = (void*)0x09000000UL; */
-  heap_end = NULL;
+    /* FIXME on Cygwin sbrk doesn't work as we expected.
+       so we use magic number taken from 32 bit SBCL linux. */
+    heap_end = (void*)0x09000000UL;
+    /* this can be work as well but i'm not sure which is better */
+    /* heap_end = NULL; */
 #endif
-  os_page_size = PAGE_BYTES;
-  /* validate the address sbrk(0) returned */
-  dynamic_space_start = os_validate(heap_end, DYNAMIC_SPACE_SIZE);
-  dynamic_space_end = dynamic_space_start + DYNAMIC_SPACE_SIZE;
+    os_page_size = PAGE_BYTES;
+    /* validate the address sbrk(0) returned */
+    dynamic_space_start = os_validate(heap_end, DYNAMIC_SPACE_SIZE);
+    dynamic_space_end = dynamic_space_start + DYNAMIC_SPACE_SIZE;
+    /* setup initial static roots */
+    init_data_start();
+    initialized = TRUE;
+  }
 }
 
 void * os_validate(void *addr, size_t len)

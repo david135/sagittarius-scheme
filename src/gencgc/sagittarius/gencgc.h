@@ -46,7 +46,7 @@
 
 #ifdef __CYGWIN__
 /* To avoid compilation error we declare cygwin specific variable here  */
-extern void *_data_start__, *_data_end__, *_bss_start__, *_bss_end__;
+extern int _data_start__[], _data_end__[], _bss_start__[], _bss_end__[];
 #endif
 
 typedef void * (* GC_oom_func)(size_t /* bytes_requested */);

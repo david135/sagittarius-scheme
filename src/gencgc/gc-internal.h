@@ -122,14 +122,7 @@ extern void *dynamic_space_end;
 extern size_t dynamic_space_size;
 #define DEFAULT_DYNAMIC_SPACE_SIZE (dynamic_space_end - dynamic_space_start)
 
-/* probably enough for Cygwin ... */
-#define MAX_STATIC_ROOT_COUNT 256
-typedef struct static_roots {
-  void *start;
-  void *end;
-} static_roots_t;
-extern int current_static_space_index;
-extern static_roots_t static_spaces[MAX_STATIC_ROOT_COUNT];
+void add_static_root(void *start, void *end);
 
 /* #define READ_ONLY_SPACE_START read_only_space_start */
 #define DYNAMIC_SPACE_START   dynamic_space_start
@@ -220,28 +213,40 @@ extern void * general_alloc(size_t nbytes, int page_type_flag);
    checked if the function pointer is located on 8 byte boundary
    or not. So let's do it safe way so far.
 */
-
+/* must be unit of 8 */
 typedef struct memory_header {
   uintptr_t forwarded : 1;
-  uintptr_t finalizer : N_WORD_BITS-2;
-  /* do we need this? */
-  size_t size;
+  uintptr_t has_finalizer: 1;	/* for some sanity check */
+  /* FIXME i'm not even sure if we can assume all function pointers are
+     on 8 byte boundary or not. */
+  uintptr_t mark: 1;
+  uintptr_t finalizer : N_WORD_BITS-3;
+  uintptr_t size;
 } memory_header_t;
 typedef struct block {
   memory_header_t header;
   uintptr_t body;
 } block_t;
 
+extern int current_mark;
 #define SET_MEMORY_SIZE(block, size_)		\
   do {						\
     (block)->header.size = (size_);		\
     (block)->header.forwarded = FALSE;		\
+    (block)->header.has_finalizer = FALSE;	\
+    (block)->header.finalizer = NULL;		\
+    (block)->header.mark = !current_mark;	\
   } while (0)
 #define BLOCK(obj)               ((block_t *)obj)
 #define MEMORY_SIZE(block)       BLOCK(block)->header.size
 #define MEMORY_FORWARDED(block)  BLOCK(block)->header.forwarded
+#define MEMORY_MARK(block)       BLOCK(block)->header.mark
 #define ALLOCATED_POINTER(block) ((void *)&(BLOCK(block)->body))
 #define POINTER2BLOCK(p)    ((block_t*)(((uintptr_t)p)-sizeof(memory_header_t)))
+#define BLOCK_MAY_VALID_P(block)		\
+  (BLOCK(block)->header.has_finalizer		\
+   ? BLOCK(block)->header.finalizer != NULL	\
+   : BLOCK(block)->header.finalizer == NULL)
 
 /* debugging */
 #define QSHOW 1
