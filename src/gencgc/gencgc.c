@@ -38,10 +38,26 @@
 #include <sagittarius/vm.h>
 
 size_t bytes_consed_between_gcs = 12*1024*1024;
-int    current_static_space_index = 0;
-static_roots_t static_spaces[MAX_STATIC_ROOT_COUNT];
 
-static GC_thread_context_t root_context = {0}; /* dummy context */
+/* probably enough for Cygwin ... */
+#define MAX_STATIC_ROOT_COUNT 256
+typedef struct static_roots {
+  void *start;
+  void *end;
+} static_roots_t;
+static int    current_static_space_index = 0;
+static static_roots_t static_spaces[MAX_STATIC_ROOT_COUNT] = {{NULL,},};
+
+void add_static_root(void *start, void *end)
+{
+  int index = current_static_space_index++;
+  static_spaces[index].start = start;
+  static_spaces[index].end = end;
+}
+
+int current_mark = 0;
+
+static GC_thread_context_t root_context = {}; /* dummy context */
 GC_thread_context_t *all_threads = NULL;
 
 static page_index_t gc_find_freeish_pages(page_index_t *restart_page_ptr,
@@ -369,12 +385,20 @@ static void zero_pages_with_mmap(page_index_t start, page_index_t end)
   size_t length = npage_bytes(1 + end - start);
 
   if (start > end) return;
+#ifndef __CYGWIN__
   os_invalidate(addr, length);
   new_addr = os_validate(addr, length);
   if (new_addr == NULL || new_addr != addr) {
     Sg_Panic("remap_free_pages: page moved, 0x%08x ==> 0x%08x",
              start, new_addr);
   }
+#else
+  /* for some reason Cygwin doesn't allow me to do above trick
+     because of munmap.
+     TODO probably we can resolve it changing CARD_BYTES.
+  */
+  memset(addr, 0, length);
+#endif
   for (i = start; i <= end; i++) {
     page_table[i].need_to_zero = FALSE;
   }
@@ -1298,18 +1322,21 @@ void * copy_unboxed_object(void *object, size_t nwords)
   return gc_general_copy_object(object, nwords, UNBOXED_PAGE_FLAG);
 }
 
-void * gc_search_space(void *start, size_t words, void *pointer)
+static int blockable_p(void *pointer)
+{
+  return ((uintptr_t)dynamic_space_start+sizeof(memory_header_t)
+	  <= (uintptr_t)pointer &&
+	  pointer <= dynamic_space_end);
+}
+void * gc_search_space(void *start, intptr_t words, void *pointer)
 {
   while (words > 0) {
     size_t count = 1;
-
-    /* void *thing = start; */
-    /* TODO how to get object size without accessing the pointer? */
-    /* if (SG_PAIRP(thing) || SG_IMMEDIATEP(thing)) */
-    /*   count = 2; */
-    /* else */
-    /*   count = (sizetab[widetag_of(thing)])(start); */
-
+    if (blockable_p(*(void **)start)) {
+      block_t *thing = POINTER2BLOCK(*(void **)start);
+      count = MEMORY_SIZE(thing)/sizeof(void *);
+      if (!count) count = 1;
+    }
     /* Check whether the pointer is within this object. */
     if ((pointer >= start) && (pointer < (start+count))) {
       /* found it! */
@@ -1338,6 +1365,7 @@ static void * search_dynamic_space(void *pointer)
   if ((page_index == -1) || page_free_p(page_index))
     return NULL;
   start = page_region_start(page_index);
+
   return gc_search_space(start, (pointer+2)-start, pointer);
 }
 /* unlikely with SBCL we can't determine if the pointer is
@@ -1494,10 +1522,10 @@ static void remap_page_range (page_index_t from, page_index_t to)
    */
   const page_index_t
     release_granularity = gencgc_release_granularity/CARD_BYTES,
-    release_mask = release_granularity-1,
-    end = to+1,
-    aligned_from = (from+release_mask)&~release_mask,
-    aligned_end = (end&~release_mask);
+	   release_mask = release_granularity-1,
+		    end = to+1,
+	   aligned_from = (from+release_mask)&~release_mask,
+	    aligned_end = (end&~release_mask);
 
   if (aligned_from < aligned_end) {
     zero_pages_with_mmap(aligned_from, aligned_end-1);
@@ -1600,6 +1628,10 @@ static int is_scheme_pointer(void *p)
   }
 }
 
+/* this will be used in the included file so put forward declaration here */
+
+static void scavenge(void *start, intptr_t n_words);
+static void preserve_pointer(void *addr);
 #include "scavenge_dispatcher.c"
 
 /* 
@@ -1622,16 +1654,17 @@ static int is_scheme_pointer(void *p)
 
    NOTE: alignment might not be this much aligned.
  */
-static void scavenge(void *start, intptr_t n_words)
+void scavenge(void *start, intptr_t n_words)
 {
   intptr_t *end = start + n_words;
   intptr_t *object_ptr;
-  size_t n_words_scavenged;
+  size_t n_bytes_scavenged;
   /* ASSUME 'start' indicates the proper memory structure */
   for (object_ptr = start;
        object_ptr < end;
-       object_ptr = (uintptr_t)object_ptr + 
-	 n_words_scavenged + sizeof(memory_header_t)) {
+       object_ptr = 
+	 (intptr_t *)((uintptr_t)object_ptr + 
+		      n_bytes_scavenged + sizeof(memory_header_t))) {
     /* object == body so get body from block */
     intptr_t object = (intptr_t)ALLOCATED_POINTER(object_ptr);
     block_t *block;
@@ -1654,19 +1687,19 @@ static void scavenge(void *start, intptr_t n_words)
 	  /* Yes, there's a forwarding pointer. */
 	  /* to keep the memory structure forward with header  */
 	  *object_ptr = (intptr_t)block;
-	  n_words_scavenged = 1;
+	  n_bytes_scavenged = 1;
 	} else {
 	  /* Scavenge that pointer. */
-	  n_words_scavenged = dispatch_pointer(object_ptr, block);
+	  n_bytes_scavenged = dispatch_pointer((void **)object_ptr, block);
 	}
       } else {
 	/* It points somewhere other than oldspace. Leave it
 	 * alone. */
-	n_words_scavenged = block_size;
+	n_bytes_scavenged = block_size;
       }
     } else {
       /* It's some sort of header object or another. */
-      n_words_scavenged = dispatch_pointer(object_ptr, block);
+      n_bytes_scavenged = scavenge_general_pointer((void **)object_ptr, block);
     }
   }
 }
@@ -2058,22 +2091,27 @@ static uintptr_t free_oldspace(void)
  *
  * It is also assumed that the current gc_alloc() region has been
  * flushed and the tables updated. */
-
-static void preserve_pointer(void *addr)
+void preserve_pointer(void *addr)
 {
-  page_index_t addr_page_index = find_page_index(addr);
+  page_index_t addr_page_index;
   page_index_t first_page;
   page_index_t i;
   unsigned int region_allocation;
 
+  /* obvious case */
+  if (!addr) return;
+  if ((intptr_t)addr == -1) return; /* hope never be used this address */
+
+  addr_page_index = find_page_index(addr);
   /* quick check 1: Address is quite likely to have been invalid. */
   if ((addr_page_index == -1)
       || page_free_p(addr_page_index)
       || (page_table[addr_page_index].bytes_used == 0)
       || (page_table[addr_page_index].gen != from_space)
       /* Skip if already marked dont_move. */
-      || (page_table[addr_page_index].dont_move != 0))
+      || (page_table[addr_page_index].dont_move != 0)) {
     return;
+  }
   ASSERT(!(page_table[addr_page_index].allocated & OPEN_REGION_PAGE_FLAG));
   /* (Now that we know that addr_page_index is in range, it's
    * safe to index into page_table[] with it.) */
@@ -2087,8 +2125,13 @@ static void preserve_pointer(void *addr)
     return;
 
   /* Filter out anything which is not in dynamic space. */
-  if (!(possibly_valid_dynamic_space_pointer(addr)))
+  if (!(possibly_valid_dynamic_space_pointer(addr))) {
+    /* if the addr is not in dynamic space then we don't have any way to
+       detect the pointer inside and there is no need to do it. 
+       TODO what is somebody allocate GCable memory into non GCable?
+    */
     return;
+  }
 
   /* Find the beginning of the region.  Note that there may be
    * objects in the region preceding the one that we were passed a
@@ -2103,7 +2146,6 @@ static void preserve_pointer(void *addr)
     ASSERT(page_table[first_page].gen == from_space);
     ASSERT(page_table[first_page].allocated == region_allocation);
   }
-
   /* Adjust any large objects before promotion as they won't be
    * copied after promotion. */
   if (page_table[first_page].large_object) {
@@ -2125,12 +2167,10 @@ static void preserve_pointer(void *addr)
     /* It may have moved to unboxed pages. */
     region_allocation = page_table[first_page].allocated;
   }
-
   /* Now work forward until the end of this contiguous area is found,
    * marking all pages as dont_move. */
   for (i = first_page; ;i++) {
     ASSERT(page_table[i].allocated == region_allocation);
-
     /* Mark the page static. */
     page_table[i].dont_move = 1;
 
@@ -2160,9 +2200,29 @@ static void preserve_pointer(void *addr)
 
   /* Check that the page is now static. */
   ASSERT(page_table[addr_page_index].dont_move != 0);
+#if 0
+ deep_inside:
+  /* Pointer can have pointer so check */
+  if (!page_unboxed_p(addr_page_index)) {
+    block_t *block = POINTER2BLOCK(addr);
+    /* check if the converted block is in dynamic space */
+    if (possibly_valid_dynamic_space_pointer(block) &&
+	BLOCK_MAY_VALID_P(block) /* simple sanity check */) {
+      size_t size = MEMORY_SIZE(block), i;
+      /* To detect cyclic... */
+      if (MEMORY_MARK(block) != current_mark) {
+	MEMORY_MARK(block) = current_mark;
+	for (i = 0; i < size; i++) {
+	  /* can this be word unit? */
+	  preserve_pointer(*(void**)((uintptr_t)addr + i));
+	}
+      }
+    }
+  }
+#endif
 }
 
-static void preserve_context_registers (os_context_t *c)
+static void preserve_context_registers(os_context_t *c)
 {
   /* TODO Should Cygwin be treated the same as Windows?*/
 #if defined(_WIN32) || defined(__CYGWIN__)
@@ -2211,6 +2271,7 @@ garbage_collect_generation(generation_index_t generation, int raise)
   page_index_t i;
   /* uintptr_t static_space_size; */
   GC_thread_context_t *th;
+  int si;			/* static index */
 
   ASSERT(generation <= GENERATIONS-1);
     /* The oldest generation can't be raised. */
@@ -2276,6 +2337,18 @@ garbage_collect_generation(generation_index_t generation, int raise)
       preserve_pointer(*ptr);
     }
   }
+  /* preserve static area */
+  for (si = 0; si < current_static_space_index; si++) {
+    void *start = static_spaces[si].start;
+    void *end = static_spaces[si].end;
+    void **ptr;
+    if (start && end) {
+      for (ptr = (void **)end -1; (void *)ptr >= start; ptr--) {
+	preserve_pointer(*ptr);
+      }
+    }
+  }
+
   /* FSHOW((stderr, */
   /* 	 "/scavenge_generations(%d %d)\n", generation+1, GENERATIONS)); */
   /* Scavenge all the rest of the roots. */
@@ -2475,6 +2548,9 @@ void GC_collect_garbage(int last_gen)
   gc_active_p = 0;
   large_allocation = 0;
 
+  /* flip mark */
+  current_mark = !current_mark;
+  /* write_generation_stats(stderr); */
   /* log_generation_stats(gc_logfile, "=== GC End ==="); */
 }
 
