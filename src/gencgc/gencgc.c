@@ -55,8 +55,6 @@ void add_static_root(void *start, void *end)
   static_spaces[index].end = end;
 }
 
-int current_mark = 0;
-
 static GC_thread_context_t root_context = {}; /* dummy context */
 GC_thread_context_t *all_threads = NULL;
 
@@ -1409,7 +1407,7 @@ general_alloc_internal(size_t reqbytes, int page_type_flag,
     new_block = (block_t *)(region->free_pointer);
     region->free_pointer = new_free_pointer;
     SET_MEMORY_SIZE(new_block, reqbytes);
-    return (void *)&new_block->body;        /* yup */
+    return ALLOCATED_POINTER(new_block);        /* yup */
   }
 
   /* We don't want to count nbytes against auto_gc_trigger unless we
@@ -1630,7 +1628,7 @@ static int is_scheme_pointer(void *p)
 
 /* this will be used in the included file so put forward declaration here */
 
-static void scavenge(void *start, intptr_t n_words);
+static void scavenge(intptr_t *start, intptr_t n_words);
 static void preserve_pointer(void *addr);
 #include "scavenge_dispatcher.c"
 
@@ -1654,7 +1652,7 @@ static void preserve_pointer(void *addr);
 
    NOTE: alignment might not be this much aligned.
  */
-void scavenge(void *start, intptr_t n_words)
+void scavenge(intptr_t *start, intptr_t n_words)
 {
   intptr_t *end = start + n_words;
   intptr_t *object_ptr;
@@ -1666,9 +1664,7 @@ void scavenge(void *start, intptr_t n_words)
 	 (intptr_t *)((uintptr_t)object_ptr + 
 		      n_bytes_scavenged + sizeof(memory_header_t))) {
     /* object == body so get body from block */
-    intptr_t object = (intptr_t)ALLOCATED_POINTER(object_ptr);
-    block_t *block;
-    size_t block_size;
+    intptr_t object = *(intptr_t *)ALLOCATED_POINTER(object_ptr);
     /* check first */
     if (MEMORY_FORWARDED(object_ptr))
       Sg_Panic("unexpect forwarding pointer in scavenge: %p, start=%p, n=%l\n",
@@ -1676,31 +1672,37 @@ void scavenge(void *start, intptr_t n_words)
     /* compute offset of block. block might be the same as object_ptr 
        TODO: what if the object is not in heap but allocated by something else?
      */
-    block = POINTER2BLOCK(object);
-    block_size = MEMORY_SIZE(block);
     /* FIXME this is not correct! */
     if (is_scheme_pointer((void *)object)) {
+      block_t *block = POINTER2BLOCK(object);
+      size_t block_size = MEMORY_SIZE(block);
       if (from_space_p((void *)object)) {
 	/* It currently points to old space. Check for a
 	 * forwarding pointer. */
 	if (MEMORY_FORWARDED(block)) {
 	  /* Yes, there's a forwarding pointer. */
 	  /* to keep the memory structure forward with header  */
-	  *object_ptr = (intptr_t)block;
+	  *object_ptr = MEMORY_FORWARDED_VALUE(block);
 	  n_bytes_scavenged = 1;
 	} else {
 	  /* Scavenge that pointer. */
-	  n_bytes_scavenged = dispatch_pointer((void **)object_ptr, block);
+	  dispatch_pointer((void **)object_ptr, block);
+	  /* n_bytes_scavenged =  */
 	}
       } else {
 	/* It points somewhere other than oldspace. Leave it
 	 * alone. */
-	n_bytes_scavenged = block_size;
+	/* n_bytes_scavenged = block_size; */
       }
     } else {
-      /* It's some sort of header object or another. */
-      n_bytes_scavenged = scavenge_general_pointer((void **)object_ptr, block);
+      if (possibly_valid_dynamic_space_pointer(object)) {
+	block_t *block = POINTER2BLOCK(object);	
+	/* It's some sort of header object or another. */
+	if (from_space_p(block))
+	  scavenge_general_pointer((void **)object_ptr, block);
+      }
     }
+    n_bytes_scavenged = MEMORY_SIZE(object_ptr);
   }
 }
 
@@ -2200,26 +2202,6 @@ void preserve_pointer(void *addr)
 
   /* Check that the page is now static. */
   ASSERT(page_table[addr_page_index].dont_move != 0);
-#if 0
- deep_inside:
-  /* Pointer can have pointer so check */
-  if (!page_unboxed_p(addr_page_index)) {
-    block_t *block = POINTER2BLOCK(addr);
-    /* check if the converted block is in dynamic space */
-    if (possibly_valid_dynamic_space_pointer(block) &&
-	BLOCK_MAY_VALID_P(block) /* simple sanity check */) {
-      size_t size = MEMORY_SIZE(block), i;
-      /* To detect cyclic... */
-      if (MEMORY_MARK(block) != current_mark) {
-	MEMORY_MARK(block) = current_mark;
-	for (i = 0; i < size; i++) {
-	  /* can this be word unit? */
-	  preserve_pointer(*(void**)((uintptr_t)addr + i));
-	}
-      }
-    }
-  }
-#endif
 }
 
 static void preserve_context_registers(os_context_t *c)
@@ -2263,6 +2245,44 @@ static void preserve_context_registers(os_context_t *c)
 #endif
 }
 
+/* salvage all pointers can be followed from the gen pages.*/
+static void salvage_generation(generation_index_t gen)
+{
+  /* the page index in the generation is reset when GC is started.
+     so we must check it from the beginning. */
+  page_index_t i;
+  for (i = 0; i < last_free_page; i++) {
+    if (page_table[i].gen == gen) {
+      /* OK we have reached the page */
+      /* The allocation always started from the region boundary.
+	 so first we need to get the region, then we can convert it
+	 to block. */
+      void *start = page_region_start(i);
+      block_t *block = (block_t *)start;
+      page_bytes_t checked = 0, limit = page_table[i].bytes_used;
+      /* fprintf(stderr, "salvage start: %p(%d bytes)\n", start, limit); */
+      while (checked < limit) {
+	uintptr_t next_offset;
+	void *obj = ALLOCATED_POINTER(block);
+	if (is_scheme_pointer(obj)) {
+	  /* FIXME: it's better to MOVE the pointer for better memory
+	     usage. but for now.*/
+	  preserve_scheme_pointer(obj);
+	} else {
+	  /* salvage generic pointer including Scheme pair. */
+	  size_t j, size = MEMORY_SIZE(block);
+	  for (j = 0; j < size; j++) {
+	    preserve_pointer(*(void **)((uintptr_t)obj + j));
+	  }
+	}
+	next_offset = BLOCK_SIZE(block);
+	block = (block_t *)((uintptr_t)block + next_offset);
+	checked +=  next_offset;
+      }
+      /* fprintf(stderr, "salvage end(%d bytes)\n", limit); */
+    }
+  }
+}
 
 static void
 garbage_collect_generation(generation_index_t generation, int raise)
@@ -2336,6 +2356,9 @@ garbage_collect_generation(generation_index_t generation, int raise)
     for (ptr = ((void **)th->cstackEnd) -1; ptr >= esp; ptr--) {
       preserve_pointer(*ptr);
     }
+    /* yes we know we need to save this.
+     NOTE: salvage will handle the content of thread, so keep it simple.*/
+    preserve_pointer(th->thread);
   }
   /* preserve static area */
   for (si = 0; si < current_static_space_index; si++) {
@@ -2348,6 +2371,10 @@ garbage_collect_generation(generation_index_t generation, int raise)
       }
     }
   }
+  /* Before scavenge, we need to salvage all pointers can be followed from
+     the ones we preserved. The original SBCL somehow doesn't consider it
+     but as long as I know we need to do it. */
+  /* salvage_generation(new_space); */
 
   /* FSHOW((stderr, */
   /* 	 "/scavenge_generations(%d %d)\n", generation+1, GENERATIONS)); */
@@ -2458,13 +2485,13 @@ void GC_collect_garbage(int last_gen)
 	raise = more;
       }
     }
-    /* FSHOW((stderr, */
-    /* 	   "starting GC of generation %d with raise=%d alloc=%d trig=%d GCs=%d\n", */
-    /* 	   gen, */
-    /* 	   raise, */
-    /* 	   generations[gen].bytes_allocated, */
-    /* 	   generations[gen].gc_trigger, */
-    /* 	   generations[gen].num_gc)); */
+    FSHOW((stderr,
+    	   "starting GC of generation %d with raise=%d alloc=%d trig=%d GCs=%d\n",
+    	   gen,
+    	   raise,
+    	   generations[gen].bytes_allocated,
+    	   generations[gen].gc_trigger,
+    	   generations[gen].num_gc));
 
     /* If an older generation is being filled, then update its
      * memory age. */
@@ -2547,10 +2574,9 @@ void GC_collect_garbage(int last_gen)
 
   gc_active_p = 0;
   large_allocation = 0;
+  need_gc = FALSE;
 
-  /* flip mark */
-  current_mark = !current_mark;
-  /* write_generation_stats(stderr); */
+  write_generation_stats(stderr);
   /* log_generation_stats(gc_logfile, "=== GC End ==="); */
 }
 
@@ -2599,7 +2625,7 @@ void GC_init()
 
     /* The page_table must be allocated using "calloc" to initialize
      * the page structures correctly. */
-    page_table = calloc(page_table_pages, sizeof(struct page));
+    page_table = calloc(page_table_pages, sizeof(page_t));
     ASSERT(page_table);
 
     heap_base = DYNAMIC_SPACE_START;
@@ -2629,7 +2655,8 @@ void GC_init()
 
     last_free_page = 0;
     /* to set auto_gc_trigger, later ... */
-    GC_collect_garbage(0);
+    /* GC_collect_garbage(0); */
+    auto_gc_trigger = 2000000 * 2;
     initialised = TRUE;
   }
 }

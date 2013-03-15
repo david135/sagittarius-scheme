@@ -217,10 +217,7 @@ extern void * general_alloc(size_t nbytes, int page_type_flag);
 typedef struct memory_header {
   uintptr_t forwarded : 1;
   uintptr_t has_finalizer: 1;	/* for some sanity check */
-  /* FIXME i'm not even sure if we can assume all function pointers are
-     on 8 byte boundary or not. */
-  uintptr_t mark: 1;
-  uintptr_t finalizer : N_WORD_BITS-3;
+  uintptr_t finalizer : N_WORD_BITS-2;
   uintptr_t size;
 } memory_header_t;
 typedef struct block {
@@ -228,25 +225,34 @@ typedef struct block {
   uintptr_t body;
 } block_t;
 
-extern int current_mark;
-#define SET_MEMORY_SIZE(block, size_)		\
-  do {						\
-    (block)->header.size = (size_);		\
-    (block)->header.forwarded = FALSE;		\
-    (block)->header.has_finalizer = FALSE;	\
-    (block)->header.finalizer = NULL;		\
-    (block)->header.mark = !current_mark;	\
+#define SET_MEMORY_SIZE(block, size_)			\
+  do {							\
+    memset(block, 0, size_ + sizeof(memory_header_t));	\
+    (block)->header.size = (size_);			\
+    (block)->header.forwarded = FALSE;			\
+    (block)->header.has_finalizer = FALSE;		\
+    (block)->header.finalizer = NULL;			\
   } while (0)
 #define BLOCK(obj)               ((block_t *)obj)
 #define MEMORY_SIZE(block)       BLOCK(block)->header.size
 #define MEMORY_FORWARDED(block)  BLOCK(block)->header.forwarded
-#define MEMORY_MARK(block)       BLOCK(block)->header.mark
+#define MEMORY_FINALIZER(block)  BLOCK(block)->header.finalizer
 #define ALLOCATED_POINTER(block) ((void *)&(BLOCK(block)->body))
 #define POINTER2BLOCK(p)    ((block_t*)(((uintptr_t)p)-sizeof(memory_header_t)))
 #define BLOCK_MAY_VALID_P(block)		\
   (BLOCK(block)->header.has_finalizer		\
    ? BLOCK(block)->header.finalizer != NULL	\
    : BLOCK(block)->header.finalizer == NULL)
+/* we can use finalizer location for forwarding pointer */
+#define SET_MEMORY_FORWARDED(block, pointer)			\
+  do {								\
+    MEMORY_FORWARDED(block) = TRUE;				\
+    MEMORY_FINALIZER(block) = ((uintptr_t)(pointer))>>2;	\
+  } while (0)
+#define MEMORY_FORWARDED_VALUE(block)			\
+  ((void *)(((uintptr_t)MEMORY_FINALIZER(block))<<2))
+
+#define BLOCK_SIZE(block) (MEMORY_SIZE(block) + sizeof(memory_header_t))
 
 /* debugging */
 #define QSHOW 1
