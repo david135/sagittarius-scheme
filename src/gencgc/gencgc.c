@@ -1155,23 +1155,37 @@ static inline void * gc_quick_alloc_unboxed(size_t nbytes)
 }
 
 
+static void * search_dynamic_space(void *pointer);
+/* unlikely with SBCL we can't determine if the pointer is
+   Scheme object or not plus, GC_malloc would allocate non
+   Scheme object as well. So we only checks if the pointer
+   is in dynamic space. */
+#define possibly_valid_dynamic_space_pointer search_dynamic_space
+
 static inline void *
-gc_general_copy_object(void *object, size_t nwords, int page_type_flag)
+gc_general_copy_object(void *object, size_t nbytes, int page_type_flag)
 {
   void *newobj;
+  block_t *block;
   /* TODO check */
-  /* ASSERT(is_lisp_pointer(object)); */
-  ASSERT(from_space_p(object));
-  ASSERT((nwords & 0x01) == 0);
+  ASSERT(possibly_valid_dynamic_space_pointer(object));
+  block = POINTER2BLOCK(object);
+  /* given object might not be in from space */
+  /* ASSERT(from_space_p(object)); */
+  /* ASSERT((nwords & 0x01) == 0); */
   /* Allocate space. */
-  newobj = gc_general_alloc(nwords * N_WORD_BYTES, page_type_flag, ALLOC_QUICK);
+  newobj = gc_general_alloc(nbytes, page_type_flag, ALLOC_QUICK);
   /* Copy the object.
      If the object contains a class as its header, however
      it will be copied anyway. So I *hope* it won't be a problem. */
-  memcpy(newobj, object, nwords * N_WORD_BYTES);
+  memcpy(newobj, object, nbytes);
+  /* copy finalizer if there is */
+  if (MEMORY_FINALIZER(block)) {
+    block_t *new_block = POINTER2BLOCK(newobj);
+    MEMORY_FINALIZER(new_block) = MEMORY_FINALIZER(block);
+  }
   return newobj;
 }
-
 
 /* Copy a large object. If the object is in a large object region then
  * it is simply promoted, else it is copied. If it's large enough then
@@ -1180,13 +1194,14 @@ gc_general_copy_object(void *object, size_t nwords, int page_type_flag)
  * Bignums and vectors may have shrunk. If the object is not copied
  * the space needs to be reclaimed, and the page_tables corrected. */
 static void *
-general_copy_large_object(void *object, size_t nwords, int boxedp)
+general_copy_large_object(void *object, size_t nbytes, int boxedp)
 {
   page_index_t first_page;
+  ASSERT(possibly_valid_dynamic_space_pointer(object));
   /* TODO how to check? */
   /* ASSERT(is_lisp_pointer(object)); */
-  ASSERT(from_space_p(object));
-  ASSERT((nwords & 0x01) == 0);
+  /* ASSERT(from_space_p(object)); */
+  /* ASSERT((nwords & 0x01) == 0); */
 
   /* Check whether it's a large object. */
   first_page = find_page_index((void *)object);
@@ -1211,7 +1226,7 @@ general_copy_large_object(void *object, size_t nwords, int boxedp)
 
     ASSERT(page_table[first_page].region_start_offset == 0);
     next_page = first_page;
-    remaining_bytes = nwords * N_WORD_BYTES;
+    remaining_bytes = nbytes; /* nwords * N_WORD_BYTES; */
 
     while (remaining_bytes > CARD_BYTES) {
       ASSERT(page_table[next_page].gen == from_space);
@@ -1284,40 +1299,39 @@ general_copy_large_object(void *object, size_t nwords, int boxedp)
       next_page++;
     }
 
-    generations[from_space].bytes_allocated -= nwords * N_WORD_BYTES
-      + bytes_freed;
-    generations[new_space].bytes_allocated += nwords * N_WORD_BYTES;
+    generations[from_space].bytes_allocated -= nbytes + bytes_freed;
+    generations[new_space].bytes_allocated += nbytes;
     bytes_allocated -= bytes_freed;
 
     /* Add the region to the new_areas if requested. */
     if (boxedp)
-      add_new_area(first_page, 0, nwords * N_WORD_BYTES);
+      add_new_area(first_page, 0, nbytes);
 
-    return(object);
+    return object;
 
   } else {
     /* it's the same ... */
-    return gc_general_copy_object(object, nwords,
+    return gc_general_copy_object(object, nbytes,
 				  (boxedp
 				   ? BOXED_PAGE_FLAG
 				   : UNBOXED_PAGE_FLAG));
   }
 }
 
-void * copy_large_object(void *object, size_t nwords)
+void * copy_large_object(void *object, size_t nbytes)
 {
-  return general_copy_large_object(object, nwords, TRUE);
+  return general_copy_large_object(object, nbytes, TRUE);
 }
 
-void * copy_large_unboxed_object(void *object, size_t nwords)
+void * copy_large_unboxed_object(void *object, size_t nbytes)
 {
-  return general_copy_large_object(object, nwords, FALSE);
+  return general_copy_large_object(object, nbytes, FALSE);
 }
 
 /* to copy unboxed objects */
-void * copy_unboxed_object(void *object, size_t nwords)
+void * copy_unboxed_object(void *object, size_t nbytes)
 {
-  return gc_general_copy_object(object, nwords, UNBOXED_PAGE_FLAG);
+  return gc_general_copy_object(object, nbytes, UNBOXED_PAGE_FLAG);
 }
 
 static int blockable_p(void *pointer)
@@ -1354,7 +1368,7 @@ void * gc_search_space(void *start, intptr_t words, void *pointer)
 
 /* a faster version for searching the dynamic space. This will work even
  * if the object is in a current allocation region. */
-static void * search_dynamic_space(void *pointer)
+void * search_dynamic_space(void *pointer)
 {
   page_index_t page_index = find_page_index(pointer);
   void *start;
@@ -1366,11 +1380,6 @@ static void * search_dynamic_space(void *pointer)
 
   return gc_search_space(start, (pointer+2)-start, pointer);
 }
-/* unlikely with SBCL we can't determine if the pointer is
-   Scheme object or not plus, GC_malloc would allocate non
-   Scheme object as well. So we only checks if the pointer
-   is in dynamic space. */
-#define possibly_valid_dynamic_space_pointer search_dynamic_space
 
 /* we don't check if the pointer is strictly there or not.
    all we want is actually *accessible* address
