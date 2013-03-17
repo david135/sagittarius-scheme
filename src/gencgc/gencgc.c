@@ -1664,7 +1664,7 @@ void scavenge(intptr_t *start, intptr_t n_words)
 	 (intptr_t *)((uintptr_t)object_ptr + 
 		      n_bytes_scavenged + sizeof(memory_header_t))) {
     /* object == body so get body from block */
-    intptr_t object = *(intptr_t *)ALLOCATED_POINTER(object_ptr);
+    intptr_t object = (intptr_t)ALLOCATED_POINTER(object_ptr);
     /* check first */
     if (MEMORY_FORWARDED(object_ptr))
       Sg_Panic("unexpect forwarding pointer in scavenge: %p, start=%p, n=%l\n",
@@ -2252,7 +2252,7 @@ static void salvage_generation(generation_index_t gen)
      so we must check it from the beginning. */
   page_index_t i;
   for (i = 0; i < last_free_page; i++) {
-    if (page_table[i].gen == gen) {
+    if (page_table[i].gen == gen && page_table[i].dont_move) {
       /* OK we have reached the page */
       /* The allocation always started from the region boundary.
 	 so first we need to get the region, then we can convert it
@@ -2265,11 +2265,10 @@ static void salvage_generation(generation_index_t gen)
 	uintptr_t next_offset;
 	void *obj = ALLOCATED_POINTER(block);
 	if (is_scheme_pointer(obj)) {
-	  /* FIXME: it's better to MOVE the pointer for better memory
-	     usage. but for now.*/
-	  preserve_scheme_pointer(obj);
+	  salvage_scheme_pointer(NULL, obj);
 	} else {
-	  /* salvage generic pointer including Scheme pair. */
+	  /* salvage generic pointer including Scheme pair. 
+	     TOOD move it.*/
 	  size_t j, size = MEMORY_SIZE(block);
 	  for (j = 0; j < size; j++) {
 	    preserve_pointer(*(void **)((uintptr_t)obj + j));
@@ -2360,6 +2359,7 @@ garbage_collect_generation(generation_index_t generation, int raise)
      NOTE: salvage will handle the content of thread, so keep it simple.*/
     preserve_pointer(th->thread);
   }
+
   /* preserve static area */
   for (si = 0; si < current_static_space_index; si++) {
     void *start = static_spaces[si].start;
@@ -2371,10 +2371,11 @@ garbage_collect_generation(generation_index_t generation, int raise)
       }
     }
   }
+
   /* Before scavenge, we need to salvage all pointers can be followed from
      the ones we preserved. The original SBCL somehow doesn't consider it
      but as long as I know we need to do it. */
-  /* salvage_generation(new_space); */
+  salvage_generation(new_space);
 
   /* FSHOW((stderr, */
   /* 	 "/scavenge_generations(%d %d)\n", generation+1, GENERATIONS)); */
@@ -2656,7 +2657,7 @@ void GC_init()
     last_free_page = 0;
     /* to set auto_gc_trigger, later ... */
     /* GC_collect_garbage(0); */
-    auto_gc_trigger = 2000000 * 2;
+    auto_gc_trigger = 2000000;
     initialised = TRUE;
   }
 }
