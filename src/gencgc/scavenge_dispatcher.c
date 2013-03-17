@@ -122,7 +122,7 @@ static void salvage_hashtable(void **where, SgObject obj)
   SgHashCore *core = SG_HASHTABLE_CORE(obj);
   SgHashIter itr;
   SgHashEntry *e;
-  if (*where != obj) {
+  if (where && *where != obj) {
     /* TODO copy given hashtable here */
     core = SG_HASHTABLE_CORE(obj);
   }
@@ -140,8 +140,7 @@ static void salvage_hashtable(void **where, SgObject obj)
     page_index_t eindex = find_page_index(e);
     if (!page_table[eindex].dont_move) {
       /* not on stack so copy it */
-      e = gc_general_copy_object(e, sizeof(SgHashEntry)/N_WORD_BYTES,
-				 BOXED_PAGE_FLAG);
+      e = gc_general_copy_object(e, sizeof(SgHashEntry), BOXED_PAGE_FLAG);
     }
     if (is_scheme_pointer(SG_HASH_ENTRY_KEY(e))) {
       salvage_scheme_pointer(&e->key, SG_HASH_ENTRY_KEY(e));
@@ -254,12 +253,8 @@ void salvage_scheme_pointer(void **where, void *obj)
       /* copy it */
       int i;
       block_t *block = POINTER2BLOCK(obj);
-      SgObject z = gc_general_alloc(MEMORY_SIZE(block), UNBOXED_PAGE_FLAG,
-				    ALLOC_QUICK);
-      SG_SET_CLASS(z, SG_CLASS_STRING);
-      for (i = 0; i < SG_STRING_SIZE(obj); i++) {
-	SG_STRING_VALUE_AT(z, i) = SG_STRING_VALUE_AT(obj, i);
-      }
+      SgObject z = copy_large_unboxed_object(obj, MEMORY_SIZE(block));
+      SET_MEMORY_FORWARDED(obj, z);
       *where = z;
     }
   }
