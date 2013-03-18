@@ -47,6 +47,10 @@
 #include <sagittarius/weak.h>
 
 
+/* TODO move this somewhere */
+static void salvage_scheme_pointer(void **where, void *obj);
+
+#if 0
 static void scav_hashtable(void **where, SgObject obj)
 {
   SgHashIter itr;
@@ -60,66 +64,38 @@ static void scav_hashtable(void **where, SgObject obj)
     scavenge(SG_HASH_ENTRY_VALUE(e), 1);
   }
 }
+#endif
 
-static int scavenge_general_pointer(void **where, block_t *block);
+static void scavenge_general_pointer(void **where, void *obj);
 /*
   dispatch scavenge process to proper procedures.
   the block contains Scheme object so that we can see what we need to
   move.
  */
-static int dispatch_pointer(void **where, block_t *block)
+static void dispatch_pointer(void **where, void *obj)
 {
-  SgObject obj = SG_OBJ(ALLOCATED_POINTER(block));
-  if (SG_HASHTABLE_P(obj)) {
-    scav_hashtable(where, obj);
-  }
-  /* return MEMORY_SIZE(block); */
-  
-  /* if (SG_STRINGP(obj)) { */
-  /*   SgObject s = gc_alloc_unboxed(sizeof(SgString) +  */
-  /* 				  (sizeof(SgChar) * (SG_STRING_SIZE(obj)))); */
-  /*   int i; */
-  /*   SG_SET_CLASS(s, SG_CLASS_STRING); */
-  /*   for (i = 0; i < SG_STRING_SIZE(obj); i++) { */
-  /*     SG_STRING_VALUE_AT(s, i) = SG_STRING_VALUE_AT(obj, i); */
-  /*   } */
-  /*   *where = POINTER2BLOCK(s); */
-  /* } */
-  else {
-    scavenge_general_pointer(where, block);
-  }
+  salvage_scheme_pointer(where, obj);
 }
 
 /*
   scavenge general pointer.
   We need to check if the target pointer contains pointer.
  */
-void * trans_general_pointer(block_t *block)
+void scavenge_general_pointer(void **where, void *obj)
 {
-  return gc_general_copy_object(block, BLOCK_SIZE(block), BOXED_PAGE_FLAG);
-}
-
-int scavenge_general_pointer(void **where, block_t *block)
-{
-  int unboxedp = page_unboxed_p(find_page_index((void *)block));
+  int unboxedp = page_unboxed_p(find_page_index(obj));
+  void *first;
   if (unboxedp) {
-    /* OK block doesn't contain any pointer so we can simply remove it */
-    return MEMORY_SIZE(block);
+    first = copy_large_unboxed_object(obj);
   } else {
     /* now, we might have Scheme pair, so how should we detect it? */
-    void *first, **first_pointer;
-    first_pointer = ALLOCATED_POINTER(block);
-    first = trans_general_pointer(block);
-    if (first != block) {
-      SET_MEMORY_FORWARDED(block, first);
-      *where = first;
-    }
-    return MEMORY_SIZE(block);
+    first = copy_object(obj);
+  }
+  if (first != obj) {
+    SET_MEMORY_FORWARDED(POINTER2BLOCK(obj), first);
+    *where = first;
   }
 }
-
-/* TODO move this somewhere */
-static void salvage_scheme_pointer(void **where, void *obj);
 
 #define copy_root_object(where, obj, copier)			\
   do {								\
@@ -189,7 +165,7 @@ static void salvage_hashtable(void **where, SgObject obj)
 	 not the same size of it. */
       SgHashEntry *z = copy_object(e);
       SET_MEMORY_FORWARDED(POINTER2BLOCK(e), z);
-      Sg_HashCoreReplaseEntry(core, z->key, z);
+      Sg_HashCoreReplaseEntry(core, (intptr_t)z->key, z);
       e = z;
     }
     salvage_entry_key(e);
@@ -281,7 +257,6 @@ static void salvage_vm(void **where, void *obj)
 {
   SgVM *vm;
   void **stack;
-  page_index_t index = find_page_index(obj);
   intptr_t sp_diff, fp_diff;
   copy_root_object(where, obj, copy_object);
   vm = SG_VM(obj);

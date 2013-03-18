@@ -823,6 +823,9 @@ void gc_alloc_update_page_tables(int page_type_flag,
 
     region_size = void_diff(alloc_region->free_pointer, 
 			    alloc_region->start_addr);
+    if (region_size == 2445) {
+      fprintf(stderr, "something is wrong\n");
+    }
     bytes_allocated += region_size;
     generations[gc_alloc_generation].bytes_allocated += region_size;
 
@@ -1708,15 +1711,18 @@ void scavenge(intptr_t *start, intptr_t n_words)
 	 (intptr_t *)((uintptr_t)object_ptr + 
 		      n_bytes_scavenged + sizeof(memory_header_t))) {
     /* object == body so get body from block */
-    intptr_t object = (intptr_t)ALLOCATED_POINTER(object_ptr);
+    intptr_t object = *(intptr_t *)ALLOCATED_POINTER(object_ptr);
     /* check first */
-    /* if (MEMORY_FORWARDED(object_ptr)) */
-    /*   Sg_Panic("unexpect forwarding pointer in scavenge: %p, start=%p, n=%l\n", */
-    /* 	       object_ptr, start, n_words); */
+    if (MEMORY_FORWARDED(object_ptr))
+      Sg_Panic("unexpect forwarding pointer in scavenge: %p, start=%p, n=%l\n",
+    	       object_ptr, start, n_words);
     /* compute offset of block. block might be the same as object_ptr 
        TODO: what if the object is not in heap but allocated by something else?
      */
     /* FIXME this is not correct! */
+    /* first save the block size since scavenge can move
+       the pointer and forwading pointer only have 1 word. */
+    n_bytes_scavenged = MEMORY_SIZE(object_ptr);
     if (is_scheme_pointer((void *)object)) {
       block_t *block = POINTER2BLOCK(object);
       size_t block_size = MEMORY_SIZE(block);
@@ -1726,27 +1732,23 @@ void scavenge(intptr_t *start, intptr_t n_words)
 	if (MEMORY_FORWARDED(block)) {
 	  /* Yes, there's a forwarding pointer. */
 	  /* to keep the memory structure forward with header  */
-	  *object_ptr = MEMORY_FORWARDED_VALUE(block);
-	  n_bytes_scavenged = 1;
+	  *(void **)ALLOCATED_POINTER(object_ptr) =
+	    MEMORY_FORWARDED_VALUE(block);
+	  /* now object_ptr has a word size */
+	  MEMORY_SIZE(object_ptr) = N_WORD_BYTES;
 	} else {
 	  /* Scavenge that pointer. */
-	  dispatch_pointer((void **)object_ptr, block);
-	  /* n_bytes_scavenged =  */
+	  dispatch_pointer((void **)ALLOCATED_POINTER(object_ptr), object);
 	}
-      } else {
-	/* It points somewhere other than oldspace. Leave it
-	 * alone. */
-	/* n_bytes_scavenged = block_size; */
       }
     } else {
       if (possibly_valid_dynamic_space_pointer(object)) {
-	block_t *block = POINTER2BLOCK(object);	
-	/* It's some sort of header object or another. */
-	if (from_space_p(block))
-	  scavenge_general_pointer((void **)object_ptr, block);
+	if (from_space_p(object)) {
+	  scavenge_general_pointer((void **)ALLOCATED_POINTER(object_ptr),
+				   object);
+	}
       }
     }
-    n_bytes_scavenged = MEMORY_SIZE(object_ptr);
   }
 }
 
@@ -2058,6 +2060,10 @@ static void scavenge_newspace_generation(generation_index_t generation)
 	page_index_t page = (*previous_new_areas)[i].page;
 	size_t offset = (*previous_new_areas)[i].offset;
 	size_t size = (*previous_new_areas)[i].size / N_WORD_BYTES;
+	if ((*previous_new_areas)[i].size % N_WORD_BYTES != 0) {
+	  volatile struct new_area *t = &(*previous_new_areas)[i];
+	  fprintf(stderr, "%d\n", t->size);
+	}
 	ASSERT((*previous_new_areas)[i].size % N_WORD_BYTES == 0);
 	scavenge(page_address(page)+offset, size);
       }
@@ -2439,7 +2445,7 @@ garbage_collect_generation(generation_index_t generation, int raise)
   /* Before scavenge, we need to salvage all pointers can be followed from
      the ones we preserved. The original SBCL somehow doesn't consider it
      but as long as I know we need to do it. */
-  salvage_generation(new_space);
+  /* salvage_generation(new_space); */
 
   /* FSHOW((stderr, */
   /* 	 "/scavenge_generations(%d %d)\n", generation+1, GENERATIONS)); */
