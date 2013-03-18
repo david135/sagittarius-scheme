@@ -593,7 +593,7 @@ void Sg_HashCoreInitGeneral(SgHashCore *core,
 }
 
 int Sg_HashCoreTypeToProcs(SgHashType type, SgHashProc **hasher,
-			    SgHashCompareProc **compare)
+			   SgHashCompareProc **compare)
 {
   SearchProc *access;
   return hash_core_predef_procs(type, &access, hasher, compare);
@@ -605,6 +605,35 @@ SgHashEntry* Sg_HashCoreSearch(SgHashCore *table, intptr_t key,
   SearchProc *p = (SearchProc*)table->access;
   return (SgHashEntry*)p(table, key, op);
 }
+
+#ifndef USE_BOEHM_GC
+/* FIXME it's the same as general access */
+/* This API must not be called from anywhere but GC */
+/* The new_entry is copied by copy_object so it should contain all
+   the necessary pointers. */
+void Sg_HashCoreReplaseEntry(SgHashCore *table, intptr_t key,
+			     SgHashEntry *new_entry)
+{
+  uint32_t hashval, index;
+  Entry *e, *p, **buckets, *ne = (Entry *)new_entry;
+
+  hashval = table->hasher(table, key);
+  index = HASH2INDEX(table->bucketCount, table->bucketsLog2Count, hashval);
+  buckets = BUCKETS(table);
+
+  for (e = buckets[index], p = NULL; e; p = e, e = e->next) {
+    if (table->compare(table, key, e->key)) {
+      if (p) {
+	/* re chain it */
+	p->next = ne;
+      } else {
+	buckets[index] = ne;
+      }
+    }
+  }
+  /* should not be happened */
+}
+#endif
 
 void Sg_HashCoreCopy(SgHashCore *dst, const SgHashCore *src)
 {
@@ -986,6 +1015,7 @@ unsigned int round2up(unsigned int val)
   }
   return n;
 }
+
 /*
   end of file
   Local Variables:

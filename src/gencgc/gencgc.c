@@ -1197,6 +1197,7 @@ static void *
 general_copy_large_object(void *object, size_t nbytes, int boxedp)
 {
   page_index_t first_page;
+  block_t *block = POINTER2BLOCK(object);
   ASSERT(possibly_valid_dynamic_space_pointer(object));
   /* TODO how to check? */
   /* ASSERT(is_lisp_pointer(object)); */
@@ -1205,7 +1206,10 @@ general_copy_large_object(void *object, size_t nbytes, int boxedp)
 
   /* Check whether it's a large object. */
   first_page = find_page_index((void *)object);
-  ASSERT(first_page >= 0);
+  if (first_page < 0 || page_table[first_page].dont_move) {
+    /* either not on dynamic space or can't move so just return */
+    return object;
+  }
 
   if (page_table[first_page].large_object) {
     /* Promote the object. Note: Unboxed objects may have been
@@ -1226,6 +1230,7 @@ general_copy_large_object(void *object, size_t nbytes, int boxedp)
 
     ASSERT(page_table[first_page].region_start_offset == 0);
     next_page = first_page;
+    nbytes += sizeof(memory_header_t); /* add offset bytes */
     remaining_bytes = nbytes; /* nwords * N_WORD_BYTES; */
 
     while (remaining_bytes > CARD_BYTES) {
@@ -1318,20 +1323,34 @@ general_copy_large_object(void *object, size_t nbytes, int boxedp)
   }
 }
 
-void * copy_large_object(void *object, size_t nbytes)
+/* Following procedures assume given object is on dynamic space */
+void * copy_large_object(void *object)
 {
-  return general_copy_large_object(object, nbytes, TRUE);
+  block_t *block = POINTER2BLOCK(object);
+  return general_copy_large_object(object, MEMORY_SIZE(block), TRUE);
 }
 
-void * copy_large_unboxed_object(void *object, size_t nbytes)
+void * copy_large_unboxed_object(void *object)
 {
-  return general_copy_large_object(object, nbytes, FALSE);
+  block_t *block = POINTER2BLOCK(object);
+  return general_copy_large_object(object, MEMORY_SIZE(block), FALSE);
 }
 
 /* to copy unboxed objects */
-void * copy_unboxed_object(void *object, size_t nbytes)
+void * copy_object(void *object)
 {
-  return gc_general_copy_object(object, nbytes, UNBOXED_PAGE_FLAG);
+  block_t *block = POINTER2BLOCK(object);
+  return gc_general_copy_object(object, MEMORY_SIZE(block),
+				BOXED_PAGE_FLAG);
+}
+
+
+/* to copy unboxed objects */
+void * copy_unboxed_object(void *object)
+{
+  block_t *block = POINTER2BLOCK(object);
+  return gc_general_copy_object(object, MEMORY_SIZE(block),
+				UNBOXED_PAGE_FLAG);
 }
 
 static int blockable_p(void *pointer)
@@ -1635,10 +1654,26 @@ static int is_scheme_pointer(void *p)
   }
 }
 
-/* this will be used in the included file so put forward declaration here */
-
+/* this will be used in the included file so put forward declaration
+   here */
 static void scavenge(intptr_t *start, intptr_t n_words);
 static void preserve_pointer(void *addr);
+/* we need to salvage weak pointers *AFTER* scavenge, so this is the
+   save pointer for it. */
+static inline int forwarding_pointer_p(void *p)
+{
+  block_t *block = POINTER2BLOCK(p);
+  ASSERT(possibly_valid_dynamic_space_pointer(block));
+  return MEMORY_FORWARDED(block);
+}
+
+static inline int survived_gc_yet(void *p)
+{
+  return (!is_scheme_pointer(p) || !from_space_p(p) ||
+	  forwarding_pointer_p(p));
+}
+
+static void *weak_hashtables = NULL;
 #include "scavenge_dispatcher.c"
 
 /* 
@@ -1675,9 +1710,9 @@ void scavenge(intptr_t *start, intptr_t n_words)
     /* object == body so get body from block */
     intptr_t object = (intptr_t)ALLOCATED_POINTER(object_ptr);
     /* check first */
-    if (MEMORY_FORWARDED(object_ptr))
-      Sg_Panic("unexpect forwarding pointer in scavenge: %p, start=%p, n=%l\n",
-	       object_ptr, start, n_words);
+    /* if (MEMORY_FORWARDED(object_ptr)) */
+    /*   Sg_Panic("unexpect forwarding pointer in scavenge: %p, start=%p, n=%l\n", */
+    /* 	       object_ptr, start, n_words); */
     /* compute offset of block. block might be the same as object_ptr 
        TODO: what if the object is not in heap but allocated by something else?
      */
@@ -2217,6 +2252,12 @@ static void preserve_context_registers(os_context_t *c)
 {
   /* TODO Should Cygwin be treated the same as Windows?*/
 #if defined(_WIN32) || defined(__CYGWIN__)
+# define call_preserve_pointer(reg)		\
+  do {						\
+    os_context_register_t *z = reg;		\
+    preserve_pointer((void **)z, (void *)*z);	\
+  } while (0)
+
 # if defined __i686__
   preserve_pointer((void*)*os_context_register_addr(c,reg_EAX));
   preserve_pointer((void*)*os_context_register_addr(c,reg_ECX));
@@ -2268,7 +2309,12 @@ static void salvage_generation(generation_index_t gen)
 	 to block. */
       void *start = page_region_start(i);
       block_t *block = (block_t *)start;
-      page_bytes_t checked = 0, limit = page_table[i].bytes_used;
+      page_bytes_t checked = 0, limit = 0;
+      /* calculate total amount of bytes */
+      page_index_t si = find_page_index(start);
+      while (si <= i) {
+	limit += page_table[si++].bytes_used;
+      } 
       /* fprintf(stderr, "salvage start: %p(%d bytes)\n", start, limit); */
       while (checked < limit) {
 	uintptr_t next_offset;
@@ -2280,7 +2326,13 @@ static void salvage_generation(generation_index_t gen)
 	     TOOD move it.*/
 	  size_t j, size = MEMORY_SIZE(block);
 	  for (j = 0; j < size; j++) {
-	    preserve_pointer(*(void **)((uintptr_t)obj + j));
+	    /* do last resort */
+	    void *p = *(void **)((uintptr_t)obj + j);
+	    if (is_scheme_pointer(p)) {
+	      salvage_scheme_pointer((void **)((uintptr_t)obj + j), p);
+	    } else {
+	      preserve_pointer(p);
+	    }
 	  }
 	}
 	next_offset = BLOCK_SIZE(block);
@@ -2364,12 +2416,10 @@ garbage_collect_generation(generation_index_t generation, int raise)
     for (ptr = ((void **)th->cstackEnd) -1; ptr >= esp; ptr--) {
       preserve_pointer(*ptr);
     }
-    /* yes we know we need to save this.
-     NOTE: salvage will handle the content of thread, so keep it simple.*/
-    preserve_pointer(th->thread);
   }
 
-  /* preserve static area */
+  /* preserve & salvage static area.
+   I'm not quite sure if we can do this simultaneously. */
   for (si = 0; si < current_static_space_index; si++) {
     void *start = static_spaces[si].start;
     void *end = static_spaces[si].end;
@@ -2380,7 +2430,12 @@ garbage_collect_generation(generation_index_t generation, int raise)
       }
     }
   }
-
+  /* If the thread is on stack, the it's already preserved,
+     otherwise it's no where so we can simply move.
+     TODO: am I correct? */
+  /* for_each_thread(th) { */
+  /*   salvage_scheme_pointer(&th->thread, th->thread); */
+  /* } */
   /* Before scavenge, we need to salvage all pointers can be followed from
      the ones we preserved. The original SBCL somehow doesn't consider it
      but as long as I know we need to do it. */
@@ -2399,6 +2454,9 @@ garbage_collect_generation(generation_index_t generation, int raise)
   /* Finally scavenge the new_space generation. Keep going until no
    * more objects are moved into the new generation */ 
   scavenge_newspace_generation(new_space);
+
+  /* OK now we need to check if the weak pointers survived. */
+  scan_weak_hashtables();
 
   /* FSHOW((stderr, "/gc_alloc_update_all_page_tables()\n")); */
   /* Flush the current regions, updating the tables. */
