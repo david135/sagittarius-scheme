@@ -230,7 +230,10 @@ SgVM* Sg_NewVM(SgVM *proto, SgObject name)
   Sg_GetTimeOfDay(&sec, &usec);
   v->uptimeSec = sec;
   v->uptimeUsec = usec;
-
+#ifndef USE_BOEHM_GC
+  /* initialise thread context */
+  GC_init_context(&v->context, v);
+#endif
   Sg_RegisterFinalizer(SG_OBJ(v), vm_finalize, NULL);
   return v;
 }
