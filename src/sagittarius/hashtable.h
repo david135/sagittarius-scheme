@@ -133,6 +133,15 @@ SG_EXTERN void Sg_HashCoreCopy(SgHashCore *dst,
 
 SG_EXTERN void Sg_HashCoreClear(SgHashCore *ht, int k);
 
+
+#ifndef USE_BOEHM_GC
+/* to update entry object itself this should not be used from
+   outside of the world. */
+SG_EXTERN void Sg_HashCoreReplaseEntry(SgHashCore *table, intptr_t key,
+				       SgHashEntry *e);
+#endif
+
+
 /* iterator */
 SG_EXTERN void Sg_HashIterInit(SgHashCore *table,
 			       SgHashIter *itr);
