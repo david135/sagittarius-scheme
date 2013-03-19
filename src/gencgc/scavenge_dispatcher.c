@@ -83,13 +83,23 @@ static void dispatch_pointer(void **where, void *obj)
  */
 void scavenge_general_pointer(void **where, void *obj)
 {
-  int unboxedp = page_unboxed_p(find_page_index(obj));
+  page_index_t index = find_page_index(obj);
+  int unboxedp = page_unboxed_p(index);
+  int large_p = page_table[index].large_object;
   void *first;
   if (unboxedp) {
-    first = copy_large_unboxed_object(obj);
+    if (large_p) {
+      first = copy_large_unboxed_object(obj);
+    } else {
+      first = copy_unboxed_object(obj);
+    }
   } else {
-    /* now, we might have Scheme pair, so how should we detect it? */
-    first = copy_object(obj);
+    if (large_p) {
+      first = copy_large_object(obj);
+    } else {
+      /* now, we might have Scheme pair, so how should we detect it? */
+      first = copy_object(obj);
+    }
   }
   if (first != obj) {
     SET_MEMORY_FORWARDED(POINTER2BLOCK(obj), first);
@@ -172,36 +182,48 @@ static void salvage_hashtable(void **where, SgObject obj)
     salvage_entry_value(e);
   }
 }
-#if 0
-static void salvage_port(SgObject obj)
+
+static void salvage_port(void **where, SgObject obj)
 {
   SgBinaryPort *bp;
   SgTextualPort *tp;
-  salvage_pointer(SG_PORT(obj)->readtable);
-  salvage_scheme_pointer(SG_PORT(obj)->reader);
-  salvage_scheme_pointer(SG_PORT(obj)->loadPath);
-  salvage_scheme_pointer(SG_PORT(obj)->previousPort);
+  copy_root_object(where, obj, copy_object);
+  /* FIXME, readtable can contain scheme pointer */
+  if (SG_PORT(obj)->readtable) {
+    SG_PORT(obj)->readtable = copy_object(SG_PORT(obj)->readtable);
+  }
+  salvage_scheme_pointer(&SG_PORT(obj)->reader, SG_PORT(obj)->reader);
+  salvage_scheme_pointer(&SG_PORT(obj)->loadPath, SG_PORT(obj)->loadPath);
+  salvage_scheme_pointer(&SG_PORT(obj)->previousPort,
+			 SG_PORT(obj)->previousPort);
   if (SG_BINARY_PORTP(obj)) {
     bp = SG_BINARY_PORT(obj);
   binary_port:
     if (!bp) return;
     switch (bp->type) {
     case SG_FILE_BINARY_PORT_TYPE:
-      salvage_scheme_pointer(bp->src.file);
+      salvage_scheme_pointer(&bp->src.file, bp->src.file);
       break;
     case SG_BYTE_ARRAY_BINARY_PORT_TYPE:
       if (!SG_INPORTP(obj)) {
 	byte_buffer *p;
-	for (p = bp->src.obuf.start; p && p != bp->src.obuf.current;
-	     p = p->next) 
-	  salvage_pointer(p);
+	for (p = bp->src.obuf.start;
+	     p && p != bp->src.obuf.current;
+	     p = p->next) {
+	  byte_buffer *t;
+	  t = (byte_buffer *)copy_unboxed_object(p);
+	  t->next = p->next;
+	}
       } else {
 	/* bytevector doesn't have pointer so just like this is fine */
-	salvage_pointer(bp->src.buffer.bvec);
+	salvage_scheme_pointer(&bp->src.buffer.bvec,
+			       bp->src.buffer.bvec);
       }
       break;
     case SG_CUSTOM_BINARY_PORT_TYPE:
-      salvage_pointer(bp->src.custom.data);
+      if (bp->src.custom.data) {
+	bp->src.custom.data = copy_object(bp->src.custom.data);
+      }
       break;
     }
   } else if (SG_TEXTUAL_PORTP(obj)) {
@@ -210,35 +232,43 @@ static void salvage_port(SgObject obj)
     if (!tp) return;
     switch (tp->type) {
     case SG_TRANSCODED_TEXTUAL_PORT_TYPE:
-      salvage_scheme_pointer(tp->src.transcoded.transcoder);
-      salvage_scheme_pointer(tp->src.transcoded.port);
+      salvage_scheme_pointer(&tp->src.transcoded.transcoder,
+			     tp->src.transcoded.transcoder);
+      salvage_scheme_pointer(&tp->src.transcoded.port,
+			     tp->src.transcoded.port);
       break;
     case SG_STRING_TEXTUAL_PORT_TYPE:
       if (!SG_INPORTP(obj)) {
 	char_buffer *p;
 	for (p = tp->src.ostr.start; p && p != tp->src.ostr.current;
-	     p = p->next) 
-	  salvage_pointer(p);
+	     p = p->next) {
+	  char_buffer *t;
+	  t = (char_buffer *)copy_unboxed_object(p);
+	  t->next = p->next;
+	}
       } else {
 	/* bytevector doesn't have pointer so just like this is fine */
-	salvage_pointer(tp->src.buffer.str);
+	salvage_scheme_pointer(&tp->src.buffer.str,
+			       tp->src.buffer.str);
       }
       break;
     case SG_CUSTOM_TEXTUAL_PORT_TYPE:
-      salvage_pointer(tp->src.custom.data);
+      if (tp->src.custom.data) {
+	tp->src.custom.data = copy_object(tp->src.custom.data);
+      }
       break;
     }
   } else if (SG_CUSTOM_PORTP(obj)) {
     SgCustomPort *cp = SG_CUSTOM_PORT(obj);
     if (!cp) return;
-    salvage_scheme_pointer(cp->id);
-    salvage_scheme_pointer(cp->getPosition);
-    salvage_scheme_pointer(cp->setPosition);
-    salvage_scheme_pointer(cp->close);
-    salvage_scheme_pointer(cp->read);
-    salvage_scheme_pointer(cp->write);
-    salvage_scheme_pointer(cp->ready);
-    salvage_pointer(cp->buffer);
+    salvage_scheme_pointer(&cp->id, cp->id);
+    salvage_scheme_pointer(&cp->getPosition, cp->getPosition);
+    salvage_scheme_pointer(&cp->setPosition, cp->setPosition);
+    salvage_scheme_pointer(&cp->close, cp->close);
+    salvage_scheme_pointer(&cp->read, cp->read);
+    salvage_scheme_pointer(&cp->write, cp->write);
+    salvage_scheme_pointer(&cp->ready, cp->ready);
+    salvage_scheme_pointer(&cp->buffer, cp->buffer);
     switch (cp->type) {
     case SG_BINARY_CUSTOM_PORT_TYPE:
       bp = SG_CUSTOM_BINARY_PORT(obj);
@@ -251,7 +281,6 @@ static void salvage_port(SgObject obj)
     Sg_Panic("unknown port");
   }
 }
-#endif
 
 static void salvage_vm(void **where, void *obj)
 {
@@ -290,23 +319,41 @@ static void salvage_vm(void **where, void *obj)
   }
 }
 
+static void * trans_list(void *obj)
+{
+  block_t *block = POINTER2BLOCK(obj);
+  SgObject cdr = SG_CDR(obj), cons;
+  /* copy 'object' */
+  cons = gc_general_alloc(sizeof(SgPair), BOXED_PAGE_FLAG, ALLOC_QUICK);
+  SG_SET_CAR(cons, SG_CAR(obj));
+  SG_SET_CDR(cons, cdr);	/* updated later */
+
+  SET_MEMORY_FORWARDED(block, cons);
+
+  while (TRUE) {
+    SgObject newcdr;
+    block = POINTER2BLOCK(cdr);    
+    if (!SG_PAIRP(cdr) || !from_space_p(cdr) || MEMORY_FORWARDED(block))
+      break;
+
+    newcdr = gc_general_alloc(sizeof(SgPair), BOXED_PAGE_FLAG, ALLOC_QUICK);
+    SG_SET_CAR(newcdr, SG_CAR(cdr));
+    SG_SET_CDR(newcdr, SG_CDR(cdr));
+    cdr = SG_CDR(cdr);
+    SET_MEMORY_FORWARDED(block, newcdr);
+  }
+  return cons;
+}
+
 static void salvage_list(void **where, void *obj)
 {
-#if 0
-  copy_root_object(where, obj, copy_object);
-  if (SG_PTRP(SG_CAR(obj))) {
-    block_t *car_b = POINTER2BLOCK(SG_CAR(obj));
-    if (!MEMORY_FORWARDED(car_b)) {
-      salvage_scheme_pointer(&SG_CAR(obj), SG_CAR(obj));
-    }
+  page_index_t index = find_page_index(obj);
+  if (!page_table[index].dont_move) {
+    block_t *block = POINTER2BLOCK(obj);
+    void *first = trans_list(obj);
+    SET_MEMORY_FORWARDED(block, first);
+    *where = first;
   }
-  if (SG_PTRP(SG_CDR(obj))) {
-    block_t *cdr_b = POINTER2BLOCK(SG_CAR(obj));
-    if (!MEMORY_FORWARDED(cdr_b)) {
-      salvage_scheme_pointer(&SG_CDR(obj), SG_CDR(obj));
-    }
-  }
-#endif
 }
 
 static void salvage_library(void **where, void *obj)
@@ -330,13 +377,18 @@ static void salvage_library(void **where, void *obj)
  */
 void salvage_scheme_pointer(void **where, void *obj)
 {
+  page_index_t index;
  reent:
   if (!obj) {
     return;
   }
-  if ((uintptr_t)obj == 0x9143eb0) {
-    printf("must be identifier %p\n", obj);
-  }
+  /* immediate value must be ignored. */
+  if (!SG_PTRP(obj)) return;
+  /* might be static area */
+  if (!possibly_valid_dynamic_space_pointer(obj)) return;
+  index = find_page_index(obj);
+  if (index < 0 || page_table[index].dont_move) return;
+
   if (SG_PAIRP(obj)) {
     salvage_list(where, obj);
   } else if (SG_HASHTABLE_P(obj)) {
@@ -353,26 +405,28 @@ void salvage_scheme_pointer(void **where, void *obj)
     }
   } else if (SG_IDENTIFIERP(obj)) {
     copy_root_object(where, obj, copy_object);
-    salvage_library(&SG_IDENTIFIER_LIBRARY(obj), SG_IDENTIFIER_LIBRARY(obj));
+    salvage_scheme_pointer(&SG_IDENTIFIER_LIBRARY(obj),
+			   SG_IDENTIFIER_LIBRARY(obj));
     if (SG_PAIRP(SG_IDENTIFIER_ENVS(obj))) {
-      salvage_list(&SG_IDENTIFIER_ENVS(obj), SG_IDENTIFIER_ENVS(obj));
+      salvage_scheme_pointer(&SG_IDENTIFIER_ENVS(obj), SG_IDENTIFIER_ENVS(obj));
     }
     salvage_scheme_pointer(&SG_IDENTIFIER_NAME(obj), SG_IDENTIFIER_NAME(obj));
   } else if (SG_VMP(obj)) {
     salvage_vm(where, obj);
   } else if (SG_LIBRARYP(obj)) {
     salvage_library(where, obj);
-  } 
-#if 0
- else if (SG_PORTP(obj)) {
-    salvage_port(SG_OBJ(obj));
-  } else if (SG_FILEP(obj)) {
-    salvage_pointer((void *)SG_FILE(obj)->name);
+  } else if (SG_GLOCP(obj)) {
+    SgGloc *gloc = SG_GLOC(obj);
+    copy_root_object(where, obj, copy_object);
+    salvage_scheme_pointer(&gloc->name, gloc->name);
+    salvage_scheme_pointer(&SG_GLOC_GET(gloc), SG_GLOC_GET(gloc));
   } else if (SG_CLOSUREP(obj)) {
     SgObject code = SG_CLOSURE(obj)->code;
     int freec = SG_CODE_BUILDER_FREEC(code), i;
+    copy_root_object(where, obj, copy_object);
     for (i = 0; i < freec; i++) {
-      salvage_scheme_pointer(SG_CLOSURE(obj)->frees[i]);
+      salvage_scheme_pointer(&SG_CLOSURE(obj)->frees[i],
+			     SG_CLOSURE(obj)->frees[i]);
     }
     obj = code;
     goto reent;
@@ -380,7 +434,7 @@ void salvage_scheme_pointer(void **where, void *obj)
     /* TODO we need to salvage scheme objects in code */
     int size = SG_CODE_BUILDER(obj)->size, i;
     SgWord *code = SG_CODE_BUILDER(obj)->code;
-    salvage_pointer(code);
+    copy_root_object(where, obj, copy_large_object);
     for (i = 0; i < size;) {
       InsnInfo *info = Sg_LookupInsnName(INSN(code[i]));
       if (info->argc) {
@@ -392,15 +446,25 @@ void salvage_scheme_pointer(void **where, void *obj)
 	  /* if ((uintptr_t)o == 0x9108740) { */
 	  /*   fprintf(stderr, "wtf?\n"); */
 	  /* } */
-	  salvage_scheme_pointer(o);
+	  salvage_scheme_pointer(&code[i], o);
 	}
 	i += info->argc;
       } else {
 	i++;
       }
     }
-    salvage_scheme_pointer(SG_CODE_BUILDER_NAME(obj));
-    salvage_scheme_pointer(SG_CODE_BUILDER_SRC(obj));
+    salvage_scheme_pointer(&SG_CODE_BUILDER_NAME(obj),
+			   SG_CODE_BUILDER_NAME(obj));
+    salvage_scheme_pointer(&SG_CODE_BUILDER_SRC(obj),
+			   SG_CODE_BUILDER_SRC(obj));
+  } else if (SG_PORTP(obj)) {
+    salvage_port(where, SG_OBJ(obj));
+  } else {
+    fprintf(stderr, "we are missing the object %p\n", obj);
+  }
+#if 0
+  else if (SG_FILEP(obj)) {
+    salvage_pointer((void *)SG_FILE(obj)->name);
   } else if (SG_VECTORP(obj)) {
     int i;
     for (i = 0; i < SG_VECTOR_SIZE(obj);i ++) {

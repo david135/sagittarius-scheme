@@ -1710,43 +1710,69 @@ void scavenge(intptr_t *start, intptr_t n_words)
        object_ptr = 
 	 (intptr_t *)((uintptr_t)object_ptr + 
 		      n_bytes_scavenged + sizeof(memory_header_t))) {
-    /* object == body so get body from block */
-    intptr_t object = *(intptr_t *)ALLOCATED_POINTER(object_ptr);
+    /* the real ptr indicates real container of the objects which
+       we might be interested in. */
+    intptr_t *real_ptr = ALLOCATED_POINTER(object_ptr);
+    /* indicating container can know exact bytes allocated.
+       now we need to check inside of the object_ptr to move. */
+    size_t limit = MEMORY_SIZE(object_ptr);
     /* check first */
     if (MEMORY_FORWARDED(object_ptr))
       Sg_Panic("unexpect forwarding pointer in scavenge: %p, start=%p, n=%l\n",
     	       object_ptr, start, n_words);
-    /* compute offset of block. block might be the same as object_ptr 
-       TODO: what if the object is not in heap but allocated by something else?
-     */
-    /* FIXME this is not correct! */
-    /* first save the block size since scavenge can move
-       the pointer and forwading pointer only have 1 word. */
-    n_bytes_scavenged = MEMORY_SIZE(object_ptr);
-    if (is_scheme_pointer((void *)object)) {
-      block_t *block = POINTER2BLOCK(object);
-      size_t block_size = MEMORY_SIZE(block);
-      if (from_space_p((void *)object)) {
-	/* It currently points to old space. Check for a
-	 * forwarding pointer. */
-	if (MEMORY_FORWARDED(block)) {
-	  /* Yes, there's a forwarding pointer. */
-	  /* to keep the memory structure forward with header  */
-	  *(void **)ALLOCATED_POINTER(object_ptr) =
-	    MEMORY_FORWARDED_VALUE(block);
-	  /* now object_ptr has a word size */
-	  MEMORY_SIZE(object_ptr) = N_WORD_BYTES;
+
+    n_bytes_scavenged = 0;
+    /* object == body so get body from block */
+    while (n_bytes_scavenged < limit) {
+      intptr_t object = *real_ptr;
+      block_t *block;
+      size_t block_size;
+      block = POINTER2BLOCK(object);
+      /* both block and object need to be in dynamic space
+	 even though block is diff of object however it
+	 can be some extra check. */
+      if (possibly_valid_dynamic_space_pointer(block) &&
+	  possibly_valid_dynamic_space_pointer(object)) {
+	block_size = MEMORY_SIZE(block);
+	if (is_scheme_pointer((void *)object)) {
+	  if (from_space_p((void *)object)) {
+	    /* It currently points to old space. Check for a
+	     * forwarding pointer. */
+	    if (MEMORY_FORWARDED(block)) {
+	      /* Yes, there's a forwarding pointer. */
+	      /* to keep the memory structure forward with header  */
+	      *(void **)real_ptr = MEMORY_FORWARDED_VALUE(block);
+	      /* now object_ptr has a word size */
+	      /* MEMORY_SIZE(block) = N_WORD_BYTES; */
+	    } else {
+	      /* Scavenge that pointer. */
+	      dispatch_pointer((void **)real_ptr, object);
+	    }
+	  }
 	} else {
-	  /* Scavenge that pointer. */
-	  dispatch_pointer((void **)ALLOCATED_POINTER(object_ptr), object);
+	  if (from_space_p(object)) {
+	    /* extra sanity check*/
+	    page_index_t index = find_page_index(block);
+	    /* if the size is indicating more than large_object_size but
+	       page said it's not a large object, that's weird enough
+	       to scavenge. */
+	    if ((block_size >= large_object_size &&
+		 !page_table[index].large_object) ||
+		/* other way around */
+		(block_size < large_object_size &&
+		 page_table[index].large_object))
+	      goto not_scavenge;
+	    /* can we do this now? */
+	    scavenge_general_pointer((void **)real_ptr, object);
+	  }
 	}
-      }
-    } else {
-      if (possibly_valid_dynamic_space_pointer(object)) {
-	if (from_space_p(object)) {
-	  scavenge_general_pointer((void **)ALLOCATED_POINTER(object_ptr),
-				   object);
-	}
+	real_ptr++;
+	n_bytes_scavenged += N_WORD_BYTES;
+      } else {
+      not_scavenge:
+	/* OK do it one by one */
+	real_ptr = (uintptr_t)real_ptr + 1;
+	n_bytes_scavenged++;
       }
     }
   }
@@ -2258,12 +2284,6 @@ static void preserve_context_registers(os_context_t *c)
 {
   /* TODO Should Cygwin be treated the same as Windows?*/
 #if defined(_WIN32) || defined(__CYGWIN__)
-# define call_preserve_pointer(reg)		\
-  do {						\
-    os_context_register_t *z = reg;		\
-    preserve_pointer((void **)z, (void *)*z);	\
-  } while (0)
-
 # if defined __i686__
   preserve_pointer((void*)*os_context_register_addr(c,reg_EAX));
   preserve_pointer((void*)*os_context_register_addr(c,reg_ECX));
@@ -2424,8 +2444,7 @@ garbage_collect_generation(generation_index_t generation, int raise)
     }
   }
 
-  /* preserve & salvage static area.
-   I'm not quite sure if we can do this simultaneously. */
+  /* preserve static area. */
   for (si = 0; si < current_static_space_index; si++) {
     void *start = static_spaces[si].start;
     void *end = static_spaces[si].end;
@@ -2442,6 +2461,7 @@ garbage_collect_generation(generation_index_t generation, int raise)
   /* for_each_thread(th) { */
   /*   salvage_scheme_pointer(&th->thread, th->thread); */
   /* } */
+
   /* Before scavenge, we need to salvage all pointers can be followed from
      the ones we preserved. The original SBCL somehow doesn't consider it
      but as long as I know we need to do it. */
@@ -2559,13 +2579,13 @@ void GC_collect_garbage(int last_gen)
 	raise = more;
       }
     }
-    FSHOW((stderr,
-    	   "starting GC of generation %d with raise=%d alloc=%d trig=%d GCs=%d\n",
-    	   gen,
-    	   raise,
-    	   generations[gen].bytes_allocated,
-    	   generations[gen].gc_trigger,
-    	   generations[gen].num_gc));
+    /* FSHOW((stderr, */
+    /* 	   "starting GC of generation %d with raise=%d alloc=%d trig=%d GCs=%d\n", */
+    /* 	   gen, */
+    /* 	   raise, */
+    /* 	   generations[gen].bytes_allocated, */
+    /* 	   generations[gen].gc_trigger, */
+    /* 	   generations[gen].num_gc)); */
 
     /* If an older generation is being filled, then update its
      * memory age. */
