@@ -87,6 +87,7 @@ void scavenge_general_pointer(void **where, void *obj)
   int unboxedp = page_unboxed_p(index);
   int large_p = page_table[index].large_object;
   void *first;
+
   if (unboxedp) {
     if (large_p) {
       first = copy_large_unboxed_object(obj);
@@ -211,7 +212,7 @@ static void salvage_port(void **where, SgObject obj)
 	     p && p != bp->src.obuf.current;
 	     p = p->next) {
 	  byte_buffer *t;
-	  t = (byte_buffer *)copy_unboxed_object(p);
+	  t = (byte_buffer *)copy_object(p);
 	  t->next = p->next;
 	}
       } else {
@@ -243,7 +244,7 @@ static void salvage_port(void **where, SgObject obj)
 	for (p = tp->src.ostr.start; p && p != tp->src.ostr.current;
 	     p = p->next) {
 	  char_buffer *t;
-	  t = (char_buffer *)copy_unboxed_object(p);
+	  t = (char_buffer *)copy_object(p);
 	  t->next = p->next;
 	}
       } else {

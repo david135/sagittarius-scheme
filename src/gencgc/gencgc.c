@@ -823,9 +823,6 @@ void gc_alloc_update_page_tables(int page_type_flag,
 
     region_size = void_diff(alloc_region->free_pointer, 
 			    alloc_region->start_addr);
-    if (region_size == 2445) {
-      fprintf(stderr, "something is wrong\n");
-    }
     bytes_allocated += region_size;
     generations[gc_alloc_generation].bytes_allocated += region_size;
 
@@ -1096,7 +1093,6 @@ gc_alloc_with_region(size_t reqbytes,int page_type_flag,
   nbytes = sizeof(memory_header_t) + reqbytes;
   /* Check whether there is room in the current alloc region. */
   new_free_pointer = my_region->free_pointer + nbytes;
-
   if (new_free_pointer <= my_region->end_addr) {
     /* If so then allocate from the current alloc region. */
     block_t *new_obj = (block_t *)my_region->free_pointer;
@@ -1362,27 +1358,24 @@ static int blockable_p(void *pointer)
 	  <= (uintptr_t)pointer &&
 	  pointer <= dynamic_space_end);
 }
-void * gc_search_space(void *start, intptr_t words, void *pointer)
+/* Assume start is the page boundary */
+void * gc_search_space(void *start, intptr_t bytes, void *pointer)
 {
-  while (words > 0) {
-    size_t count = 1;
-    if (blockable_p(*(void **)start)) {
-      block_t *thing = POINTER2BLOCK(*(void **)start);
-      count = MEMORY_SIZE(thing)/sizeof(void *);
-      if (!count) count = 1;
-    }
+  while (bytes > 0) {
+    block_t *thing = (block_t *)start;
+    intptr_t count;
+    void *boundary;
+    count = MEMORY_SIZE(thing);
+    boundary = (void *)((uintptr_t)start + count + sizeof(memory_header_t));
     /* Check whether the pointer is within this object. */
-    if ((pointer >= start) && (pointer < (start+count))) {
+    if (pointer >= start && pointer < boundary) {
       /* found it! */
       /*FSHOW((stderr,"/found %x in %x %x\n", pointer, start, thing));*/
       return start;
     }
 
-    /* Round up the count. */
-    count = CEILING(count, 2);
-
-    start += count;
-    words -= count;
+    start = boundary;
+    bytes -= count + sizeof(memory_header_t) ;
   }
   return NULL;
 }
@@ -1399,8 +1392,8 @@ void * search_dynamic_space(void *pointer)
   if ((page_index == -1) || page_free_p(page_index))
     return NULL;
   start = page_region_start(page_index);
-
-  return gc_search_space(start, (pointer+2)-start, pointer);
+  /* let give all pointer some chance to be checked. is one word enough? */
+  return gc_search_space(start, (pointer+1) - start, pointer);
 }
 
 /* we don't check if the pointer is strictly there or not.
@@ -1543,7 +1536,7 @@ static void write_protect_generation_pages(generation_index_t generation)
   }
 }
 
-static void remap_page_range (page_index_t from, page_index_t to)
+static void remap_page_range(page_index_t from, page_index_t to)
 {
   /* There's a mysterious Solaris/x86 problem with using mmap
    * tricks for memory zeroing. See sbcl-devel thread
@@ -1597,7 +1590,7 @@ static void remap_free_pages(page_index_t from, page_index_t to, int forcibly)
  * the newspace (I've seen drive the system time to 99%). These pages
  * would need to be unprotected anyway before unmapping in
  * free_oldspace; not sure what effect this has on paging.. */
-static void unprotect_oldspace(void)
+static void unprotect_oldspace()
 {
   page_index_t i;
   void *region_addr = NULL;
@@ -1753,15 +1746,23 @@ void scavenge(intptr_t *start, intptr_t n_words)
 	  if (from_space_p(object)) {
 	    /* extra sanity check*/
 	    page_index_t index = find_page_index(block);
+
 	    /* if the size is indicating more than large_object_size but
 	       page said it's not a large object, that's weird enough
 	       to scavenge. */
-	    if ((block_size >= large_object_size &&
+	    if (index < 0 ||
+		(block_size >= large_object_size &&
 		 !page_table[index].large_object) ||
 		/* other way around */
 		(block_size < large_object_size &&
 		 page_table[index].large_object))
 	      goto not_scavenge;
+	    /* the block body must be allocated on the 8 byte boundary
+	       means, size must be unit of N_WORD_BYTES. */
+	    if (MEMORY_SIZE(block) % N_WORD_BYTES) {
+	      goto not_scavenge;
+	    }
+
 	    /* can we do this now? */
 	    scavenge_general_pointer((void **)real_ptr, object);
 	  }
@@ -2086,10 +2087,6 @@ static void scavenge_newspace_generation(generation_index_t generation)
 	page_index_t page = (*previous_new_areas)[i].page;
 	size_t offset = (*previous_new_areas)[i].offset;
 	size_t size = (*previous_new_areas)[i].size / N_WORD_BYTES;
-	if ((*previous_new_areas)[i].size % N_WORD_BYTES != 0) {
-	  volatile struct new_area *t = &(*previous_new_areas)[i];
-	  fprintf(stderr, "%d\n", t->size);
-	}
 	ASSERT((*previous_new_areas)[i].size % N_WORD_BYTES == 0);
 	scavenge(page_address(page)+offset, size);
       }
@@ -2536,7 +2533,7 @@ garbage_collect_generation(generation_index_t generation, int raise)
  *
  * We stop collecting at gencgc_oldest_gen_to_gc, even if this is less than
  * last_gen (oh, and note that by default it is NUM_GENERATIONS-1) */
-void GC_collect_garbage(int last_gen)
+static void collect_garbage_inner(int last_gen)
 {
   generation_index_t gen = 0, i;
   int raise, more = 0;
@@ -2579,13 +2576,13 @@ void GC_collect_garbage(int last_gen)
 	raise = more;
       }
     }
-    /* FSHOW((stderr, */
-    /* 	   "starting GC of generation %d with raise=%d alloc=%d trig=%d GCs=%d\n", */
-    /* 	   gen, */
-    /* 	   raise, */
-    /* 	   generations[gen].bytes_allocated, */
-    /* 	   generations[gen].gc_trigger, */
-    /* 	   generations[gen].num_gc)); */
+    FSHOW((stderr,
+    	   "starting GC of generation %d with raise=%d alloc=%d trig=%d GCs=%d\n",
+    	   gen,
+    	   raise,
+    	   generations[gen].bytes_allocated,
+    	   generations[gen].gc_trigger,
+    	   generations[gen].num_gc));
 
     /* If an older generation is being filled, then update its
      * memory age. */
@@ -2672,6 +2669,18 @@ void GC_collect_garbage(int last_gen)
 
   write_generation_stats(stderr);
   /* log_generation_stats(gc_logfile, "=== GC End ==="); */
+}
+
+static void scrub_stack_a_little()
+{
+  volatile char bogus[1024];
+  memset(bogus, 0, 1024);
+}
+
+void GC_collect_garbage(int last_gen)
+{
+  scrub_stack_a_little();
+  collect_garbage_inner(last_gen);
 }
 
 void GC_init_context(GC_thread_context_t *context, void *thread)
