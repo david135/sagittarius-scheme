@@ -248,7 +248,6 @@ typedef struct block {
   do {								\
     MEMORY_FORWARDED(block) = TRUE;				\
     MEMORY_FINALIZER(block) = ((uintptr_t)(pointer))>>2;	\
-    MEMORY_SIZE(block) = N_WORD_BYTES;				\
   } while (0)
 #define MEMORY_FORWARDED_VALUE(block)			\
   ((void *)(((uintptr_t)MEMORY_FINALIZER(block))<<2))
