@@ -115,7 +115,8 @@ void scavenge_general_pointer(void **where, void *obj)
 #define copy_root_object(where, obj, copier)			\
   do {								\
     page_index_t index = find_page_index(obj);			\
-    if (index > 0 && !page_table[index].dont_move) {		\
+    if (index > 0 && !page_table[index].dont_move &&		\
+	page_table[index].gen == from_space) {			\
       block_t *block = POINTER2BLOCK(obj);			\
       SgObject z;						\
       /* basic check */						\

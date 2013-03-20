@@ -1154,12 +1154,13 @@ static inline void * gc_quick_alloc_unboxed(size_t nbytes)
 }
 
 
-static void * search_dynamic_space(void *pointer);
-/* unlikely with SBCL we can't determine if the pointer is
-   Scheme object or not plus, GC_malloc would allocate non
-   Scheme object as well. So we only checks if the pointer
-   is in dynamic space. */
-#define possibly_valid_dynamic_space_pointer search_dynamic_space
+static void * search_dynamic_space(void *pointer, int precisep);
+
+static void * possibly_valid_dynamic_space_pointer(void *p)
+{
+  return search_dynamic_space(p, FALSE);
+}
+
 
 static inline void *
 gc_general_copy_object(void *object, size_t nbytes, int page_type_flag)
@@ -1359,7 +1360,7 @@ static int blockable_p(void *pointer)
 	  pointer <= dynamic_space_end);
 }
 /* Assume start is the page boundary */
-void * gc_search_space(void *start, intptr_t bytes, void *pointer)
+void * gc_search_space(void *start, intptr_t bytes, void *pointer, int precisep)
 {
   while (bytes > 0) {
     block_t *thing = (block_t *)start;
@@ -1368,10 +1369,18 @@ void * gc_search_space(void *start, intptr_t bytes, void *pointer)
     count = MEMORY_SIZE(thing);
     boundary = (void *)((uintptr_t)start + count + sizeof(memory_header_t));
     /* Check whether the pointer is within this object. */
-    if (pointer >= start && pointer < boundary) {
-      /* found it! */
-      /*FSHOW((stderr,"/found %x in %x %x\n", pointer, start, thing));*/
-      return start;
+    if (precisep) {
+      /* check with boundary */
+      if (pointer == boundary || pointer == ALLOCATED_POINTER(boundary)) {
+	return start;
+      }
+    } else {
+      /* check in range */
+      if (pointer >= start && pointer < boundary) {
+	/* found it! */
+	/*FSHOW((stderr,"/found %x in %x %x\n", pointer, start, thing));*/
+	return start;
+      }
     }
 
     start = boundary;
@@ -1383,7 +1392,7 @@ void * gc_search_space(void *start, intptr_t bytes, void *pointer)
 
 /* a faster version for searching the dynamic space. This will work even
  * if the object is in a current allocation region. */
-void * search_dynamic_space(void *pointer)
+void * search_dynamic_space(void *pointer, int precisep)
 {
   page_index_t page_index = find_page_index(pointer);
   void *start;
@@ -1393,7 +1402,7 @@ void * search_dynamic_space(void *pointer)
     return NULL;
   start = page_region_start(page_index);
   /* let give all pointer some chance to be checked. is one word enough? */
-  return gc_search_space(start, (pointer+1) - start, pointer);
+  return gc_search_space(start, (pointer+1) - start, pointer, precisep);
 }
 
 /* we don't check if the pointer is strictly there or not.
@@ -1724,8 +1733,8 @@ void scavenge(intptr_t *start, intptr_t n_words)
       /* both block and object need to be in dynamic space
 	 even though block is diff of object however it
 	 can be some extra check. */
-      if (possibly_valid_dynamic_space_pointer(block) &&
-	  possibly_valid_dynamic_space_pointer(object)) {
+      if (search_dynamic_space(block, TRUE) &&
+	  search_dynamic_space(object, TRUE)) {
 	block_size = MEMORY_SIZE(block);
 	if (is_scheme_pointer((void *)object)) {
 	  if (from_space_p((void *)object)) {
