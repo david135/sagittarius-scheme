@@ -835,7 +835,7 @@ void gc_alloc_update_page_tables(int page_type_flag,
 
     /* Add the region to the new_areas if requested. */
     if (BOXED_PAGE_FLAG & page_type_flag)
-      add_new_area(first_page,orig_first_page_bytes_used, region_size);
+      add_new_area(first_page, orig_first_page_bytes_used, region_size);
   } else {
     /* There are no bytes allocated. Unallocate the first_page if
      * there are 0 bytes_used. */
@@ -1711,7 +1711,7 @@ void scavenge(intptr_t *start, intptr_t n_words)
     size_t limit = MEMORY_SIZE(object_ptr);
     /* check first */
     if (MEMORY_FORWARDED(object_ptr))
-      Sg_Panic("unexpect forwarding pointer in scavenge: %p, start=%p, n=%l\n",
+      Sg_Panic("unexpect forwarding pointer in scavenge: %p, start=%p, n=%ld\n",
     	       object_ptr, start, n_words);
 
     n_bytes_scavenged = 0;
@@ -1762,7 +1762,12 @@ void scavenge(intptr_t *start, intptr_t n_words)
 	    if (MEMORY_SIZE(block) % N_WORD_BYTES) {
 	      goto not_scavenge;
 	    }
-
+	    /* large object must be in the start region address */
+	    if (page_table[index].large_object &&
+		page_table[index].region_start_offset != 0) {
+	      fprintf(stderr, "%p\n", object);
+	      goto not_scavenge;
+	    }
 	    /* can we do this now? */
 	    scavenge_general_pointer((void **)real_ptr, object);
 	  }
@@ -2088,7 +2093,7 @@ static void scavenge_newspace_generation(generation_index_t generation)
 	size_t offset = (*previous_new_areas)[i].offset;
 	size_t size = (*previous_new_areas)[i].size / N_WORD_BYTES;
 	ASSERT((*previous_new_areas)[i].size % N_WORD_BYTES == 0);
-	scavenge(page_address(page)+offset, size);
+	scavenge(page_address(page) + offset, size);
       }
 
       /* scav_weak_hash_tables(); */

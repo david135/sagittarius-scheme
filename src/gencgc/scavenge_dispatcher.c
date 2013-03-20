@@ -38,6 +38,7 @@
 #include <sagittarius/identifier.h>
 #include <sagittarius/instruction.h>
 #include <sagittarius/library.h>
+#include <sagittarius/macro.h>
 #include <sagittarius/pair.h>
 #include <sagittarius/port.h>
 #include <sagittarius/string.h>
@@ -87,6 +88,9 @@ void scavenge_general_pointer(void **where, void *obj)
   int unboxedp = page_unboxed_p(index);
   int large_p = page_table[index].large_object;
   void *first;
+
+  if (index < 0 || page_table[index].dont_move ||
+      page_table[index].gen != from_space) return;
 
   if (unboxedp) {
     if (large_p) {
@@ -388,7 +392,8 @@ void salvage_scheme_pointer(void **where, void *obj)
   /* might be static area */
   if (!possibly_valid_dynamic_space_pointer(obj)) return;
   index = find_page_index(obj);
-  if (index < 0 || page_table[index].dont_move) return;
+  if (index < 0 || page_table[index].dont_move ||
+      page_table[index].gen != from_space) return;
 
   if (SG_PAIRP(obj)) {
     salvage_list(where, obj);
@@ -434,8 +439,11 @@ void salvage_scheme_pointer(void **where, void *obj)
   } else if (SG_CODE_BUILDERP(obj)) {
     /* TODO we need to salvage scheme objects in code */
     int size = SG_CODE_BUILDER(obj)->size, i;
-    SgWord *code = SG_CODE_BUILDER(obj)->code;
-    copy_root_object(where, obj, copy_large_object);
+    SgWord *code;
+    copy_root_object(where, obj, copy_object);
+    scavenge_general_pointer(&SG_CODE_BUILDER(obj)->code,
+			     SG_CODE_BUILDER(obj)->code);
+    code = SG_CODE_BUILDER(obj)->code;
     for (i = 0; i < size;) {
       InsnInfo *info = Sg_LookupInsnName(INSN(code[i]));
       if (info->argc) {
@@ -460,6 +468,10 @@ void salvage_scheme_pointer(void **where, void *obj)
 			   SG_CODE_BUILDER_SRC(obj));
   } else if (SG_PORTP(obj)) {
     salvage_port(where, SG_OBJ(obj));
+  } else if (SG_SYNTAXP(obj)) {
+    copy_root_object(where, obj, copy_object);
+    salvage_scheme_pointer(&SG_SYNTAX_NAME(obj), SG_SYNTAX_NAME(obj));
+    salvage_scheme_pointer(&SG_SYNTAX_PROC(obj), SG_SYNTAX_PROC(obj));
   } else {
     fprintf(stderr, "we are missing the object %p\n", obj);
   }
