@@ -1153,12 +1153,17 @@ static inline void * gc_quick_alloc_unboxed(size_t nbytes)
   return gc_general_alloc(nbytes, UNBOXED_PAGE_FLAG, ALLOC_QUICK);
 }
 
+enum object_type_t {
+  NON_PRECISE = 0,
+  BLOCK,
+  OBJECT
+};
 
-static void * search_dynamic_space(void *pointer, int precisep);
+static void * search_dynamic_space(void *pointer, enum object_type_t type);
 
 static void * possibly_valid_dynamic_space_pointer(void *p)
 {
-  return search_dynamic_space(p, FALSE);
+  return search_dynamic_space(p, NON_PRECISE);
 }
 
 
@@ -1360,7 +1365,8 @@ static int blockable_p(void *pointer)
 	  pointer <= dynamic_space_end);
 }
 /* Assume start is the page boundary */
-void * gc_search_space(void *start, intptr_t bytes, void *pointer, int precisep)
+void * gc_search_space(void *start, intptr_t bytes, void *pointer, 
+		       enum object_type_t type)
 {
   while (bytes > 0) {
     block_t *thing = (block_t *)start;
@@ -1369,20 +1375,19 @@ void * gc_search_space(void *start, intptr_t bytes, void *pointer, int precisep)
     count = MEMORY_SIZE(thing);
     boundary = (void *)((uintptr_t)start + count + sizeof(memory_header_t));
     /* Check whether the pointer is within this object. */
-    if (precisep) {
+    switch (type) {
+    case BLOCK:
       /* check with boundary */
-      if (pointer == boundary || pointer == ALLOCATED_POINTER(boundary)) {
-	return start;
-      }
-    } else {
+      if (pointer == thing) return start;
+      break;
+    case OBJECT:
+      if (pointer == ALLOCATED_POINTER(thing)) return start;
+      break;
+    default:
       /* check in range */
-      if (pointer >= start && pointer < boundary) {
-	/* found it! */
-	/*FSHOW((stderr,"/found %x in %x %x\n", pointer, start, thing));*/
-	return start;
-      }
+      if (pointer >= start && pointer < boundary) return start;
+      break;
     }
-
     start = boundary;
     bytes -= count + sizeof(memory_header_t) ;
   }
@@ -1392,7 +1397,7 @@ void * gc_search_space(void *start, intptr_t bytes, void *pointer, int precisep)
 
 /* a faster version for searching the dynamic space. This will work even
  * if the object is in a current allocation region. */
-void * search_dynamic_space(void *pointer, int precisep)
+void * search_dynamic_space(void *pointer, enum object_type_t type)
 {
   page_index_t page_index = find_page_index(pointer);
   void *start;
@@ -1402,7 +1407,7 @@ void * search_dynamic_space(void *pointer, int precisep)
     return NULL;
   start = page_region_start(page_index);
   /* let give all pointer some chance to be checked. is one word enough? */
-  return gc_search_space(start, (pointer+1) - start, pointer, precisep);
+  return gc_search_space(start, (pointer+1) - start, pointer, type);
 }
 
 /* we don't check if the pointer is strictly there or not.
@@ -1733,8 +1738,8 @@ void scavenge(intptr_t *start, intptr_t n_words)
       /* both block and object need to be in dynamic space
 	 even though block is diff of object however it
 	 can be some extra check. */
-      if (search_dynamic_space(block, TRUE) &&
-	  search_dynamic_space(object, TRUE)) {
+      if (search_dynamic_space(block, BLOCK) &&
+	  search_dynamic_space(object, OBJECT)) {
 	block_size = MEMORY_SIZE(block);
 	if (is_scheme_pointer((void *)object)) {
 	  if (from_space_p((void *)object)) {
@@ -1777,6 +1782,7 @@ void scavenge(intptr_t *start, intptr_t n_words)
 	      fprintf(stderr, "%p\n", object);
 	      goto not_scavenge;
 	    }
+	    if (!search_dynamic_space(object, OBJECT)) goto not_scavenge;
 	    /* can we do this now? */
 	    scavenge_general_pointer((void **)real_ptr, object);
 	  }
@@ -2688,7 +2694,7 @@ static void collect_garbage_inner(int last_gen)
 static void scrub_stack_a_little()
 {
   volatile char bogus[1024];
-  memset(bogus, 0, 1024);
+  memset((void *)bogus, 0, 1024);
 }
 
 void GC_collect_garbage(int last_gen)
