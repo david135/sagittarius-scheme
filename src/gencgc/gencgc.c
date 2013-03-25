@@ -1791,14 +1791,16 @@ void scavenge(intptr_t *start, intptr_t n_words)
 	    }
 	  }
 	}
-	real_ptr++;
-	n_bytes_scavenged += N_WORD_BYTES;
+#if 0
       } else {
-      not_scavenge:
 	/* OK do it one by one */
 	real_ptr = (intptr_t *)((uintptr_t)real_ptr + 1);
 	n_bytes_scavenged++;
+#endif
       }
+    not_scavenge:
+      real_ptr++;
+      n_bytes_scavenged += N_WORD_BYTES;
     }
   }
 }
