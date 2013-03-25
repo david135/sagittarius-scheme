@@ -37,6 +37,9 @@
 #include <sagittarius/thread.h>
 #include <sagittarius/vm.h>
 
+/* some parameters for debugging */
+static int debug_flag = 0;
+
 size_t bytes_consed_between_gcs = 12*1024*1024;
 
 /* probably enough for Cygwin ... */
@@ -70,7 +73,12 @@ enum {
   NUM_GENERATIONS,
 };
 
+#ifndef __CYGWIN__
 #define enable_page_protection TRUE
+#else
+/* Probably it's better to check the card bytes on Cygwin. but for now */
+#define enable_page_protection FALSE
+#endif
 
 #if (CARD_BYTES >= PAGE_BYTES)
 #define large_object_size (4 * CARD_BYTES)
@@ -299,8 +307,8 @@ static void write_generation_stats(FILE *file)
 
   /* Print the heap stats. */
   fprintf(file,
-	  " Gen    StaPg   UbSta LaSta LUbSt   Boxed Unboxed    LB   LUB"
-	  " !move  Alloc  Waste   Trig    WP  GCs Mem-age\n");
+	  ";; Gen    StaPg   UbSta LaSta LUbSt   Boxed Unboxed    LB   LUB"
+	  " !move    Alloc    Waste     Trig   WP GCs Mem-age\n");
 
   for (i = 0; i < SCRATCH_GENERATION; i++) {
     page_index_t j;
@@ -335,7 +343,7 @@ static void write_generation_stats(FILE *file)
     /* ASSERT(generations[i].bytes_allocated  */
     /* 	   == count_generation_bytes_allocated(i)); */
     fprintf(file,
-	    "   %1d: %7d %7d %5d %5d",
+	    ";;   %1d: %7d %7d %5d %5d",
 	    i,
 	    generations[i].alloc_start_page,
 	    generations[i].alloc_unboxed_start_page,
@@ -346,7 +354,7 @@ static void write_generation_stats(FILE *file)
 	    boxed_cnt, unboxed_cnt, large_boxed_cnt,
 	    large_unboxed_cnt, pinned_cnt);
     fprintf(file,
-	    " %8u %5u %8u %4d"" %3d %7.4f\n",
+	    " %8u %8u %8u %4d"" %3d %7.4f\n",
 	    generations[i].bytes_allocated,
 	    (npage_bytes(count_generation_pages(i)) 
 	     - generations[i].bytes_allocated),
@@ -355,8 +363,8 @@ static void write_generation_stats(FILE *file)
 	    generations[i].num_gc,
 	    generation_average_age(i));
   }
-  fprintf(file,"   Total bytes allocated    = %u\n", bytes_allocated);
-  fprintf(file,"   Dynamic-space-size bytes = %u\n", dynamic_space_size);
+  fprintf(file,";;   Total bytes allocated    = %u\n", bytes_allocated);
+  fprintf(file,";;   Dynamic-space-size bytes = %u\n", dynamic_space_size);
 }
 
 static void 
@@ -1734,57 +1742,53 @@ void scavenge(intptr_t *start, intptr_t n_words)
       intptr_t object = *real_ptr;
       block_t *block;
       size_t block_size;
+
       block = POINTER2BLOCK(object);
       /* both block and object need to be in dynamic space
 	 even though block is diff of object however it
 	 can be some extra check. */
       if (search_dynamic_space(block, BLOCK) &&
-	  search_dynamic_space(object, OBJECT)) {
+	  search_dynamic_space((void *)object, OBJECT)) {
 	block_size = MEMORY_SIZE(block);
-	if (is_scheme_pointer((void *)object)) {
-	  if (from_space_p((void *)object)) {
-	    /* It currently points to old space. Check for a
-	     * forwarding pointer. */
-	    if (MEMORY_FORWARDED(block)) {
-	      /* Yes, there's a forwarding pointer. */
-	      /* to keep the memory structure forward with header  */
-	      *(void **)real_ptr = MEMORY_FORWARDED_VALUE(block);
-	      /* now object_ptr has a word size */
-	      /* MEMORY_SIZE(block) = N_WORD_BYTES; */
-	    } else {
+	if (from_space_p((void *)object)) {
+	  if (MEMORY_FORWARDED(block)) {
+	    /* Yes, there's a forwarding pointer. */
+	    /* to keep the memory structure forward with header  */
+	    *(void **)real_ptr = MEMORY_FORWARDED_VALUE(block);
+	  } else {
+	    if (is_scheme_pointer((void *)object)) {
 	      /* Scavenge that pointer. */
-	      dispatch_pointer((void **)real_ptr, object);
+	      dispatch_pointer((void **)real_ptr, (void *)object);
+	    } else {
+	      /* extra sanity check*/
+	      page_index_t index = find_page_index(block);
+	      
+	      /* if the size is indicating more than large_object_size but
+		 page said it's not a large object, that's weird enough
+		 to scavenge. */
+	      if (index < 0 ||
+		  (block_size >= large_object_size &&
+		   !page_table[index].large_object) ||
+		  /* other way around */
+		  (block_size < large_object_size &&
+		   page_table[index].large_object))
+		goto not_scavenge;
+	      /* the block body must be allocated on the 8 byte boundary
+		 means, size must be unit of N_WORD_BYTES. */
+	      if (MEMORY_SIZE(block) % N_WORD_BYTES) {
+		goto not_scavenge;
+	      }
+	      /* large object must be in the start region address */
+	      if (page_table[index].large_object &&
+		  page_table[index].region_start_offset != 0) {
+		goto not_scavenge;
+	      }
+	      if (!search_dynamic_space((void *)object, OBJECT))
+		goto not_scavenge;
+	      /* can we do this now? */
+	      /* Scavenge that pointer. */
+	      scavenge_general_pointer((void **)real_ptr, (void *)object);
 	    }
-	  }
-	} else {
-	  if (from_space_p(object)) {
-	    /* extra sanity check*/
-	    page_index_t index = find_page_index(block);
-
-	    /* if the size is indicating more than large_object_size but
-	       page said it's not a large object, that's weird enough
-	       to scavenge. */
-	    if (index < 0 ||
-		(block_size >= large_object_size &&
-		 !page_table[index].large_object) ||
-		/* other way around */
-		(block_size < large_object_size &&
-		 page_table[index].large_object))
-	      goto not_scavenge;
-	    /* the block body must be allocated on the 8 byte boundary
-	       means, size must be unit of N_WORD_BYTES. */
-	    if (MEMORY_SIZE(block) % N_WORD_BYTES) {
-	      goto not_scavenge;
-	    }
-	    /* large object must be in the start region address */
-	    if (page_table[index].large_object &&
-		page_table[index].region_start_offset != 0) {
-	      fprintf(stderr, "%p\n", object);
-	      goto not_scavenge;
-	    }
-	    if (!search_dynamic_space(object, OBJECT)) goto not_scavenge;
-	    /* can we do this now? */
-	    scavenge_general_pointer((void **)real_ptr, object);
 	  }
 	}
 	real_ptr++;
@@ -1792,7 +1796,7 @@ void scavenge(intptr_t *start, intptr_t n_words)
       } else {
       not_scavenge:
 	/* OK do it one by one */
-	real_ptr = (uintptr_t)real_ptr + 1;
+	real_ptr = (intptr_t *)((uintptr_t)real_ptr + 1);
 	n_bytes_scavenged++;
       }
     }
@@ -2459,6 +2463,8 @@ garbage_collect_generation(generation_index_t generation, int raise)
     for (ptr = ((void **)th->cstackEnd) -1; ptr >= esp; ptr--) {
       preserve_pointer(*ptr);
     }
+    /* all thread (VM) must be preserved */
+    preserve_pointer(th->thread);
   }
 
   /* preserve static area. */
@@ -2596,13 +2602,16 @@ static void collect_garbage_inner(int last_gen)
 	raise = more;
       }
     }
-    FSHOW((stderr,
-    	   "starting GC of generation %d with raise=%d alloc=%d trig=%d GCs=%d\n",
-    	   gen,
-    	   raise,
-    	   generations[gen].bytes_allocated,
-    	   generations[gen].gc_trigger,
-    	   generations[gen].num_gc));
+    /* TODO where to write this? */
+    if (debug_flag > 0) {
+      FSHOW((stderr,
+	     ";; starting GC of generation %d with raise=%d alloc=%d trig=%d GCs=%d\n",
+	     gen,
+	     raise,
+	     generations[gen].bytes_allocated,
+	     generations[gen].gc_trigger,
+	     generations[gen].num_gc));
+    }
 
     /* If an older generation is being filled, then update its
      * memory age. */
@@ -2687,7 +2696,10 @@ static void collect_garbage_inner(int last_gen)
   large_allocation = 0;
   need_gc = FALSE;
 
-  write_generation_stats(stderr);
+  /* TODO where to write this? */
+  if (debug_flag) {
+    write_generation_stats(stderr);
+  }
   /* log_generation_stats(gc_logfile, "=== GC End ==="); */
 }
 
@@ -2722,6 +2734,15 @@ void GC_init_context(GC_thread_context_t *context, void *thread)
 void GC_init_thread(GC_thread_context_t *context)
 {
   thread_init(context);
+}
+
+void GC_set_debugging(int flag)
+{
+  debug_flag = flag;
+}
+void GC_print_statistic(FILE *out)
+{
+  write_generation_stats(out);
 }
 
 /* will be called in GC_init */

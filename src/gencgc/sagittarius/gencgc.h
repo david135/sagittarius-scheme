@@ -33,6 +33,7 @@
 #include <sagittarius/common-macros.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 /* TODO this must be defined in gcconfig.h during build process. */
 #ifdef __i386__
@@ -100,6 +101,10 @@ SG_EXTERN void   GC_set_oom_fn(GC_oom_func handler);
 /* this must be called explicitly for each thread. */
 SG_EXTERN void   GC_init_context(GC_thread_context_t *context, void *thread);
 SG_EXTERN void   GC_init_thread(GC_thread_context_t *context);
+
+/* for debugging */
+SG_EXTERN void   GC_set_debugging(int flag);
+SG_EXTERN void   GC_print_statistic(FILE *out);
 
 SG_CDECL_END
 

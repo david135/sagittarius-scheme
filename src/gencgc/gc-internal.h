@@ -231,7 +231,7 @@ typedef struct block {
     (block)->header.size = (size_);			\
     (block)->header.forwarded = FALSE;			\
     (block)->header.has_finalizer = FALSE;		\
-    (block)->header.finalizer = NULL;			\
+    (block)->header.finalizer = (uintptr_t)0;		\
   } while (0)
 #define BLOCK(obj)               ((block_t *)obj)
 #define MEMORY_SIZE(block)       BLOCK(block)->header.size
