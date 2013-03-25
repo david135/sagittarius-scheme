@@ -482,14 +482,19 @@ void salvage_scheme_pointer(void **where, void *obj)
 			   SG_CLOSURE(obj)->code);
   } else if (SG_CODE_BUILDERP(obj)) {
     /* TODO we need to salvage scheme objects in code */
-    /* int size = SG_CODE_BUILDER(obj)->size, i; */
-    /* SgWord *code; */
+    int size = SG_CODE_BUILDER(obj)->size, i;
+    SgWord *code;
     copy_root_object(where, obj, copy_object);
-    /* I'm not sure which would be better, check code one by one here
-       or let general scavenger does it. Probably the first is better
-       performance. */
-    scavenge_general_pointer((void **)&SG_CODE_BUILDER(obj)->code,
-			     SG_CODE_BUILDER(obj)->code);
+    copy_root_object((void **)&SG_CODE_BUILDER(obj)->code,
+		     SG_CODE_BUILDER(obj)->code, copy_large_object);
+    code = SG_CODE_BUILDER(obj)->code;
+    for (i = 0; i < size; i++) {
+      InsnInfo *info = Sg_LookupInsnName(INSN(code[i]));
+      if (info->argc) {
+	SgObject obj = code[++i];
+	salvage_scheme_pointer(code+i, obj);
+      }
+    }
     salvage_scheme_pointer(&SG_CODE_BUILDER_NAME(obj),
 			   SG_CODE_BUILDER_NAME(obj));
     salvage_scheme_pointer(&SG_CODE_BUILDER_SRC(obj),
