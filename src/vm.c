@@ -1868,7 +1868,8 @@ SgObject evaluate_safe(SgObject program, SgWord *code)
 	PC(vm) = PC_TO_RETURN;
 	goto restart;
       } else if (vm->cstack->prev == NULL) {
-	exit(EX_SOFTWARE);
+	/* exit(EX_SOFTWARE); */
+	Sg_Exit(EX_SOFTWARE);
       } else {
 	CONT(vm) = cstack.cont;
 	AC(vm) = vm->ac;
