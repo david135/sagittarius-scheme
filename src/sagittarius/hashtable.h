@@ -63,7 +63,10 @@ struct SgHashCoreRec
   SgHashCompareProc *compare;
   SgObject generalHasher;	/* for make-hashtable */
   SgObject generalCompare; 	/* ditto */
-  void   *data; 
+  void   *data;
+#ifndef USE_BOEHM_GC
+  int    rehashNeeded;
+#endif
 };
 
 struct SgHashIterRec

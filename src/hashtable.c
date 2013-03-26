@@ -29,6 +29,10 @@
  *
  *  $Id: $
  */
+#ifndef USE_BOEHM_GC
+# include <string.h>
+#endif
+
 #define LIBSAGITTARIUS_BODY
 #include "sagittarius/hashtable.h"
 #include "sagittarius/bytevector.h"
@@ -306,6 +310,42 @@ uint32_t Sg_StringHash(SgString *str, uint32_t bound)
   else return (hashval % bound);
 }
 
+#ifndef USE_BOEHM_GC
+/* this needed only for eq hashtable */
+static void rehash(SgHashCore *table)
+{
+  Entry **buckets = BUCKETS(table), **buf;
+  int i;
+  size_t size = sizeof(Entry*) * table->bucketCount;
+  /* use non managed memory to avoid GC
+     TODO: if the size is not so big then it's better to use alloca. */
+  buf = (Entry **)malloc(size);
+  memcpy(buf, buckets, size);
+  for (i = 0; i < table->bucketCount; i++) buckets[i] = NULL;
+
+  for (i = 0; i < table->bucketCount; i++) {
+    Entry *e, *p;
+    for (e = buf[i], p = NULL; e; p = e, e = e->next) {
+      uint32_t hashval;
+      int index;
+      if (p) p->next = NULL;	/* reset chain */
+      ADDRESS_HASH(hashval, e->key);
+      index = HASH2INDEX(table->bucketCount, table->bucketsLog2Count, hashval);
+      if (buckets[index]) {
+	/* add it to the last chain. */
+	Entry *ep = buckets[index];
+	while (ep->next) ep = ep->next;
+	ep->next = e;
+      } else {
+	buckets[index] = e;
+      }
+    }
+  }
+  free(buf);
+  table->rehashNeeded = FALSE;
+}
+#endif
+
 /* accessor and so */
 static Entry *insert_entry(SgHashCore *table,
 			   intptr_t key,
@@ -406,6 +446,9 @@ static void hash_core_init(SgHashCore *table,
   table->data = data;
   table->generalHasher = SG_UNDEF;
   table->generalCompare = SG_UNDEF;
+#ifndef USE_BOEHM_GC
+  table->rehashNeeded = FALSE;
+#endif
   for (i = initSize, table->bucketsLog2Count = 0; i > 1; i /= 2) {
     table->bucketsLog2Count++;
   }
@@ -420,6 +463,10 @@ static Entry *address_access(SgHashCore *table,
 {
   uint32_t hashval, index;
   Entry *e, *p, **buckets = BUCKETS(table);
+
+#ifndef USE_BOEHM_GC
+  if (table->rehashNeeded) rehash(table);
+#endif
 
   ADDRESS_HASH(hashval, key);
   index = HASH2INDEX(table->bucketCount, table->bucketsLog2Count, hashval);

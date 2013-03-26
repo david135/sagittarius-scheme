@@ -118,20 +118,20 @@ void scavenge_general_pointer(void **where, void *obj)
 
 #define copy_root_object(where, obj, copier)			\
   do {								\
-    page_index_t index = find_page_index(obj);			\
-    if (index >= 0 && !page_table[index].dont_move &&		\
-	page_table[index].gen == from_space) {			\
-      block_t *block = POINTER2BLOCK(obj);			\
-      SgObject z;						\
+    page_index_t index__ = find_page_index(obj);		\
+    if (index >= 0 && !page_table[index__].dont_move &&		\
+	page_table[index__].gen == from_space) {		\
+      block_t *block__ = POINTER2BLOCK(obj);			\
+      SgObject z__;						\
       /* basic check */						\
-      if (MEMORY_FORWARDED(block)) {				\
-	z = MEMORY_FORWARDED_VALUE(block);			\
+      if (MEMORY_FORWARDED(block__)) {				\
+	z__ = MEMORY_FORWARDED_VALUE(block__);			\
       } else {							\
-	z = copier(obj);					\
-	SET_MEMORY_FORWARDED(block, z);				\
+	z__ = copier(obj);					\
+	SET_MEMORY_FORWARDED(block__, z__);			\
       }								\
-      *where = z;						\
-      (obj) = z;						\
+      *where = z__;						\
+      (obj) = z__;						\
     }								\
   } while (0)
 
@@ -195,6 +195,11 @@ static void salvage_hashtable(void **where, SgObject obj)
        scavenge as long as entry isn't in from space. */
     /* salvage_entry_key(e); */
     /* salvage_entry_value(e); */
+  }
+  /* it's probably better to check if the real entry has been moved or not
+     but for now.*/
+  if (SG_HASHTABLE(obj)->type == SG_HASH_EQ) {
+    core->rehashNeeded = TRUE;
   }
 }
 
@@ -346,17 +351,35 @@ static void * trans_list(void *obj)
   /* Following is from SBCL however we have extra in SgPair so need to
      use other one*/
 #if 0
-#define copy_pair(dst, p)						\
+#define copy_pair(block, dst, p)					\
   dst = gc_general_alloc(sizeof(SgPair), BOXED_PAGE_FLAG, ALLOC_QUICK); \
   SG_SET_CAR(dst, SG_CAR(p));						\
-  SG_SET_CDR(dst, SG_CDR(p));
+  SG_SET_CDR(dst, SG_CDR(p));						\
+  SET_MEMORY_FORWARDED(block, dst);
 #else
   /* copy_object handle object size and contents (by memcpy) */
-#define copy_pair(dst, p) dst = copy_object(p);
+#define copy_pair(block, dst, p)		\
+  dst = copy_object(p);				\
+  SET_MEMORY_FORWARDED(block, dst);
+#endif
+  /* didn't work as I expected. */
+#if 0
+#define copy_car(p)					\
+  do  {							\
+    SgObject car = SG_CAR(p);				\
+    if (SG_PAIRP(car) && from_space_p(car)) {		\
+      block_t *car_block = POINTER2BLOCK(car);		\
+      if (!MEMORY_FORWARDED(car_block)) {		\
+	salvage_scheme_pointer(&SG_CAR(p), car);	\
+      }							\
+    }							\
+  } while (0)
+#else
+#define copy_car(p)		/* dummy */
 #endif
 
-  copy_pair(cons, obj);
-  SET_MEMORY_FORWARDED(block, cons);
+  copy_pair(block, cons, obj);
+  copy_car(cons);
 
   cdr = SG_CDR(obj);
   while (TRUE) {
@@ -365,9 +388,9 @@ static void * trans_list(void *obj)
     if (!SG_PAIRP(cdr) || !from_space_p(cdr) || MEMORY_FORWARDED(block))
       break;
 
-    copy_pair(newcdr, cdr);
+    copy_pair(block, newcdr, cdr);
+    copy_car(newcdr);
     cdr = SG_CDR(cdr);
-    SET_MEMORY_FORWARDED(block, newcdr);
   }
   return cons;
 }
@@ -401,6 +424,16 @@ static void salvage_library(void **where, void *obj)
 			   SG_LIBRARY_EXPORTED(obj));
   }
 }
+
+#if 0
+static int target_p(SgObject o, const char *name)
+{
+  if (SG_SYMBOLP(o)) {
+    return ustrcmp(SG_STRING(SG_SYMBOL(o)->name)->value, name) == 0;
+  }
+  return FALSE;
+}
+#endif
 
 /* If where is NULL means, it's from the top most position.
    (obj should be pinned)
@@ -453,19 +486,21 @@ void salvage_scheme_pointer(void **where, void *obj)
     salvage_scheme_pointer((void **)&SG_IDENTIFIER_NAME(obj),
 			   SG_IDENTIFIER_NAME(obj));
   } else if (SG_VMP(obj)) {
-    fprintf(stderr, "vm\n");
     salvage_vm(where, obj);
   } else if (SG_LIBRARYP(obj)) {
     salvage_library(where, obj);
   } else if (SG_GLOCP(obj)) {
-    SgGloc *gloc = SG_GLOC(obj);
+    SgGloc *gloc;
     copy_root_object(where, obj, copy_object);
+    gloc = SG_GLOC(obj);
     salvage_scheme_pointer((void **)&gloc->name, gloc->name);
     salvage_scheme_pointer((void **)&gloc->library, gloc->library);
     salvage_scheme_pointer((void **)&SG_GLOC_GET(gloc), SG_GLOC_GET(gloc));
   } else if (SG_SUBRP(obj)) {
     copy_root_object(where, obj, copy_object);
-    scavenge_general_pointer(&SG_SUBR(obj)->data, SG_SUBR(obj)->data);
+    if (SG_SUBR(obj)->data) {
+      scavenge_general_pointer(&SG_SUBR(obj)->data, SG_SUBR(obj)->data);
+    }
   } else if (SG_CLOSUREP(obj)) {
     SgObject code;
     int freec, i;
