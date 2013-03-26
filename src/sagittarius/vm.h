@@ -288,6 +288,11 @@ struct SgVMRec
 
   /* current loading port */
   SgObject currentLoadingPort;
+
+#ifndef USE_BOEHM_GC
+  /* GENCGC specific data, defined in gencgc.h*/
+  GC_thread_context_t context;
+#endif
 };
 
 /*
