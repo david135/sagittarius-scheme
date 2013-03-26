@@ -1735,6 +1735,13 @@ void scavenge(intptr_t *start, intptr_t n_words)
     if (MEMORY_FORWARDED(object_ptr))
       Sg_Panic("unexpect forwarding pointer in scavenge: %p, start=%p, n=%ld\n",
     	       object_ptr, start, n_words);
+    /* sort of check here.
+       FIXME: this should not be here. */
+    if (is_scheme_pointer(real_ptr) && SG_HASHTABLE_P(real_ptr)) {
+      if (SG_HASHTABLE(real_ptr)->type == SG_HASH_EQ) {
+	SG_HASHTABLE_CORE(real_ptr)->rehashNeeded = TRUE;
+      }
+    }
 
     n_bytes_scavenged = 0;
     /* object == body so get body from block */
@@ -2467,6 +2474,10 @@ garbage_collect_generation(generation_index_t generation, int raise)
     }
     /* all thread (VM) must be preserved */
     preserve_pointer(th->thread);
+    /* treat VM stack the same as C stack for now */
+    for (ptr = SG_VM(th->thread)->stack; ptr < SG_VM(th->thread)->sp; ptr++) {
+      preserve_pointer(*ptr);
+    }
   }
 
   /* preserve static area. */
