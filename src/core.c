@@ -94,8 +94,8 @@ extern void Sg__Init_sagittarius_interactive();
 void Sg_Init()
 {
   SgObject nullsym, coreBase, compsym, sgsym;
-#ifdef USE_BOEHM_GC
   GC_INIT();
+#ifdef USE_BOEHM_GC
 #if GC_VERSION_MAJOR >= 7 && GC_VERSION_MINOR >= 2
   GC_set_oom_fn(oom_handler);
   GC_set_finalize_on_demand(TRUE);
@@ -106,9 +106,8 @@ void Sg_Init()
   GC_finalizer_notifier = finalizable;
 #endif
 #else
-  /* do nothing for now*/
+  GC_set_oom_fn(oom_handler);
 #endif
-
 
   /* order is important especially libraries */
   Sg__InitString();		/* string must be before symbol */
