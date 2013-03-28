@@ -1451,7 +1451,7 @@ SgObject Sg_VMCallCC(SgObject proc)
 
 
   contproc = Sg_MakeSubr(throw_continuation, cont, 0, 1,
-			 SG_MAKE_STRING("continucation"));
+			 SG_MAKE_STRING("continuation"));
   return Sg_VMApply1(proc, contproc);
 }
 
