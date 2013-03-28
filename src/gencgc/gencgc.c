@@ -2495,8 +2495,6 @@ garbage_collect_generation(generation_index_t generation, int raise)
      check the VM's continuation frame. We know the structure so that we
      can do it more efficiently than VM stack. so scavenge it here. */
   for_each_thread(th) {
-    salvage_scheme_pointer(&SG_VM(th->thread)->ac, SG_VM(th->thread)->ac);
-    salvage_scheme_pointer(&SG_VM(th->thread)->cl, SG_VM(th->thread)->cl);
     scavenge_continuation_frame(SG_VM(th->thread));
   }
 

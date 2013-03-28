@@ -664,21 +664,14 @@ static void scavenge_cont_frame_rec(SgVM *vm, void **where, SgContFrame *cont)
 	preserve_pointer(new_cont->pc);
 	salvage_scheme_pointer((void **)new_cont->cl, new_cont->cl);
 	if (new_cont->size) {
-	  if (new_cont->fp) {
-	    /* if fp is not NULL and size is not 0 then it has some argument
-	       frame so collect it. */
-	    SgObject *f = (SgObject *)new_cont + CONT_FRAME_SIZE;
-	    int i;
-	    new_cont->env = f;
-	    for (i = 0; i < new_cont->size; i++, f++) {
+	  /* if fp is not NULL and size is not 0 then it has some argument
+	     frame so collect it. */
+	  SgObject *f = new_cont->env;
+	  int i;
+	  for (i = 0; i < new_cont->size; i++, f++) {
+	    if (new_cont->fp) {
 	      salvage_scheme_pointer(f, *f);
-	    }
-	  } else {
-	    /* this is c cont frame and can contain opaque pointer, so do the
-	       safer way. */
-	    SgObject *f = (SgObject *)new_cont + CONT_FRAME_SIZE;
-	    int i;
-	    for (i = 0; i < new_cont->size; i++, f++) {
+	    } else {
 	      scavenge_general_pointer(f, *f);
 	    }
 	  }
