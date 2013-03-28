@@ -83,6 +83,9 @@ static unsigned int __stdcall win32_thread_entry(void *params)
   arg = threadParams->arg;
   /* temporary storage is no longer needed. */
   free(threadParams);
+#ifndef USE_BOEHM_GC
+  GC_init_thread(&SG_VM(arg)->context);
+#endif
   __try {
     status = (*start)(arg);
   } __except (ExceptionFilter(GetExceptionInformation(), ei)) {

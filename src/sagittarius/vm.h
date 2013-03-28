@@ -85,10 +85,10 @@ typedef struct SgCStackRec
   jmp_buf      jbuf;
 } SgCStack;
 
-typedef struct SgContinucationRec
+typedef struct SgContinuationRec
 {
-  struct SgContinucationRec * prev;
-  struct SgContinucationRec * floating;
+  struct SgContinuationRec * prev;
+  struct SgContinuationRec * floating;
   SgContFrame *cont;
   SgObject     winders;
   SgCStack    *cstack;
@@ -288,6 +288,11 @@ struct SgVMRec
 
   /* current loading port */
   SgObject currentLoadingPort;
+
+#ifndef USE_BOEHM_GC
+  /* GENCGC specific data, defined in gencgc.h*/
+  GC_thread_context_t context;
+#endif
 };
 
 /*
