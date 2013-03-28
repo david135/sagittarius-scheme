@@ -400,8 +400,7 @@ static void * trans_list(void *obj)
 
 static void salvage_list(void **where, void *obj)
 {
-  page_index_t index = find_page_index(obj);
-  if (page_table[index].gen == from_space) {
+  if (from_space_p(obj)) {
     block_t *block = POINTER2BLOCK(obj);
     void *first = trans_list(obj);
     SET_MEMORY_FORWARDED(block, first);
@@ -428,7 +427,7 @@ static void salvage_library(void **where, void *obj)
   }
 }
 
-#if 1
+#if 0
 static int target_p(SgObject o, const char *name)
 {
   if (SG_SYMBOLP(o)) {
@@ -526,14 +525,14 @@ void salvage_scheme_pointer(void **where, void *obj)
     int size = SG_CODE_BUILDER(obj)->size, i;
     SgWord *code;
     copy_root_object(where, obj, copy_object);
-    copy_root_object((void **)&SG_CODE_BUILDER(obj)->code,
+    copy_root_object(&SG_CODE_BUILDER(obj)->code,
 		     SG_CODE_BUILDER(obj)->code, copy_large_object);
     code = SG_CODE_BUILDER(obj)->code;
     for (i = 0; i < size; i++) {
       InsnInfo *info = Sg_LookupInsnName(INSN(code[i]));
       if (info->argc) {
-	SgObject obj = code[++i];
-	salvage_scheme_pointer(code+i, obj);
+	SgObject obj = SG_OBJ(code[++i]);
+	salvage_scheme_pointer((void **)(code+i), obj);
       }
     }
     salvage_scheme_pointer(&SG_CODE_BUILDER_NAME(obj),
@@ -650,10 +649,14 @@ static void scan_weak_hashtables()
   weak_hashtables = NULL;
 }
 
+/* collect top cont frame. */
 static void scavenge_cont_frame_rec(SgVM *vm, void **where, SgContFrame *cont)
 {
-  volatile SgContFrame *c = cont;
+  /* if we move the pointer, then scavenge handle the rest. */
+#if 0
   if (!cont->cl) return;
+#else
+  /* we might need to follow the frame until we hit the heap located one. */
   if (!IN_STACK_P((void **)cont, vm)) {
     if (from_space_p(cont)) {
       block_t *block = POINTER2BLOCK(cont);
@@ -682,7 +685,9 @@ static void scavenge_cont_frame_rec(SgVM *vm, void **where, SgContFrame *cont)
       }
     }
   }
+#if 0
   scavenge_cont_frame_rec(vm, (void **)&cont->prev, cont->prev);
+#endif
 }
 
 static void scavenge_continuation_frame(SgVM *vm)
