@@ -105,6 +105,8 @@ void scavenge_general_pointer(void **where, void *obj)
     SET_MEMORY_FORWARDED(POINTER2BLOCK(obj), first);
     *where = first;
   }
+  /* the following code caused stack overflow. probably we don't need this. */
+#if 0
   /* general pointer can contain pointers in it and if the nothing refers it
      but the given object it would be mis collected. To prevent it we need to
      check inside of the object. */
@@ -114,6 +116,7 @@ void scavenge_general_pointer(void **where, void *obj)
     block_t *block = POINTER2BLOCK(first);
     scavenge((intptr_t *)block, MEMORY_SIZE(block)/sizeof(void *));
   }
+#endif
 }
 
 #define copy_root_object(where, obj, copier)			\
