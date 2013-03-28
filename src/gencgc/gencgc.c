@@ -1747,16 +1747,13 @@ void scavenge(intptr_t *start, intptr_t n_words)
     /* object == body so get body from block */
     while (n_bytes_scavenged < limit) {
       intptr_t object = *real_ptr;
-      block_t *block;
-      size_t block_size;
+      block_t *block = POINTER2BLOCK(object);
 
-      block = POINTER2BLOCK(object);
       /* both block and object need to be in dynamic space
 	 even though block is diff of object however it
 	 can be some extra check. */
       if (search_dynamic_space(block, BLOCK) &&
 	  search_dynamic_space((void *)object, OBJECT)) {
-	block_size = MEMORY_SIZE(block);
 	if (from_space_p((void *)object)) {
 	  if (MEMORY_FORWARDED(block)) {
 	    /* Yes, there's a forwarding pointer. */
@@ -1767,43 +1764,11 @@ void scavenge(intptr_t *start, intptr_t n_words)
 	      /* Scavenge that pointer. */
 	      dispatch_pointer((void **)real_ptr, (void *)object);
 	    } else {
-	      /* extra sanity check*/
-	      page_index_t index = find_page_index(block);
-	      
-	      /* if the size is indicating more than large_object_size but
-		 page said it's not a large object, that's weird enough
-		 to scavenge. */
-	      if (index < 0 ||
-		  (block_size >= large_object_size &&
-		   !page_table[index].large_object) ||
-		  /* other way around */
-		  (block_size < large_object_size &&
-		   page_table[index].large_object))
-		goto not_scavenge;
-	      /* the block body must be allocated on the 8 byte boundary
-		 means, size must be unit of N_WORD_BYTES. */
-	      if (MEMORY_SIZE(block) % N_WORD_BYTES) {
-		goto not_scavenge;
-	      }
-	      /* large object must be in the start region address */
-	      if (page_table[index].large_object &&
-		  page_table[index].region_start_offset != 0) {
-		goto not_scavenge;
-	      }
-	      if (!search_dynamic_space((void *)object, OBJECT))
-		goto not_scavenge;
-	      /* can we do this now? */
 	      /* Scavenge that pointer. */
 	      scavenge_general_pointer((void **)real_ptr, (void *)object);
 	    }
 	  }
 	}
-#if 0
-      } else {
-	/* OK do it one by one */
-	real_ptr = (intptr_t *)((uintptr_t)real_ptr + 1);
-	n_bytes_scavenged++;
-#endif
       }
     not_scavenge:
       real_ptr++;
