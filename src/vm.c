@@ -230,7 +230,10 @@ SgVM* Sg_NewVM(SgVM *proto, SgObject name)
   Sg_GetTimeOfDay(&sec, &usec);
   v->uptimeSec = sec;
   v->uptimeUsec = usec;
-
+#ifndef USE_BOEHM_GC
+  /* initialise thread context */
+  GC_init_context(&v->context, v);
+#endif
   Sg_RegisterFinalizer(SG_OBJ(v), vm_finalize, NULL);
   return v;
 }
@@ -1446,7 +1449,7 @@ SgObject Sg_VMCallCC(SgObject proc)
 
 
   contproc = Sg_MakeSubr(throw_continuation, cont, 0, 1,
-			 SG_MAKE_STRING("continucation"));
+			 SG_MAKE_STRING("continuation"));
   return Sg_VMApply1(proc, contproc);
 }
 
@@ -1863,7 +1866,8 @@ SgObject evaluate_safe(SgObject program, SgWord *code)
 	PC(vm) = PC_TO_RETURN;
 	goto restart;
       } else if (vm->cstack->prev == NULL) {
-	exit(EX_SOFTWARE);
+	/* exit(EX_SOFTWARE); */
+	Sg_Exit(EX_SOFTWARE);
       } else {
 	CONT(vm) = cstack.cont;
 	AC(vm) = vm->ac;

@@ -49,9 +49,11 @@ typedef struct SgWeakVectorRec
 #define SG_WEAK_VECTOR(obj)  ((SgWeakVector*)(obj))
 #define SG_WEAK_VECTORP(obj) SG_XTYPEP(obj,SG_CLASS_WEAK_VECTOR)
 
+#ifdef USE_BOEHM_GC
 /* weak box for weak hashtable */
 SG_CLASS_DECL(Sg_WeakBoxClass);
 typedef struct SgWeakBoxRec SgWeakBox;
+#endif
 
 #include "hashtable.h"
 
@@ -71,6 +73,9 @@ typedef struct SgWeakHashTableRec
   SgHashProc        *hasher;
   SgHashCompareProc *compare;
   unsigned int goneEntries;
+#ifndef USE_BOEHM_GC
+  struct SgWeakHashTableRec *next;
+#endif
 } SgWeakHashTable;
 
 typedef struct SgWeakHashIterRec
@@ -90,11 +95,13 @@ SG_EXTERN SgObject Sg_MakeWeakVector(int size);
 SG_EXTERN SgObject Sg_WeakVectorRef(SgWeakVector *v, int index, SgObject fallback);
 SG_EXTERN SgObject Sg_WeakVectorSet(SgWeakVector *v, int index, SgObject value);
 
+#ifdef USE_BOEHM_GC
 /* weak box */
 SG_EXTERN SgWeakBox* Sg_MakeWeakBox(void *value);
 SG_EXTERN int        Sg_WeakBoxEmptyP(SgWeakBox *wbox);
 SG_EXTERN void       Sg_WeakBoxSet(SgWeakBox *wbox, void *value);
 SG_EXTERN void*      Sg_WeakBoxRef(SgWeakBox *wbox);
+#endif
 
 /* weak hash */
 SG_EXTERN SgObject Sg_MakeWeakHashTableSimple(SgHashType type,
