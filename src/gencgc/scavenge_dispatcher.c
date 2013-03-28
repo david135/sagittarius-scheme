@@ -77,7 +77,7 @@ void scavenge_general_pointer(void **where, void *obj)
   int unboxedp = page_unboxed_p(index);
   int large_p = page_table[index].large_object;
   void *first;
-  
+
   /* this case it will be scavenged later on. */
   if (index < 0 || page_table[index].dont_move ||
       page_table[index].gen != from_space) return;
@@ -425,11 +425,13 @@ static void salvage_library(void **where, void *obj)
   }
 }
 
-#if 0
+#if 1
 static int target_p(SgObject o, const char *name)
 {
   if (SG_SYMBOLP(o)) {
     return ustrcmp(SG_STRING(SG_SYMBOL(o)->name)->value, name) == 0;
+  } else if (SG_STRINGP(o)) {
+    return ustrcmp(SG_STRING(o)->value, name) == 0;
   }
   return FALSE;
 }
@@ -445,6 +447,7 @@ void salvage_scheme_pointer(void **where, void *obj)
   if (!obj) {
     return;
   }
+
   /* immediate value must be ignored. */
   if (!SG_PTRP(obj)) return;
   /* might be static area */
@@ -642,4 +645,51 @@ static void scan_weak_hashtables()
   }
   /* reset */
   weak_hashtables = NULL;
+}
+
+static void scavenge_cont_frame_rec(SgVM *vm, void **where, SgContFrame *cont)
+{
+  volatile SgContFrame *c = cont;
+  if (!cont->cl) return;
+  if (!IN_STACK_P((void **)cont, vm)) {
+    if (from_space_p(cont)) {
+      block_t *block = POINTER2BLOCK(cont);
+      if (MEMORY_FORWARDED(block)) {
+	*where = MEMORY_FORWARDED_VALUE(block);
+      } else {
+	SgContFrame *new_cont = copy_object(cont);
+	SET_MEMORY_FORWARDED(block, new_cont);
+	/* moving program counter causes a lot of trouble so for now we
+	   just mark it as preserved pointer. */
+	preserve_pointer(new_cont->pc);
+	salvage_scheme_pointer((void **)new_cont->cl, new_cont->cl);
+	if (new_cont->size) {
+	  if (new_cont->fp) {
+	    /* if fp is not NULL and size is not 0 then it has some argument
+	       frame so collect it. */
+	    SgObject *f = (SgObject *)new_cont + CONT_FRAME_SIZE;
+	    int i;
+	    new_cont->env = f;
+	    for (i = 0; i < new_cont->size; i++, f++) {
+	      salvage_scheme_pointer(f, *f);
+	    }
+	  } else {
+	    /* this is c cont frame and can contain opaque pointer, so do the
+	       safer way. */
+	    SgObject *f = (SgObject *)new_cont + CONT_FRAME_SIZE;
+	    int i;
+	    for (i = 0; i < new_cont->size; i++, f++) {
+	      scavenge_general_pointer(f, *f);
+	    }
+	  }
+	}
+      }
+    }
+  }
+  scavenge_cont_frame_rec(vm, (void **)&cont->prev, cont->prev);
+}
+
+static void scavenge_continuation_frame(SgVM *vm)
+{
+  scavenge_cont_frame_rec(vm, (void **)&vm->cont, vm->cont);
 }

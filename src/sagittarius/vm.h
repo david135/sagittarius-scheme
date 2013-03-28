@@ -85,10 +85,10 @@ typedef struct SgCStackRec
   jmp_buf      jbuf;
 } SgCStack;
 
-typedef struct SgContinucationRec
+typedef struct SgContinuationRec
 {
-  struct SgContinucationRec * prev;
-  struct SgContinucationRec * floating;
+  struct SgContinuationRec * prev;
+  struct SgContinuationRec * floating;
   SgContFrame *cont;
   SgObject     winders;
   SgCStack    *cstack;
