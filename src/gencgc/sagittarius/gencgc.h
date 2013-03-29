@@ -86,6 +86,10 @@ typedef struct GC_context {
 extern GC_thread_context_t *all_threads;
 #define for_each_thread(th) for ((th)=all_threads;(th);(th)=(th)->next)
 
+/* so far we actually don't support the second argument data but
+   for future. */
+typedef void (*GC_finalizer_proc)(void *o, void *data);
+
 SG_CDECL_BEGIN
 
 /* The GC APIs are similar with Boehm GC for my convenience. 
@@ -106,6 +110,11 @@ SG_EXTERN void   GC_init_thread(GC_thread_context_t *context);
 SG_EXTERN void   GC_set_debugging(int flag);
 SG_EXTERN void   GC_print_statistic(FILE *out);
 
+/* finalizer */
+SG_EXTERN void   GC_register_finalizer(void *o, GC_finalizer_proc proc,
+				       void *data);
+
+SG_EXTERN void * GC_base(void *o);
 SG_CDECL_END
 
 /* compatible macros */

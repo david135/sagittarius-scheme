@@ -108,6 +108,10 @@ typedef struct page {
      pages - this allows the space of an object to be easily determined.
    */
   generation_index_t gen;
+
+  /* counter of number of finalizer in this page
+   */
+  unsigned int finalizers;
 } page_t;
 
 /* values for the page.allocated field */
@@ -203,6 +207,12 @@ extern void * general_alloc(size_t nbytes, int page_type_flag);
 # error "the architecture is not supported"
 #endif
 
+/* TODO:
+   The finalizer we need to store somewhere else but in the memory header
+   so that invoking process can be delayed. The original SBCL implementation
+   using weak pointer to do it. Probably we want to do the same or similar
+   way. But for now.
+ */
 /* we pack the header for better memory usage:
    32 bit model;
    xxxx xxxx xxxx xxxx xxxx xxxx xxxx xxrf
@@ -237,6 +247,8 @@ typedef struct block {
 #define MEMORY_SIZE(block)       BLOCK(block)->header.size
 #define MEMORY_FORWARDED(block)  BLOCK(block)->header.forwarded
 #define MEMORY_FINALIZER(block)  BLOCK(block)->header.finalizer
+#define GET_MEMORY_FINALIZER(block)					\
+  (GC_finalizer_proc)((uintptr_t)BLOCK(block)->header.finalizer<<2)
 #define ALLOCATED_POINTER(block) ((void *)&(BLOCK(block)->body))
 #define POINTER2BLOCK(p)    ((block_t*)(((uintptr_t)p)-sizeof(memory_header_t)))
 #define BLOCK_MAY_VALID_P(block)		\
@@ -251,6 +263,14 @@ typedef struct block {
   } while (0)
 #define MEMORY_FORWARDED_VALUE(block)			\
   ((void *)(((uintptr_t)MEMORY_FINALIZER(block))<<2))
+
+#define MEMORY_HAS_FINALIZER(block)  BLOCK(block)->header.has_finalizer
+#define SET_MEMORY_FINALIZER(block, proc, data)			\
+  do {								\
+    MEMORY_FINALIZER(block) = ((uintptr_t)proc >> 2);		\
+    /* to make unregister easier */				\
+    MEMORY_HAS_FINALIZER(block) = ((void *)proc != NULL);	\
+  } while (0)
 
 #define BLOCK_SIZE(block) (MEMORY_SIZE(block) + sizeof(memory_header_t))
 

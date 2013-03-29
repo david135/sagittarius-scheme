@@ -125,6 +125,9 @@ struct SgClassRec
   /* mutex */
   SgInternalMutex mutex;
   SgInternalCond  cv;
+#ifndef USE_BOEHM_GC
+  void           *scav_func;
+#endif
 };
 
 #define SG_CLASS(obj)  ((SgClass*)(obj))
