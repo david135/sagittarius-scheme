@@ -208,8 +208,10 @@ static void salvage_hashtable(void **where, SgObject obj)
 
 static void salvage_port(void **where, SgObject obj)
 {
+#if 0
   SgBinaryPort *bp;
   SgTextualPort *tp;
+#endif
   copy_root_object(where, obj, copy_object);
   /* FIXME, readtable can contain scheme pointer */
   if (SG_PORT(obj)->readtable) {
@@ -219,6 +221,7 @@ static void salvage_port(void **where, SgObject obj)
   salvage_scheme_pointer(&SG_PORT(obj)->loadPath, SG_PORT(obj)->loadPath);
   salvage_scheme_pointer(&SG_PORT(obj)->previousPort,
 			 SG_PORT(obj)->previousPort);
+#if 0
   if (SG_BINARY_PORTP(obj)) {
     bp = SG_BINARY_PORT(obj);
   binary_port:
@@ -304,6 +307,7 @@ static void salvage_port(void **where, SgObject obj)
   } else {
     Sg_Panic("unknown port");
   }
+#endif
 }
 
 static void salvage_vm(void **where, void *obj)
@@ -427,6 +431,140 @@ static void salvage_library(void **where, void *obj)
   }
 }
 
+static void salvage_procedure(void **where, void *obj)
+{
+  switch (SG_PROCEDURE_TYPE(obj)) {
+  case SG_PROC_SUBR:
+    copy_root_object(where, obj, copy_object);
+    if (SG_SUBR(obj)->data) {
+      scavenge_general_pointer(&SG_SUBR(obj)->data, SG_SUBR(obj)->data);
+    }
+    break;
+  case SG_PROC_CLOSURE: {
+    SgObject code;
+    int freec, i;
+    copy_root_object(where, obj, copy_object);
+    code = SG_CLOSURE(obj)->code;
+    freec = SG_CODE_BUILDER_FREEC(code);
+    /* closure's free variables are not independent object thus it can't
+       convert to block boundary. so we need to scavenge it manually here.
+    */
+    for (i = 0; i < freec; i++) {
+      salvage_scheme_pointer(&SG_CLOSURE(obj)->frees[i],
+			     SG_CLOSURE(obj)->frees[i]);
+    }
+    salvage_scheme_pointer(&SG_CLOSURE(obj)->code,
+			   SG_CLOSURE(obj)->code);
+  }
+  default:
+    copy_root_object(where, obj, copy_object);
+    break;
+  }
+}
+
+static void salvage_string(void **where, void *obj)
+{
+  copy_root_object(where, obj, copy_large_unboxed_object);
+}
+
+static void salvage_symbol(void **where, void *obj)
+{
+  copy_root_object(where, obj, copy_object);
+  salvage_scheme_pointer((void **)&SG_SYMBOL(obj)->name,
+			 SG_SYMBOL(obj)->name);
+}
+
+static void salvage_keyword(void **where, void *obj)
+{
+  copy_root_object(where, obj, copy_object);
+  salvage_scheme_pointer((void **)&SG_KEYWORD(obj)->name,
+			 SG_KEYWORD(obj)->name);
+}
+
+static void salvage_identifier(void **where, void *obj)
+{
+  copy_root_object(where, obj, copy_object);
+  salvage_scheme_pointer((void **)&SG_IDENTIFIER_LIBRARY(obj),
+			 SG_IDENTIFIER_LIBRARY(obj));
+  if (SG_PAIRP(SG_IDENTIFIER_ENVS(obj))) {
+    salvage_scheme_pointer((void **)&SG_IDENTIFIER_ENVS(obj),
+			   SG_IDENTIFIER_ENVS(obj));
+  }
+  salvage_scheme_pointer((void **)&SG_IDENTIFIER_NAME(obj),
+			 SG_IDENTIFIER_NAME(obj));
+}
+
+static void salvege_gloc(void **where, void *obj)
+{
+  SgGloc *gloc;
+  copy_root_object(where, obj, copy_object);
+  gloc = SG_GLOC(obj);
+  salvage_scheme_pointer((void **)&gloc->name, gloc->name);
+  salvage_scheme_pointer((void **)&gloc->library, gloc->library);
+  salvage_scheme_pointer((void **)&SG_GLOC_GET(gloc), SG_GLOC_GET(gloc));
+}
+
+static void salvage_code_builder(void **where, void *obj)
+{
+  int size = SG_CODE_BUILDER(obj)->size, i;
+  SgWord *code;
+  copy_root_object(where, obj, copy_object);
+  copy_root_object(&SG_CODE_BUILDER(obj)->code,
+		   SG_CODE_BUILDER(obj)->code, copy_large_object);
+  code = SG_CODE_BUILDER(obj)->code;
+  for (i = 0; i < size; i++) {
+    InsnInfo *info = Sg_LookupInsnName(INSN(code[i]));
+    if (info->argc) {
+      SgObject obj = SG_OBJ(code[++i]);
+      salvage_scheme_pointer((void **)(code+i), obj);
+    }
+  }
+  salvage_scheme_pointer(&SG_CODE_BUILDER_NAME(obj),
+			 SG_CODE_BUILDER_NAME(obj));
+  salvage_scheme_pointer(&SG_CODE_BUILDER_SRC(obj),
+			 SG_CODE_BUILDER_SRC(obj));
+}
+
+static void salvage_vector(void **where, void *obj)
+{
+  int i;
+  copy_root_object(where, obj, copy_large_object);
+  for (i = 0; i < SG_VECTOR_SIZE(obj);i ++) {
+    salvage_scheme_pointer(&SG_VECTOR_ELEMENT(obj, i),
+			   SG_VECTOR_ELEMENT(obj, i));
+  }
+}
+
+static void savlage_syntax(void **where, void *obj)
+{
+  copy_root_object(where, obj, copy_object);
+  salvage_scheme_pointer((void **)&SG_SYNTAX_NAME(obj), SG_SYNTAX_NAME(obj));
+  salvage_scheme_pointer(&SG_SYNTAX_PROC(obj), SG_SYNTAX_PROC(obj));
+}
+
+static void salvage_macro(void **where, void *obj)
+{
+  SgMacro *m = SG_MACRO(obj);
+  copy_root_object(where, obj, copy_object);
+  salvage_scheme_pointer((void **)&m->name, m->name);
+  salvage_scheme_pointer((void **)&m->transformer, m->transformer);
+  salvage_scheme_pointer((void **)&m->env, m->env);
+  salvage_scheme_pointer((void **)&m->maybeLibrary, m->maybeLibrary);
+  salvage_scheme_pointer((void **)&m->extracted, m->extracted);
+  /* data must be Scheme object, but I'm not sure */
+  salvage_scheme_pointer((void **)&m->data, m->data);
+}
+
+static void salvage_tuple(void **where, void *obj)
+{
+  copy_root_object(where, obj, copy_object);
+  salvage_scheme_pointer((void **)&SG_TUPLE(obj)->values, 
+			 SG_TUPLE(obj)->values);
+  salvage_scheme_pointer((void **)&SG_TUPLE(obj)->printer, 
+			 SG_TUPLE(obj)->printer);
+}
+
+
 #if 0
 static int target_p(SgObject o, const char *name)
 {
@@ -442,18 +580,19 @@ static int target_p(SgObject o, const char *name)
 /* If where is NULL means, it's from the top most position.
    (obj should be pinned)
  */
+typedef void (*scav_func)(SgObject z, void *data);
 void salvage_scheme_pointer(void **where, void *obj)
 {
   page_index_t index;
   block_t *block;
+  
   if (!obj) {
     return;
   }
 
-  /* immediate value must be ignored. */
-  if (!SG_PTRP(obj)) return;
   /* might be static area */
-  if (!possibly_valid_dynamic_space_pointer(obj)) return;
+  if (!search_dynamic_space(obj, TRUE)) return;
+
   index = find_page_index(obj);
   if (page_table[index].dont_move || 
       page_table[index].gen != from_space) return;
@@ -466,124 +605,19 @@ void salvage_scheme_pointer(void **where, void *obj)
     return;
   }
 
+  /* OK for performance, we need to do some nasty stuff here. */
+  /* if an object reaches here, it must be a heap object. so we can get
+     its class. But make things easier and not to use magic number we check
+     pair with defined macro. */
   if (SG_PAIRP(obj)) {
     salvage_list(where, obj);
-  } else if (SG_HASHTABLE_P(obj)) {
-    salvage_hashtable(where, SG_OBJ(obj));
-  } else if (SG_STRINGP(obj)) {
-    copy_root_object(where, obj, copy_large_unboxed_object);
-  } else if (SG_SYMBOLP(obj)) {
-    copy_root_object(where, obj, copy_object);
-    salvage_scheme_pointer((void **)&SG_SYMBOL(obj)->name,
-			   SG_SYMBOL(obj)->name);
-  } else if (SG_KEYWORDP(obj)) {
-    copy_root_object(where, obj, copy_object);
-    salvage_scheme_pointer((void **)&SG_KEYWORD(obj)->name,
-			   SG_KEYWORD(obj)->name);
-  } else if (SG_IDENTIFIERP(obj)) {
-    copy_root_object(where, obj, copy_object);
-    salvage_scheme_pointer((void **)&SG_IDENTIFIER_LIBRARY(obj),
-			   SG_IDENTIFIER_LIBRARY(obj));
-    if (SG_PAIRP(SG_IDENTIFIER_ENVS(obj))) {
-      salvage_scheme_pointer((void **)&SG_IDENTIFIER_ENVS(obj),
-			     SG_IDENTIFIER_ENVS(obj));
-    }
-    salvage_scheme_pointer((void **)&SG_IDENTIFIER_NAME(obj),
-			   SG_IDENTIFIER_NAME(obj));
-  } else if (SG_VMP(obj)) {
-    salvage_vm(where, obj);
-  } else if (SG_LIBRARYP(obj)) {
-    salvage_library(where, obj);
-  } else if (SG_GLOCP(obj)) {
-    SgGloc *gloc;
-    copy_root_object(where, obj, copy_object);
-    gloc = SG_GLOC(obj);
-    salvage_scheme_pointer((void **)&gloc->name, gloc->name);
-    salvage_scheme_pointer((void **)&gloc->library, gloc->library);
-    salvage_scheme_pointer((void **)&SG_GLOC_GET(gloc), SG_GLOC_GET(gloc));
-  } else if (SG_SUBRP(obj)) {
-    copy_root_object(where, obj, copy_object);
-    if (SG_SUBR(obj)->data) {
-      scavenge_general_pointer(&SG_SUBR(obj)->data, SG_SUBR(obj)->data);
-    }
-  } else if (SG_CLOSUREP(obj)) {
-    SgObject code;
-    int freec, i;
-    copy_root_object(where, obj, copy_object);
-    code = SG_CLOSURE(obj)->code;
-    freec = SG_CODE_BUILDER_FREEC(code);
-    /* closure's free variables are not independent object thus it can't
-       convert to block boundary. so we need to scavenge it manually here. */
-    for (i = 0; i < freec; i++) {
-      salvage_scheme_pointer(&SG_CLOSURE(obj)->frees[i],
-			     SG_CLOSURE(obj)->frees[i]);
-    }
-    salvage_scheme_pointer(&SG_CLOSURE(obj)->code,
-			   SG_CLOSURE(obj)->code);
-  } else if (SG_CODE_BUILDERP(obj)) {
-    /* TODO we need to salvage scheme objects in code */
-    int size = SG_CODE_BUILDER(obj)->size, i;
-    SgWord *code;
-    copy_root_object(where, obj, copy_object);
-    copy_root_object(&SG_CODE_BUILDER(obj)->code,
-		     SG_CODE_BUILDER(obj)->code, copy_large_object);
-    code = SG_CODE_BUILDER(obj)->code;
-    for (i = 0; i < size; i++) {
-      InsnInfo *info = Sg_LookupInsnName(INSN(code[i]));
-      if (info->argc) {
-	SgObject obj = SG_OBJ(code[++i]);
-	salvage_scheme_pointer((void **)(code+i), obj);
-      }
-    }
-    salvage_scheme_pointer(&SG_CODE_BUILDER_NAME(obj),
-			   SG_CODE_BUILDER_NAME(obj));
-    salvage_scheme_pointer(&SG_CODE_BUILDER_SRC(obj),
-			   SG_CODE_BUILDER_SRC(obj));
-  } else if (SG_VECTORP(obj)) {
-    int i;
-    copy_root_object(where, obj, copy_large_object);
-    for (i = 0; i < SG_VECTOR_SIZE(obj);i ++) {
-      salvage_scheme_pointer(&SG_VECTOR_ELEMENT(obj, i),
-			     SG_VECTOR_ELEMENT(obj, i));
-    }
-  } else if (SG_PORTP(obj)) {
-    salvage_port(where, SG_OBJ(obj));
-  } else if (SG_SYNTAXP(obj)) {
-    copy_root_object(where, obj, copy_object);
-    salvage_scheme_pointer((void **)&SG_SYNTAX_NAME(obj), SG_SYNTAX_NAME(obj));
-    salvage_scheme_pointer(&SG_SYNTAX_PROC(obj), SG_SYNTAX_PROC(obj));
-  } else if (SG_MACROP(obj)) {
-    SgMacro *m = SG_MACRO(obj);
-    copy_root_object(where, obj, copy_object);
-    salvage_scheme_pointer((void **)&m->name, m->name);
-    salvage_scheme_pointer((void **)&m->transformer, m->transformer);
-    salvage_scheme_pointer((void **)&m->env, m->env);
-    salvage_scheme_pointer((void **)&m->maybeLibrary, m->maybeLibrary);
-    salvage_scheme_pointer((void **)&m->extracted, m->extracted);
-    /* data must be Scheme object, but I'm not sure */
-    salvage_scheme_pointer((void **)&m->data, m->data);
-  } else if (SG_TUPLEP(obj)) {
-    copy_root_object(where, obj, copy_object);
-    salvage_scheme_pointer((void **)&SG_TUPLE(obj)->values, 
-			   SG_TUPLE(obj)->values);
-    salvage_scheme_pointer((void **)&SG_TUPLE(obj)->printer, 
-			   SG_TUPLE(obj)->printer);
-  } else if (SG_TRANSCODERP(obj)) {
-    copy_root_object(where, obj, copy_object);
-    /* do we need to copy codec here? */
-  } else if (SG_CODECP(obj)) {
-    /* How should we treat? */
-    copy_root_object(where, obj, copy_object);
-  } else if (SG_FILEP(obj)) {
-    copy_root_object(where, obj, copy_object);
-  } else if (SG_SHAREDREF_P(obj)) {
-    copy_root_object(where, obj, copy_object);
   } else {
-    /* for now, need clever solution. */
-    /* copy_root_object(where, obj, copy_object); */
-    scavenge_general_pointer(where, obj);
-    if (debug_flag) {
-      fprintf(stderr, "we are missing the object %p\n", obj);
+    SgClass *clazz = SG_CLASS_OF(obj);
+    if (clazz->scav_func) {
+      scav_func fun = (scav_func)clazz->scav_func;
+      fun(where, obj);
+    } else {
+      scavenge_general_pointer(where, obj);      
     }
   }
 }
@@ -655,7 +689,7 @@ static void scavenge_cont_frame_rec(SgVM *vm, void **where, SgContFrame *cont)
   /* if we move the pointer, then scavenge handle the rest. */
 #if 0
   if (!cont->cl) return;
-#else
+#endif
   /* we might need to follow the frame until we hit the heap located one. */
   if (!IN_STACK_P((void **)cont, vm)) {
     if (from_space_p(cont)) {
@@ -693,4 +727,29 @@ static void scavenge_cont_frame_rec(SgVM *vm, void **where, SgContFrame *cont)
 static void scavenge_continuation_frame(SgVM *vm)
 {
   scavenge_cont_frame_rec(vm, (void **)&vm->cont, vm->cont);
+}
+
+static void init_scav_fun()
+{
+#define SET_CLASS_SCAV(cls, proc)		\
+  do {						\
+    SgClass *clz = SG_CLASS_##cls;		\
+    clz->scav_func = (void *)proc;		\
+  } while (0)
+
+  SET_CLASS_SCAV(HASHTABLE, salvage_hashtable);
+  SET_CLASS_SCAV(STRING, salvage_string);
+  SET_CLASS_SCAV(SYMBOL, salvage_symbol);
+  SET_CLASS_SCAV(KEYWORD, salvage_keyword);
+  SET_CLASS_SCAV(IDENTIFIER, salvage_identifier);
+  SET_CLASS_SCAV(VM, salvage_vm);
+  SET_CLASS_SCAV(LIBRARY, salvage_library);
+  SET_CLASS_SCAV(GLOC, salvege_gloc);
+  SET_CLASS_SCAV(PROCEDURE, salvage_procedure);
+  SET_CLASS_SCAV(CODE_BUILDER, salvage_code_builder);
+  SET_CLASS_SCAV(VECTOR, salvage_vector);
+  SET_CLASS_SCAV(PORT, salvage_port);
+  SET_CLASS_SCAV(SYNTAX, savlage_syntax);
+  SET_CLASS_SCAV(MACRO, salvage_macro);
+  SET_CLASS_SCAV(TUPLE, salvage_tuple);
 }

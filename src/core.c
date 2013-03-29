@@ -221,7 +221,7 @@ void Sg_RegisterFinalizer(SgObject z, SgFinalizerProc finalizer, void *data)
   GC_REGISTER_FINALIZER_NO_ORDER(z, (GC_finalization_proc)finalizer,
 				 data, &ofn, &ocd);
 #else
-  /* for now do nothing */
+  GC_register_finalizer(z, (GC_finalizer_proc)finalizer, data);
 #endif
 }
 
@@ -232,7 +232,7 @@ void Sg_UnregisterFinalizer(SgObject z)
   GC_REGISTER_FINALIZER_NO_ORDER(z, (GC_finalization_proc)NULL, NULL,
 				 &ofn, &ocd);
 #else
-  /* for now do nothing */
+  GC_register_finalizer(z, (GC_finalizer_proc)NULL, NULL);
 #endif
 }
 
@@ -241,7 +241,7 @@ void Sg_RegisterDisappearingLink(void **p, void *value)
 #ifdef USE_BOEHM_GC
   GC_general_register_disappearing_link(p, value);
 #else
-  /* for now do nothing */
+  /* for gencgc we don't use this */
 #endif
 }
 
@@ -250,7 +250,7 @@ void Sg_UnregisterDisappearingLink(void **p)
 #ifdef USE_BOEHM_GC
   GC_unregister_disappearing_link(p);
 #else
-  /* for now do nothing */
+  /* for gencgc we don't use this */
 #endif
 }
 
@@ -259,8 +259,8 @@ void* Sg_GCBase(void *value)
 #ifdef USE_BOEHM_GC
   return GC_base(value);
 #else
-  /* for now do nothing */
-  return NULL;
+  /* The same API actually */
+  return GC_base(value);
 #endif
 }
 

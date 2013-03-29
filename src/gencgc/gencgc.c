@@ -1161,17 +1161,11 @@ static inline void * gc_quick_alloc_unboxed(size_t nbytes)
   return gc_general_alloc(nbytes, UNBOXED_PAGE_FLAG, ALLOC_QUICK);
 }
 
-enum object_type_t {
-  NON_PRECISE = 0,
-  BLOCK,
-  OBJECT
-};
-
-static void * search_dynamic_space(void *pointer, enum object_type_t type);
+static void * search_dynamic_space(void *pointer, int precise);
 
 static void * possibly_valid_dynamic_space_pointer(void *p)
 {
-  return search_dynamic_space(p, NON_PRECISE);
+  return search_dynamic_space(p, FALSE);
 }
 
 
@@ -1374,8 +1368,10 @@ static int blockable_p(void *pointer)
 }
 /* Assume start is the page boundary */
 void * gc_search_space(void *start, intptr_t bytes, void *pointer, 
-		       enum object_type_t type)
+		       int precise)
 {
+  block_t *block;
+  if (precise) block = POINTER2BLOCK(pointer);
   while (bytes > 0) {
     block_t *thing = (block_t *)start;
     intptr_t count;
@@ -1383,18 +1379,12 @@ void * gc_search_space(void *start, intptr_t bytes, void *pointer,
     count = MEMORY_SIZE(thing);
     boundary = (void *)((uintptr_t)start + count + sizeof(memory_header_t));
     /* Check whether the pointer is within this object. */
-    switch (type) {
-    case BLOCK:
+    if (precise) {
       /* check with boundary */
-      if (pointer == thing) return start;
-      break;
-    case OBJECT:
-      if (pointer == ALLOCATED_POINTER(thing)) return start;
-      break;
-    default:
+      if (block == thing && pointer == ALLOCATED_POINTER(thing)) return start;
+    } else {
       /* check in range */
       if (pointer >= start && pointer < boundary) return start;
-      break;
     }
     start = boundary;
     bytes -= count + sizeof(memory_header_t) ;
@@ -1405,7 +1395,7 @@ void * gc_search_space(void *start, intptr_t bytes, void *pointer,
 
 /* a faster version for searching the dynamic space. This will work even
  * if the object is in a current allocation region. */
-void * search_dynamic_space(void *pointer, enum object_type_t type)
+void * search_dynamic_space(void *pointer, int precise)
 {
   page_index_t page_index = find_page_index(pointer);
   void *start;
@@ -1415,7 +1405,7 @@ void * search_dynamic_space(void *pointer, enum object_type_t type)
     return NULL;
   start = page_region_start(page_index);
   /* let give all pointer some chance to be checked. is one word enough? */
-  return gc_search_space(start, (pointer+1) - start, pointer, type);
+  return gc_search_space(start, (pointer+1) - start, pointer, precise);
 }
 
 /* we don't check if the pointer is strictly there or not.
@@ -1752,8 +1742,10 @@ void scavenge(intptr_t *start, intptr_t n_words)
       /* both block and object need to be in dynamic space
 	 even though block is diff of object however it
 	 can be some extra check. */
-      if (search_dynamic_space(block, BLOCK) &&
-	  search_dynamic_space((void *)object, OBJECT)) {
+      if (object == 0x998f9b0) {
+	fprintf(stderr, "port!\n");
+      }
+      if (search_dynamic_space((void *)object, TRUE)) {
 	if (from_space_p((void *)object)) {
 	  if (MEMORY_FORWARDED(block)) {
 	    /* Yes, there's a forwarding pointer. */
@@ -1764,6 +1756,14 @@ void scavenge(intptr_t *start, intptr_t n_words)
 	      /* Scavenge that pointer. */
 	      dispatch_pointer((void **)real_ptr, (void *)object);
 	    } else {
+	      /* do some sanity check */
+	      page_index_t index = find_page_index(object);
+	      if (page_table[index].large_object &&
+		  MEMORY_SIZE(block) < large_object_size)
+		goto not_scavenge;
+	      if (!page_table[index].large_object &&
+		  MEMORY_SIZE(block) >= large_object_size)
+		goto not_scavenge;
 	      /* Scavenge that pointer. */
 	      scavenge_general_pointer((void **)real_ptr, (void *)object);
 	    }
@@ -2316,51 +2316,45 @@ static void preserve_context_registers(os_context_t *c)
 #endif
 }
 
-/* salvage all pointers can be followed from the gen pages.*/
-static void salvage_generation(generation_index_t gen)
+static void invoke_finalizer()
 {
-  /* the page index in the generation is reset when GC is started.
-     so we must check it from the beginning. */
   page_index_t i;
+
   for (i = 0; i < last_free_page; i++) {
-    if (page_table[i].gen == gen && page_table[i].dont_move) {
-      /* OK we have reached the page */
-      /* The allocation always started from the region boundary.
-	 so first we need to get the region, then we can convert it
-	 to block. */
-      void *start = page_region_start(i);
-      block_t *block = (block_t *)start;
-      page_bytes_t checked = 0, limit = 0;
-      /* calculate total amount of bytes */
-      page_index_t si = find_page_index(start);
-      while (si <= i) {
-	limit += page_table[si++].bytes_used;
-      } 
-      /* fprintf(stderr, "salvage start: %p(%d bytes)\n", start, limit); */
-      while (checked < limit) {
-	uintptr_t next_offset;
-	void *obj = ALLOCATED_POINTER(block);
-	if (is_scheme_pointer(obj)) {
-	  salvage_scheme_pointer(NULL, obj);
-	} else {
-	  /* salvage generic pointer including Scheme pair. 
-	     TOOD move it.*/
-	  size_t j, size = MEMORY_SIZE(block);
-	  for (j = 0; j < size; j++) {
-	    /* do last resort */
-	    void *p = *(void **)((uintptr_t)obj + j);
-	    if (is_scheme_pointer(p)) {
-	      salvage_scheme_pointer((void **)((uintptr_t)obj + j), p);
-	    } else {
-	      preserve_pointer(p);
-	    }
-	  }
-	}
-	next_offset = BLOCK_SIZE(block);
-	block = (block_t *)((uintptr_t)block + next_offset);
-	checked +=  next_offset;
+    if (page_table[i].gen == from_space && !page_table[i].dont_move &&
+	page_table[i].finalizers) {
+      page_index_t last_page, j;
+      void *start, *end, *object_ptr;
+      size_t nbytes_invoked = 0;
+      /* find the end of the region */
+      for (last_page = i; ; last_page++) {
+	page_table[last_page].finalizers = 0;
+	if ((page_table[last_page].bytes_used < CARD_BYTES)
+	    /* Or it is CARD_BYTES and is the last in the block */
+	    || (page_table[last_page+1].bytes_used == 0)
+	    || (page_table[last_page+1].gen != from_space)
+	    || (page_table[last_page+1].region_start_offset == 0))
+	  break;
       }
-      /* fprintf(stderr, "salvage end(%d bytes)\n", limit); */
+      /* now follow the pages */
+      start = page_address(i);
+      end = (void *)((uintptr_t)start + page_table[last_page].bytes_used
+		     + npage_bytes(last_page-i));
+      for (object_ptr = start; object_ptr < end; 
+	   object_ptr = (void *)((uintptr_t)object_ptr +
+				 nbytes_invoked + sizeof(memory_header_t))) {
+	/* if there is something not forwarded value left here, means
+	   it must be collected after this GC. so invoke the finalizers. */
+	block_t *block = (block_t*)object_ptr;
+	if (!MEMORY_FORWARDED(block) && MEMORY_HAS_FINALIZER(block)) {
+	  /* yes */
+	  GC_finalizer_proc proc = GET_MEMORY_FINALIZER(block);
+	  /* sorry data is always null for now. */
+	  proc(ALLOCATED_POINTER(block), NULL);
+	}
+	nbytes_invoked = MEMORY_SIZE(block);
+      }
+      i = last_page;
     }
   }
 }
@@ -2484,6 +2478,9 @@ garbage_collect_generation(generation_index_t generation, int raise)
 
   /* OK now we need to check if the weak pointers survived. */
   scan_weak_hashtables();
+
+  /* invoke the finalizers before we update tables. */
+  invoke_finalizer();
 
   /* FSHOW((stderr, "/gc_alloc_update_all_page_tables()\n")); */
   /* Flush the current regions, updating the tables. */
@@ -2723,6 +2720,34 @@ void GC_print_statistic(FILE *out)
   write_generation_stats(out);
 }
 
+void GC_register_finalizer(void *o, GC_finalizer_proc proc, void *data)
+{
+  block_t *block = POINTER2BLOCK(o);
+  /* check if the given object is heap allocated or not */
+  if (search_dynamic_space(o, TRUE)) {
+    page_index_t index = find_page_index(o);
+    /* do some management before set the finalizer */
+    if (proc) {
+      /* if re-assigning the finalizer, counter should not be increased  */
+      if (!MEMORY_HAS_FINALIZER(block)) {
+	page_table[index].finalizers++;
+      }
+    } else {
+      /* removing the finalizer. */
+      if (MEMORY_HAS_FINALIZER(block)) {
+	page_table[index].finalizers--;
+      }
+    }
+    SET_MEMORY_FINALIZER(block, proc, data);
+  }
+}
+
+void * GC_base(void *o)
+{
+  return search_dynamic_space(o, TRUE);
+}
+
+
 /* will be called in GC_init */
 static int initialised = FALSE;
 void GC_init()
@@ -2732,6 +2757,9 @@ void GC_init()
     /* initialise OS specific variables. */
     os_init();
     root_context_init(&root_context);
+
+    init_scav_fun();
+
     dynamic_space_size = DEFAULT_DYNAMIC_SPACE_SIZE;
 
     Sg_InitMutex(&free_pages_lock, FALSE);
