@@ -72,4 +72,7 @@ os_context_register_t *os_context_pc_addr(os_context_t *context);
 int thread_init(GC_thread_context_t *context);
 int root_context_init(GC_thread_context_t *context);
 
+void suspend_thread(GC_thread_context_t *context);
+void resume_thread(GC_thread_context_t *context);
+
 #endif /* SAGITTARIUS_OS_H_ */

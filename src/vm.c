@@ -100,6 +100,9 @@ static void vm_finalize(SgObject obj, void *data)
   Sg_RemoveLibrary(vm->currentLibrary);
   Sg_DestroyMutex(&vm->vmlock);
   Sg_DestroyCond(&vm->cond);
+#ifndef USE_BOEHM_GC
+  GC_destroy_context(&vm->context);
+#endif
 }
 
 static void vm_print(SgObject obj, SgPort *port, SgWriteContext *ctx)

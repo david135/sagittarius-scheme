@@ -2684,10 +2684,33 @@ static void scrub_stack_a_little()
   memset((void *)bogus, 0, 1024);
 }
 
+static void stop_the_world()
+{
+  GC_thread_context_t *th;
+  for_each_thread(th) {
+    if (th->thread != Sg_VM()) {
+      suspend_thread(th);
+    }
+  }
+}
+
+static void start_the_world()
+{
+  GC_thread_context_t *th;
+  for_each_thread(th) {
+    if (th->thread != Sg_VM()) {
+      resume_thread(th);
+    }
+  }
+}
+
 void GC_collect_garbage(int last_gen)
 {
   scrub_stack_a_little();
+  /* The WORLD! */
+  stop_the_world();
   collect_garbage_inner(last_gen);
+  start_the_world();
 }
 
 void GC_init_context(GC_thread_context_t *context, void *thread)
@@ -2718,6 +2741,25 @@ void GC_set_debugging(int flag)
 void GC_print_statistic(FILE *out)
 {
   write_generation_stats(out);
+}
+
+void GC_destroy_context(GC_thread_context_t *context)
+{
+  Sg_LockMutex(&context_lock);
+  /* for sanity, should never happen */
+  if (all_threads) {
+    GC_thread_context_t *th, *prev = NULL;
+    for (th = all_threads; th; prev = th, th = th->next) {
+      if (th == context) {
+	if (prev) {
+	  /* go away! */
+	  prev->next = th->next;
+	} /* removing root thread? */
+	break;
+      }
+    } 
+  }
+  Sg_UnlockMutex(&context_lock);
 }
 
 void GC_register_finalizer(void *o, GC_finalizer_proc proc, void *data)

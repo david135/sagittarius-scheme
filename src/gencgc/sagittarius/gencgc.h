@@ -105,6 +105,7 @@ SG_EXTERN void   GC_set_oom_fn(GC_oom_func handler);
 /* this must be called explicitly for each thread. */
 SG_EXTERN void   GC_init_context(GC_thread_context_t *context, void *thread);
 SG_EXTERN void   GC_init_thread(GC_thread_context_t *context);
+SG_EXTERN void   GC_destroy_context(GC_thread_context_t *context);
 
 /* for debugging */
 SG_EXTERN void   GC_set_debugging(int flag);
