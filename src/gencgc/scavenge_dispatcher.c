@@ -131,7 +131,9 @@ void scavenge_general_pointer(void **where, void *obj)
 	z__ = MEMORY_FORWARDED_VALUE(block__);			\
       } else {							\
 	z__ = copier(obj);					\
-	SET_MEMORY_FORWARDED(block__, z__);			\
+	if (z__ != obj) {					\
+	  SET_MEMORY_FORWARDED(block__, z__);			\
+	}							\
       }								\
       *where = z__;						\
       (obj) = z__;						\
@@ -330,9 +332,6 @@ static void salvage_vm(void **where, void *obj)
   vm->sp = vm->stack + sp_diff;
   vm->fp = vm->stack + fp_diff;
   for (stack = vm->stack; stack < vm->sp; stack++) {
-    if ((uintptr_t)*stack == 0x9161748) {
-      fprintf(stderr, "in table\n");
-    }
     if (is_scheme_pointer(*stack)) {
       /* TODO it's better to copy */
       salvage_scheme_pointer(stack, *stack);
@@ -494,7 +493,7 @@ static void salvage_identifier(void **where, void *obj)
 			 SG_IDENTIFIER_NAME(obj));
 }
 
-static void salvege_gloc(void **where, void *obj)
+static void salvage_gloc(void **where, void *obj)
 {
   SgGloc *gloc;
   copy_root_object(where, obj, copy_object);
@@ -507,7 +506,7 @@ static void salvege_gloc(void **where, void *obj)
 static void salvage_code_builder(void **where, void *obj)
 {
   int size = SG_CODE_BUILDER(obj)->size, i;
-  SgWord *code;
+  SgWord *code = SG_CODE_BUILDER(obj)->code;
   copy_root_object(where, obj, copy_object);
   copy_root_object(&SG_CODE_BUILDER(obj)->code,
 		   SG_CODE_BUILDER(obj)->code, copy_large_object);
@@ -744,7 +743,7 @@ static void init_scav_fun()
   SET_CLASS_SCAV(IDENTIFIER, salvage_identifier);
   SET_CLASS_SCAV(VM, salvage_vm);
   SET_CLASS_SCAV(LIBRARY, salvage_library);
-  SET_CLASS_SCAV(GLOC, salvege_gloc);
+  SET_CLASS_SCAV(GLOC, salvage_gloc);
   SET_CLASS_SCAV(PROCEDURE, salvage_procedure);
   SET_CLASS_SCAV(CODE_BUILDER, salvage_code_builder);
   SET_CLASS_SCAV(VECTOR, salvage_vector);

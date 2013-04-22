@@ -29,6 +29,7 @@
  */
 #include "os.h"
 #include <pthread.h>
+#include <sagittarius/gcconfig.h>
 #define LIBSAGITTARIUS_BODY
 #include <sagittarius/vm.h>
 
@@ -45,4 +46,28 @@ int thread_init(GC_thread_context_t *context)
 
   context->cstackStart = stack_addr;
   context->cstackEnd = (void *)(((uintptr_t)stack_size) + stack_size);
+}
+
+void suspend_thread(GC_thread_context_t *context)
+{
+#if defined(HAVE_PTHREAD_SUSPEND)
+  pthread_suspend(SG_VM(context->thread)->thread.thread);
+#elif defined(HAVE_PTHREAD_SUSPEND_NP)
+  pthread_suspend_np(SG_VM(context->thread)->thread.thread);
+#else
+# error "not supported yet!"
+#endif
+}
+
+void resume_thread(GC_thread_context_t *context)
+{
+#if defined(HAVE_PTHREAD_RESUME)
+  pthread_resume(SG_VM(context->thread)->thread.thread);
+#elif defined(HAVE_PTHREAD_RESUME_NP)
+  pthread_resume_np(SG_VM(context->thread)->thread.thread);
+#elif defined(HAVE_PTHREAD_CONTINUE)
+  pthread_continue(SG_VM(context->thread)->thread.thread);
+#else
+# error "not supported yet!"
+#endif
 }
