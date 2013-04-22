@@ -55,6 +55,36 @@ static SgPointer* make_pointer(uintptr_t p)
   return z;
 }
 
+/* To reset pointer... This is really dangerous*/
+static SgObject pointer_value(SgPointer *p)
+{
+#if SIZEOF_VOIDP == 4
+  return Sg_MakeIntegerU(p->pointer);
+#else
+  return Sg_MakeIntegerFromU64(p->pointer);
+#endif
+}
+static void pointer_value_set(SgPointer *p, SgObject value)
+{
+  /* for now only exact integer */
+  if (SG_EXACT_INTP(value)) {
+    uintptr_t v;
+#if SIZEOF_VOIDP == 4
+    v = Sg_GetUIntegerClamp(value, SG_CLAMP_NONE, NULL);
+#else
+    v = Sg_GetIntegerU64Clamp(value, SG_CLAMP_NONE, NULL);
+#endif
+    p->pointer = v;
+  } else {
+    Sg_Error(UC("exact integer required but got %S"), value);
+  }
+}
+
+static SgSlotAccessor pointer_slots[] = {
+  SG_CLASS_SLOT_SPEC("value",  0, pointer_value, pointer_value_set),
+  { { NULL } }
+};
+
 SgObject Sg_MakePointer(void *p)
 {
   return make_pointer((uintptr_t)p);
@@ -704,6 +734,7 @@ static ffi_type* lookup_ffi_return_type(int rettype)
   }
 }
 
+/* TODO cleanup the code. use macro! */
 static int convert_scheme_to_c_value(SgObject v, int type, void **result)
 {
   switch (type) {
@@ -711,30 +742,107 @@ static int convert_scheme_to_c_value(SgObject v, int type, void **result)
     *((intptr_t *)result) = !SG_FALSEP(v);
     return TRUE;
   case FFI_RETURN_TYPE_SHORT   :
+    if (!SG_EXACT_INTP(v)) goto ret0;
+    if (SG_INTP(v)) {
+      *((short *)result) = SG_INT_VALUE(v);
+    } else {
+      *((short *)result) = Sg_GetIntegerClamp(v, SG_CLAMP_NONE, NULL);
+    }
+    break;
   case FFI_RETURN_TYPE_INT     :
+    if (!SG_EXACT_INTP(v)) goto ret0;
+    if (SG_INTP(v)) {
+      *((int *)result) = SG_INT_VALUE(v);
+    } else {
+      *((int *)result) = Sg_GetIntegerClamp(v, SG_CLAMP_NONE, NULL);
+    }
+    break;
   case FFI_RETURN_TYPE_LONG    :
+    if (!SG_EXACT_INTP(v)) goto ret0;
+    if (SG_INTP(v)) {
+      *((long *)result) = SG_INT_VALUE(v);
+    } else {
+      *((long *)result) = Sg_GetIntegerClamp(v, SG_CLAMP_NONE, NULL);
+    }
+    break;
   case FFI_RETURN_TYPE_INT8_T  :
+    if (!SG_EXACT_INTP(v)) goto ret0;
+    if (SG_INTP(v)) {
+      *((int8_t *)result) = SG_INT_VALUE(v);
+    } else {
+      *((int8_t *)result) = Sg_GetIntegerClamp(v, SG_CLAMP_NONE, NULL);
+    }
+    break;
   case FFI_RETURN_TYPE_INT16_T :
+    if (!SG_EXACT_INTP(v)) goto ret0;
+    if (SG_INTP(v)) {
+      *((int16_t *)result) = SG_INT_VALUE(v);
+    } else {
+      *((int16_t *)result) = Sg_GetIntegerClamp(v, SG_CLAMP_NONE, NULL);
+    }
+    break;
   case FFI_RETURN_TYPE_INT32_T :
     if (!SG_EXACT_INTP(v)) goto ret0;
     if (SG_INTP(v)) {
-      *((intptr_t *)result) = SG_INT_VALUE(v);
+      *((int32_t *)result) = SG_INT_VALUE(v);
     } else {
-      *((intptr_t *)result) = Sg_GetIntegerClamp(v, SG_CLAMP_NONE, NULL);
+      *((int32_t *)result) = Sg_GetIntegerClamp(v, SG_CLAMP_NONE, NULL);
     }
     break;
   case FFI_RETURN_TYPE_USHORT  :
+    if (!SG_EXACT_INTP(v)) goto ret0;
+    if (SG_INTP(v)) {
+      *((unsigned short *)result) = SG_INT_VALUE(v);
+    } else {
+      *((unsigned short *)result) = Sg_GetUIntegerClamp(v, SG_CLAMP_NONE, NULL);
+    }
+    break;
   case FFI_RETURN_TYPE_UINT    :
+    if (!SG_EXACT_INTP(v)) goto ret0;
+    if (SG_INTP(v)) {
+      *((unsigned int *)result) = SG_INT_VALUE(v);
+    } else {
+      *((unsigned int *)result) = Sg_GetUIntegerClamp(v, SG_CLAMP_NONE, NULL);
+    }
+    break;
   case FFI_RETURN_TYPE_ULONG   :
+    if (!SG_EXACT_INTP(v)) goto ret0;
+    if (SG_INTP(v)) {
+      *((unsigned long *)result) = SG_INT_VALUE(v);
+    } else {
+      *((unsigned long *)result) = Sg_GetUIntegerClamp(v, SG_CLAMP_NONE, NULL);
+    }
+    break;
   case FFI_RETURN_TYPE_SIZE_T  :
+    if (!SG_EXACT_INTP(v)) goto ret0;
+    if (SG_INTP(v)) {
+      *((size_t *)result) = SG_INT_VALUE(v);
+    } else {
+      *((size_t *)result) = Sg_GetUIntegerClamp(v, SG_CLAMP_NONE, NULL);
+    }
+    break;
   case FFI_RETURN_TYPE_UINT8_T :
+    if (!SG_EXACT_INTP(v)) goto ret0;
+    if (SG_INTP(v)) {
+      *((uint8_t *)result) = SG_INT_VALUE(v);
+    } else {
+      *((uint8_t *)result) = Sg_GetUIntegerClamp(v, SG_CLAMP_NONE, NULL);
+    }
+    break;
   case FFI_RETURN_TYPE_UINT16_T: 
+    if (!SG_EXACT_INTP(v)) goto ret0;
+    if (SG_INTP(v)) {
+      *((uint16_t *)result) = SG_INT_VALUE(v);
+    } else {
+      *((uint16_t *)result) = Sg_GetUIntegerClamp(v, SG_CLAMP_NONE, NULL);
+    }
+    break;
   case FFI_RETURN_TYPE_UINT32_T:
     if (!SG_EXACT_INTP(v)) goto ret0;
     if (SG_INTP(v)) {
-      *((uintptr_t *)result) = SG_INT_VALUE(v);
+      *((uint32_t *)result) = SG_INT_VALUE(v);
     } else {
-      *((uintptr_t *)result) = Sg_GetUIntegerClamp(v, SG_CLAMP_NONE, NULL);
+      *((uint32_t *)result) = Sg_GetUIntegerClamp(v, SG_CLAMP_NONE, NULL);
     }
     break;
 
@@ -1023,7 +1131,8 @@ static void callback_invoker(ffi_cif *cif, void *result, void **args,
 static SgObject internal_ffi_call(SgObject *args, int argc, void *data)
 {
   SgObject lastError = SG_FALSE;
-  SgObject *funcargs;
+  /* SgObject *funcargs; */
+  SgObject funcargs, cp;
   int retType, i, size;
   SgObject signatures;
   SgFuncInfo *func;
@@ -1064,16 +1173,22 @@ static SgObject internal_ffi_call(SgObject *args, int argc, void *data)
   ffi_values = SG_NEW_ARRAY(void*, func->argc);
   params = SG_NEW_ARRAY(ffi_storage, func->argc);
 
-  funcargs = Sg_ListToArray(args[argc-1], FALSE);
-  for (i = 0; i < func->argc; i++) {
+  /* funcargs = Sg_ListToArray(args[argc-1], FALSE); */
+  funcargs = args[argc-1];
+  i = 0;
+  SG_FOR_EACH(cp, funcargs) {
+    /* for (i = 0; i < func->argc; i++) { */
     if (!push_ffi_type_value(func,
 			     SG_STRING_VALUE_AT(signatures, i),
-			     funcargs[i], params + i,
+			     /* funcargs[i],  */
+			     SG_CAR(cp),
+			     params + i,
 			     &lastError)) {
-      Sg_Error(UC("argument error on index %d: %S"), i, lastError);
+      Sg_Error(UC("argument error %A on index %d: %S"), func, i, lastError);
       return SG_UNDEF;
     }
     ffi_values[i] = (params + i);
+    i++;
   }
   /* sanity check */
   if (!func->code) {
@@ -1389,7 +1504,7 @@ SG_EXTENSION_ENTRY void CDECL Sg_Init_sagittarius__ffi()
   ref_table = SG_HASHTABLE(Sg_MakeHashTableSimple(SG_HASH_EQ, 0));
 
   Sg_InitStaticClassWithMeta(SG_CLASS_POINTER, UC("<pointer>"), lib, NULL,
-			     SG_FALSE, NULL, 0);
+			     SG_FALSE, pointer_slots, 0);
   Sg_InitStaticClassWithMeta(SG_CLASS_FUNC_INFO, UC("<function-info>"),
 			     lib, NULL, SG_FALSE, NULL, 0);
   Sg_InitStaticClassWithMeta(SG_CLASS_CALLBACK, UC("<callback>"),

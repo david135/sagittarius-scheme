@@ -9,7 +9,10 @@
   (define tlv-value 
     (integer->bytevector
      #x6F1A840E315041592E5359532E4444463031A5088801025F2D02656E))
-  
+  (define tlv-structure '((#xEF (#xA0 (#x80 . #vu8(1 2 3 4 5)))
+				(#xA1 (#x80 1 2 3 4 5))
+				(#xA1 (#x80 . #x123456)))
+			  (#xC9)))
   (test-assert "tlv-object?"
 	       (tlv-object? (call-with-port
 				(open-bytevector-input-port tlv-value)
@@ -26,6 +29,13 @@
 		(call-with-bytevector-output-port
 		 (lambda (out) (write-tlv tlv out))))
     )
+
+  (test-equal "read-tlv" 2 (length (read-tlv (open-bytevector-input-port
+					      (bytevector-concatenate
+					       (map tlv->bytevector 
+						    (->tlv tlv-structure))))
+					     emv-parser)))
+
 )
 
 (let ()
@@ -39,7 +49,7 @@
   (let ((tlv (call-with-port (open-bytevector-input-port tlv-value)
 	       dgi-parser)))
     (test-equal "tlv-tag" #x0001 (tlv-tag tlv))
-    (test-equal "tlv-data" #vu8(1 2 3 4 5) (tlv-data tlv))
+    (test-equal "tlv-data (dgi)" #vu8(1 2 3 4 5) (tlv-data tlv))
     ;; so far we don't have DGI style writer...
     (test-equal "tlv->bytevector" tlv-value
 		(tlv->bytevector tlv :writer write-dgi-tlv))
