@@ -3,6 +3,7 @@
     (export open-shared-library
 	    lookup-shared-library
 	    close-shared-library
+	    shared-object-suffix
 	    c-function
 	    make-c-function ;; issue 83
 	    pointer->c-function
@@ -21,6 +22,7 @@
 	    integer->pointer
 	    pointer->integer
 	    allocate-pointer
+	    set-pointer-value!
 
 	    ;; c-struct
 	    define-c-struct
@@ -154,6 +156,7 @@
 	    (core errors)
 	    (core syntax)
 	    (core misc)
+	    (clos user)
 	    (sagittarius)
 	    (sagittarius dynamic-module)
 	    (sagittarius vm))
@@ -212,6 +215,9 @@
 	(do ((i 0 (+ i 1)) (bv (make-bytevector size)))
 	    ((= i size) bv)
 	  (bytevector-u8-set! bv i (pointer-ref-c-uint8 p i)))))
+
+  (define (set-pointer-value! p n)
+    (slot-set! p 'value n))
 
   (define (deref pointer offset)
     (if (null-pointer? pointer)

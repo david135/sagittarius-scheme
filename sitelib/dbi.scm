@@ -46,6 +46,7 @@
 	    dbi-prepare
 	    dbi-bind-parameter!
 	    dbi-execute!
+	    dbi-execute-using-connection!
 	    dbi-fetch!
 	    dbi-fetch-all!
 	    dbi-columns
@@ -66,7 +67,8 @@
 	    (srfi :13 strings)
 	    (sagittarius)
 	    (sagittarius regex)
-	    (sagittarius control))
+	    (sagittarius control)
+	    (sagittarius object))
 
   ;;--------------------------
   ;; DBI conditions
@@ -130,8 +132,26 @@
   (define-generic dbi-prepare)
   (define-generic dbi-execute!)
   (define-generic dbi-execute-using-connection!)
+  ;; simple implementation
+  (define-method dbi-execute-using-connection! ((c <dbi-connection>) sql . args)
+    (let1 q (dbi-prepare c sql)
+      ;; assume dbi-bind-parameter! can handle the integer
+      (unless (null? args)
+	(do ((i 0 (+ i 1)) (args args (cdr args)))
+	    ((null? args))
+	  (dbi-bind-parameter! q i (car args))))
+      (dbi-execute! q)))
+  ;; fetch must return #f if no result available
   (define-generic dbi-fetch!)
   (define-generic dbi-fetch-all!)
+  ;; dbi-fetch-all! can be naive implementation like this
+  (define-method dbi-fetch-all! ((q <dbi-query>))
+    (let loop ((v (dbi-fetch! query))
+	       (r '()))
+      (if v
+	  (loop (dbi-fetch! query) (cons v r))
+	  (reverse! r))))
+
   (define-generic dbi-columns)
   (define-generic dbi-bind-parameter!)
   ;;(define-generic dbi-do)
@@ -147,9 +167,8 @@
 
   ;;--------------------------
   ;; Low level APIs
-  (define *dsn-regex* #/^dbi:([\w-]+)(?::(.*))?$/)
   (define (dbi-parse-dsn dsn)
-    (cond ((looking-at *dsn-regex* dsn)
+    (cond ((#/^dbi:([\w-]+)(?::(.*))?$/ dsn)
 	   => (lambda (m)
 		(let ((driver (m 1))
 		      (options (m 2)))
@@ -167,16 +186,26 @@
 
   ;; load driver library and execute driver constructor.
   ;; NB: driver library must be on load path.
+
+  ;; TODO make this thread safe
+  (define *driver-pool* (make-eq-hashtable))
+
   (define (dbi-make-driver driver-name)
-    (let ((lib `(dbd ,(string->symbol driver-name)))
-	  (ctr `(,(string->symbol (format "make-~a-driver" driver-name)))))
-      (guard (e (else
-		 (raise-dbi-error (make-dbi-driver-not-exist driver-name)
-				  'dbi-make-driver
-				  (if (message-condition? e)
-				      (condition-message e)
-				      (format "could not load driver ~a or it does not have procedure make-~a-driver"
-					      lib driver-name))
-				  e)))
-	(eval ctr (environment lib)))))
+    (let* ((driver-name (string->symbol driver-name))
+	   (lib `(dbd ,driver-name))
+	   (ctr `(,(string->symbol (format "make-~a-driver" driver-name)))))
+      (cond ((~ *driver-pool* driver-name))
+	    (else
+	     (guard (e (else
+			(raise-dbi-error 
+			 (make-dbi-driver-not-exist driver-name)
+			 'dbi-make-driver
+			 (if (message-condition? e)
+			     (condition-message e)
+			     (format "could not load driver ~a or it does not have procedure make-~a-driver"
+				     lib driver-name))
+			 e)))
+	       (let1 driver (eval ctr (environment lib))
+		 (set! (~ *driver-pool* driver-name) driver)
+		 driver))))))
   )
