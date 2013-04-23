@@ -116,6 +116,10 @@ SG_EXTERN void   GC_register_finalizer(void *o, GC_finalizer_proc proc,
 				       void *data);
 
 SG_EXTERN void * GC_base(void *o);
+
+/* bindings must be saved */
+SG_EXTERN void   GC_register_libraries(void *libraries);
+
 SG_CDECL_END
 
 /* compatible macros */

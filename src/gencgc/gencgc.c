@@ -40,6 +40,9 @@
 /* some parameters for debugging */
 static int debug_flag = 0;
 
+/* to track all bindings, actually sucks... */
+static SgObject binding_libraries = NULL;
+
 size_t bytes_consed_between_gcs = 12*1024*1024;
 
 /* probably enough for Cygwin ... */
@@ -1370,7 +1373,7 @@ static int blockable_p(void *pointer)
 void * gc_search_space(void *start, intptr_t bytes, void *pointer, 
 		       int precise)
 {
-  block_t *block;
+  block_t *block = NULL;
   if (precise) block = POINTER2BLOCK(pointer);
   while (bytes > 0) {
     block_t *thing = (block_t *)start;
@@ -1742,9 +1745,6 @@ void scavenge(intptr_t *start, intptr_t n_words)
       /* both block and object need to be in dynamic space
 	 even though block is diff of object however it
 	 can be some extra check. */
-      if (object == 0x998f9b0) {
-	fprintf(stderr, "port!\n");
-      }
       if (search_dynamic_space((void *)object, TRUE)) {
 	if (from_space_p((void *)object)) {
 	  if (MEMORY_FORWARDED(block)) {
@@ -1757,7 +1757,7 @@ void scavenge(intptr_t *start, intptr_t n_words)
 	      dispatch_pointer((void **)real_ptr, (void *)object);
 	    } else {
 	      /* do some sanity check */
-	      page_index_t index = find_page_index(object);
+	      page_index_t index = find_page_index((void *)object);
 	      if (page_table[index].large_object &&
 		  MEMORY_SIZE(block) < large_object_size)
 		goto not_scavenge;
@@ -2323,7 +2323,7 @@ static void invoke_finalizer()
   for (i = 0; i < last_free_page; i++) {
     if (page_table[i].gen == from_space && !page_table[i].dont_move &&
 	page_table[i].finalizers) {
-      page_index_t last_page, j;
+      page_index_t last_page;
       void *start, *end, *object_ptr;
       size_t nbytes_invoked = 0;
       /* find the end of the region */
@@ -2450,6 +2450,9 @@ garbage_collect_generation(generation_index_t generation, int raise)
       }
     }
   }
+  /* All bindings must be scavenged otherwise we will get SEGV somewhere */
+  scavenge_bindings(binding_libraries);
+
   /* in case of restored frames (call/cc or stack overflow), we need to
      check the VM's continuation frame. We know the structure so that we
      can do it more efficiently than VM stack. so scavenge it here. */
@@ -2781,6 +2784,14 @@ void GC_register_finalizer(void *o, GC_finalizer_proc proc, void *data)
       }
     }
     SET_MEMORY_FINALIZER(block, proc, data);
+  }
+}
+
+void GC_register_libraries(void *libraries)
+{
+  /* must be only once */
+  if (binding_libraries == NULL) {
+    binding_libraries = libraries;
   }
 }
 

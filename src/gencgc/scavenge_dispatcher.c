@@ -165,11 +165,24 @@ void scavenge_general_pointer(void **where, void *obj)
     }									\
   } while (0)
 
+#if 0
+static int target_p(SgObject o, const char *name)
+{
+  if (SG_SYMBOLP(o)) {
+    return ustrcmp(SG_STRING(SG_SYMBOL(o)->name)->value, name) == 0;
+  } else if (SG_STRINGP(o)) {
+    return ustrcmp(SG_STRING(o)->value, name) == 0;
+  }
+  return FALSE;
+}
+#endif
+
 static void salvage_hashtable(void **where, SgObject obj)
 {
   SgHashCore *core;
   SgHashIter itr;
   SgHashEntry *e;
+  int moved = FALSE;
   /* page_index_t index = find_page_index(obj); */
   copy_root_object(where, obj, copy_object);
   core = SG_HASHTABLE_CORE(obj);
@@ -195,15 +208,14 @@ static void salvage_hashtable(void **where, SgObject obj)
       SET_MEMORY_FORWARDED(POINTER2BLOCK(e), z);
       Sg_HashCoreReplaseEntry(core, (intptr_t)z->key, z);
       e = z;
+      moved = TRUE;
     }
-    /* NOTE: we don't need following so that it will be handled by
-       scavenge as long as entry isn't in from space. */
-    /* salvage_entry_key(e); */
-    /* salvage_entry_value(e); */
+    scavenge((intptr_t *)POINTER2BLOCK(e), 
+	     MEMORY_SIZE(POINTER2BLOCK(e))/N_WORD_BYTES);
   }
   /* it's probably better to check if the real entry has been moved or not
      but for now.*/
-  if (SG_HASHTABLE(obj)->type == SG_HASH_EQ) {
+  if (SG_HASHTABLE(obj)->type == SG_HASH_EQ && moved) {
     core->rehashNeeded = TRUE;
   }
 }
@@ -563,19 +575,6 @@ static void salvage_tuple(void **where, void *obj)
 			 SG_TUPLE(obj)->printer);
 }
 
-
-#if 0
-static int target_p(SgObject o, const char *name)
-{
-  if (SG_SYMBOLP(o)) {
-    return ustrcmp(SG_STRING(SG_SYMBOL(o)->name)->value, name) == 0;
-  } else if (SG_STRINGP(o)) {
-    return ustrcmp(SG_STRING(o)->value, name) == 0;
-  }
-  return FALSE;
-}
-#endif
-
 /* If where is NULL means, it's from the top most position.
    (obj should be pinned)
  */
@@ -612,6 +611,10 @@ void salvage_scheme_pointer(void **where, void *obj)
     salvage_list(where, obj);
   } else {
     SgClass *clazz = SG_CLASS_OF(obj);
+    /* class itself might be GCable so we need to save it. */
+    salvage_scheme_pointer((void **)&clazz, clazz);
+    /* reset the class */
+    SG_SET_CLASS(obj, clazz);
     if (clazz->scav_func) {
       scav_func fun = (scav_func)clazz->scav_func;
       fun(where, obj);
@@ -680,6 +683,28 @@ static void scan_weak_hashtables()
   }
   /* reset */
   weak_hashtables = NULL;
+}
+
+static void scavenge_bindings(SgObject binding_libraries)
+{
+  /* must be set but in case */
+  if (binding_libraries) {
+    SgHashIter itr;
+    SgHashCore *core;
+    SgHashEntry *e;
+    core = SG_HASHTABLE_CORE(binding_libraries);
+    Sg_HashIterInit(core, &itr);
+    while ((e = Sg_HashIterNext(&itr)) != NULL) {
+      /* the entry must be a library */
+      /* We can't do keys here must be handled other place. */
+      SgObject lib = SG_HASH_ENTRY_VALUE(e);
+      /* only binding table */
+      salvage_hashtable((void **)&SG_LIBRARY_TABLE(lib), SG_LIBRARY_TABLE(lib));
+    }
+
+  } else {
+    Sg_Panic("Library list is not set!");
+  }
 }
 
 /* collect top cont frame. */
