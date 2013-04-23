@@ -296,11 +296,8 @@ void Sg_RegisterDL(void *data_start, void *data_end,
 
 void Sg_AddGCRoots(void *start, void *end)
 {
-#ifdef USE_BOEHM_GC
+  /* GenCGC and BoehmGC have the same API for this. */
   GC_add_roots(start, end);
-#else
-  /* do nothing for now */
-#endif
 }
 
 /* exit related */

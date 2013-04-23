@@ -120,6 +120,8 @@ SG_EXTERN void * GC_base(void *o);
 /* bindings must be saved */
 SG_EXTERN void   GC_register_libraries(void *libraries);
 
+SG_EXTERN void   GC_add_roots(void *start, void *end);
+
 SG_CDECL_END
 
 /* compatible macros */

@@ -140,8 +140,8 @@ SG_EXTERN void Sg_HashCoreClear(SgHashCore *ht, int k);
 #ifndef USE_BOEHM_GC
 /* to update entry object itself this should not be used from
    outside of the world. */
-SG_EXTERN void Sg_HashCoreReplaseEntry(SgHashCore *table, intptr_t key,
-				       SgHashEntry *e);
+SG_EXTERN void Sg_HashCoreReplaceEntry(SgHashCore *table, SgHashEntry *oe,
+				       SgHashEntry *ne);
 #endif
 
 
