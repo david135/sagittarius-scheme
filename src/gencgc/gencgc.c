@@ -1657,6 +1657,9 @@ static int is_scheme_pointer(void *p)
     SgClass *clazz = SG_CLASS_OF(p);
     if (possibly_valid_static_area_pointer(clazz)) {
       return clazz->magic == CLASS_MAGIC_VALUE;
+      /* FIXME */
+    } else if (search_dynamic_space(clazz, TRUE) && SG_CLASSP(clazz)) {
+      return TRUE;
     } else {
       return FALSE;
     }
@@ -1741,7 +1744,6 @@ void scavenge(intptr_t *start, intptr_t n_words)
     while (n_bytes_scavenged < limit) {
       intptr_t object = *real_ptr;
       block_t *block = POINTER2BLOCK(object);
-
       /* both block and object need to be in dynamic space
 	 even though block is diff of object however it
 	 can be some extra check. */
@@ -1766,6 +1768,16 @@ void scavenge(intptr_t *start, intptr_t n_words)
 		goto not_scavenge;
 	      /* Scavenge that pointer. */
 	      scavenge_general_pointer((void **)real_ptr, (void *)object);
+	    }
+	  }
+	} else {
+	  if (is_scheme_pointer((void *)object)) {
+	    /* check the class */
+	    SgClass *clazz = SG_CLASS_OF(object);
+	    if (search_dynamic_space(clazz, TRUE)) {
+	      if (MEMORY_FORWARDED(POINTER2BLOCK(clazz))) {
+		SG_SET_CLASS(object, MEMORY_FORWARDED_VALUE(POINTER2BLOCK(clazz)));
+	      }
 	    }
 	  }
 	}
@@ -2793,6 +2805,11 @@ void GC_register_libraries(void *libraries)
   if (binding_libraries == NULL) {
     binding_libraries = libraries;
   }
+}
+
+void GC_add_roots(void *start, void *end)
+{
+  add_static_root(start, end);
 }
 
 void * GC_base(void *o)

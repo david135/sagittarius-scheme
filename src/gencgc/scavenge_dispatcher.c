@@ -34,6 +34,7 @@
 #include <sagittarius/code.h>
 #include <sagittarius/codec.h>
 #include <sagittarius/file.h>
+#include <sagittarius/generic.h>
 #include <sagittarius/gloc.h>
 #include <sagittarius/hashtable.h>
 #include <sagittarius/identifier.h>
@@ -135,7 +136,7 @@ void scavenge_general_pointer(void **where, void *obj)
 	  SET_MEMORY_FORWARDED(block__, z__);			\
 	}							\
       }								\
-      *where = z__;						\
+      *(where) = z__;						\
       (obj) = z__;						\
     }								\
   } while (0)
@@ -165,7 +166,7 @@ void scavenge_general_pointer(void **where, void *obj)
     }									\
   } while (0)
 
-#if 0
+#if 1
 static int target_p(SgObject o, const char *name)
 {
   if (SG_SYMBOLP(o)) {
@@ -187,6 +188,7 @@ static void salvage_hashtable(void **where, SgObject obj)
   copy_root_object(where, obj, copy_object);
   core = SG_HASHTABLE_CORE(obj);
   copy_root_object(&core->buckets, core->buckets, copy_large_object);
+  /* scavenge_general_pointer(&core->buckets, core->buckets); */
   Sg_HashIterInit(core, &itr);
   /* TODO how should we treet this? and do we use this? */
   /* preserve_pointer(core->data); */
@@ -206,13 +208,14 @@ static void salvage_hashtable(void **where, SgObject obj)
 	 not the same size of it. */
       SgHashEntry *z = copy_object(e);
       SET_MEMORY_FORWARDED(POINTER2BLOCK(e), z);
-      Sg_HashCoreReplaseEntry(core, (intptr_t)z->key, z);
+      Sg_HashCoreReplaceEntry(core, e, z);
       e = z;
       moved = TRUE;
     }
     scavenge((intptr_t *)POINTER2BLOCK(e), 
 	     MEMORY_SIZE(POINTER2BLOCK(e))/N_WORD_BYTES);
   }
+
   /* it's probably better to check if the real entry has been moved or not
      but for now.*/
   if (SG_HASHTABLE(obj)->type == SG_HASH_EQ && moved) {
@@ -444,9 +447,9 @@ static void salvage_library(void **where, void *obj)
 
 static void salvage_procedure(void **where, void *obj)
 {
+  copy_root_object(where, obj, copy_object);
   switch (SG_PROCEDURE_TYPE(obj)) {
   case SG_PROC_SUBR:
-    copy_root_object(where, obj, copy_object);
     if (SG_SUBR(obj)->data) {
       scavenge_general_pointer(&SG_SUBR(obj)->data, SG_SUBR(obj)->data);
     }
@@ -454,7 +457,6 @@ static void salvage_procedure(void **where, void *obj)
   case SG_PROC_CLOSURE: {
     SgObject code;
     int freec, i;
-    copy_root_object(where, obj, copy_object);
     code = SG_CLOSURE(obj)->code;
     freec = SG_CODE_BUILDER_FREEC(code);
     /* closure's free variables are not independent object thus it can't
@@ -467,8 +469,20 @@ static void salvage_procedure(void **where, void *obj)
     salvage_scheme_pointer(&SG_CLOSURE(obj)->code,
 			   SG_CLOSURE(obj)->code);
   }
+  case SG_PROC_GENERIC: {
+    salvage_scheme_pointer(&SG_GENERIC(obj)->methods,
+			   SG_GENERIC(obj)->methods);
+    if (SG_GENERIC_DATA(obj)) {
+      void *data = SG_GENERIC_DATA(obj);
+      if (is_scheme_pointer(data)) {
+	salvage_scheme_pointer(&SG_GENERIC(obj)->data, data);
+      } else {
+	scavenge_general_pointer(&SG_GENERIC(obj)->data, data);
+      }
+    }
+    break;
+  }
   default:
-    copy_root_object(where, obj, copy_object);
     break;
   }
 }
@@ -697,9 +711,14 @@ static void scavenge_bindings(SgObject binding_libraries)
     while ((e = Sg_HashIterNext(&itr)) != NULL) {
       /* the entry must be a library */
       /* We can't do keys here must be handled other place. */
+#if 0
       SgObject lib = SG_HASH_ENTRY_VALUE(e);
       /* only binding table */
       salvage_hashtable((void **)&SG_LIBRARY_TABLE(lib), SG_LIBRARY_TABLE(lib));
+#else
+      salvage_scheme_pointer((void **)&e->value, e->value);
+#endif
+
     }
 
   } else {

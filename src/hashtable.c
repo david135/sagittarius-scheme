@@ -658,24 +658,25 @@ SgHashEntry* Sg_HashCoreSearch(SgHashCore *table, intptr_t key,
 /* This API must not be called from anywhere but GC */
 /* The new_entry is copied by copy_object so it should contain all
    the necessary pointers. */
-void Sg_HashCoreReplaseEntry(SgHashCore *table, intptr_t key,
+void Sg_HashCoreReplaceEntry(SgHashCore *table, SgHashEntry *old_entry,
 			     SgHashEntry *new_entry)
 {
   uint32_t hashval, index;
-  Entry *e, *p, **buckets, *ne = (Entry *)new_entry;
+  Entry *e, *p, **buckets, *ne = (Entry *)new_entry, *oe = (Entry *)old_entry;
 
-  hashval = table->hasher(table, key);
+  hashval = oe->hashValue;
   index = HASH2INDEX(table->bucketCount, table->bucketsLog2Count, hashval);
   buckets = BUCKETS(table);
-
   for (e = buckets[index], p = NULL; e; p = e, e = e->next) {
-    if (table->compare(table, key, e->key)) {
+    /* the given key is the same as entry key, see scavenge_dispatcher.c */
+    if (oe == e) {
       if (p) {
 	/* re chain it */
 	p->next = ne;
       } else {
 	buckets[index] = ne;
       }
+      return;
     }
   }
   /* should not be happened */
