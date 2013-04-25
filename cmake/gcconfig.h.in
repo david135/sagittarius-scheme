@@ -1,0 +1,19 @@
+#ifndef SAGITTARIUS_GC_CONFIG_H
+#define SAGITTARIUS_GC_CONFIG_H
+
+/* stack grows downward */
+#cmakedefine SG_STACK_GROW_DOWNWARD
+/* stack is controlled */
+#cmakedefine SG_CONTROLLED_STACK
+
+/* pthread stuff */
+
+/* suspend function */
+#cmakedefine HAVE_PTHREAD_SUSPEND
+#cmakedefine HAVE_PTHREAD_SUSPEND_NP
+/* resume */
+#cmakedefine HAVE_PTHREAD_RESUME
+#cmakedefine HAVE_PTHREAD_RESUME_NP
+#cmakedefine HAVE_PTHREAD_CONTINUE
+
+#endif
