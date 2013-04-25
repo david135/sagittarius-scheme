@@ -94,8 +94,8 @@ extern void Sg__Init_sagittarius_interactive();
 void Sg_Init()
 {
   SgObject nullsym, coreBase, compsym, sgsym;
-#ifdef USE_BOEHM_GC
   GC_INIT();
+#ifdef USE_BOEHM_GC
 #if GC_VERSION_MAJOR >= 7 && GC_VERSION_MINOR >= 2
   GC_set_oom_fn(oom_handler);
   GC_set_finalize_on_demand(TRUE);
@@ -106,9 +106,8 @@ void Sg_Init()
   GC_finalizer_notifier = finalizable;
 #endif
 #else
-  /* do nothing for now*/
+  GC_set_oom_fn(oom_handler);
 #endif
-
 
   /* order is important especially libraries */
   Sg__InitString();		/* string must be before symbol */
@@ -222,7 +221,7 @@ void Sg_RegisterFinalizer(SgObject z, SgFinalizerProc finalizer, void *data)
   GC_REGISTER_FINALIZER_NO_ORDER(z, (GC_finalization_proc)finalizer,
 				 data, &ofn, &ocd);
 #else
-  /* for now do nothing */
+  GC_register_finalizer(z, (GC_finalizer_proc)finalizer, data);
 #endif
 }
 
@@ -233,7 +232,7 @@ void Sg_UnregisterFinalizer(SgObject z)
   GC_REGISTER_FINALIZER_NO_ORDER(z, (GC_finalization_proc)NULL, NULL,
 				 &ofn, &ocd);
 #else
-  /* for now do nothing */
+  GC_register_finalizer(z, (GC_finalizer_proc)NULL, NULL);
 #endif
 }
 
@@ -242,7 +241,7 @@ void Sg_RegisterDisappearingLink(void **p, void *value)
 #ifdef USE_BOEHM_GC
   GC_general_register_disappearing_link(p, value);
 #else
-  /* for now do nothing */
+  /* for gencgc we don't use this */
 #endif
 }
 
@@ -251,7 +250,7 @@ void Sg_UnregisterDisappearingLink(void **p)
 #ifdef USE_BOEHM_GC
   GC_unregister_disappearing_link(p);
 #else
-  /* for now do nothing */
+  /* for gencgc we don't use this */
 #endif
 }
 
@@ -260,8 +259,8 @@ void* Sg_GCBase(void *value)
 #ifdef USE_BOEHM_GC
   return GC_base(value);
 #else
-  /* for now do nothing */
-  return NULL;
+  /* The same API actually */
+  return GC_base(value);
 #endif
 }
 
@@ -297,11 +296,8 @@ void Sg_RegisterDL(void *data_start, void *data_end,
 
 void Sg_AddGCRoots(void *start, void *end)
 {
-#ifdef USE_BOEHM_GC
+  /* GenCGC and BoehmGC have the same API for this. */
   GC_add_roots(start, end);
-#else
-  /* do nothing for now */
-#endif
 }
 
 /* exit related */
