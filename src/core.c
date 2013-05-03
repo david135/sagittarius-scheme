@@ -210,7 +210,8 @@ void Sg_GC()
 #ifdef USE_BOEHM_GC
   GC_gcollect();
 #else
-  /* for now do nothing */
+  /* TODO  */
+  GC_collect_garbage(0);
 #endif
 }
 
