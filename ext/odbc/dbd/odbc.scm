@@ -66,17 +66,19 @@
 			     "server option is required"))
       (let-keywords auth ((username username)
 			  (password password)
-			  (auto-commit? (->boolean auto-commit)))
+			  (auto-commit (->boolean auto-commit)))
 	(make <dbi-odbc-connection>
-	  :hbc (connect! env server username password auto-commit?)))))
+	  :hbc (connect! env server username password auto-commit)))))
 
   (define-method dbi-open? ((conn <dbi-odbc-connection>))
-    (let ((c (odbc-connection-odbc-hbc conn)))
-      (connection-open? c)))
-
+    (connection-open? (odbc-connection-odbc-hbc conn)))
   (define-method dbi-close ((conn <dbi-odbc-connection>))
-    (let ((c (odbc-connection-odbc-hbc conn)))
-      (disconnect! c)))
+    (disconnect! (odbc-connection-odbc-hbc conn))
+    (free-handle! (odbc-connection-odbc-hbc conn)))
+  (define-method dbi-open? ((q <dbi-odbc-query>))
+    (statement-open? (dbi-query-prepared q)))
+  (define-method dbi-close ((q <dbi-odbc-query>))
+    (free-handle! (dbi-query-prepared q)))
 
   (define-method dbi-prepare ((conn <dbi-odbc-connection>)
 			      (sql <string>) . args)
