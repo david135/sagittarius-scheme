@@ -46,6 +46,7 @@
 #include <sagittarius/port.h>
 #include <sagittarius/reader.h>
 #include <sagittarius/record.h>
+#include <sagittarius/regex.h>
 #include <sagittarius/string.h>
 #include <sagittarius/symbol.h>
 #include <sagittarius/transcoder.h>
@@ -589,6 +590,69 @@ static void salvage_tuple(void **where, void *obj)
 			 SG_TUPLE(obj)->printer);
 }
 
+/* Regular expression pattern contains REGEX VM's code
+   so we need to resolve jump address here, bit pain in the ass though...
+ */
+#ifdef HAVE_ALLOCA
+#define ALLOC_TEMP_BUFFER alloca
+#define FREE_TEMP_BUFFER	/* nothing */
+#else
+#define ALLOC_TEMP_BUFFER malloc
+#define FREE_TEMP_BUFFER  free
+#endif
+void salvage_regex_pattern(void **where, void *obj)
+{
+  int rootSize, i;
+  inst_t *root, *save, *start;
+  copy_root_object(where, obj, copy_object);
+  salvage_scheme_pointer((void **)&SG_PATTERN(obj)->pattern, 
+			 &SG_PATTERN(obj)->pattern);
+  salvage_scheme_pointer((void **)&SG_PATTERN(obj)->ast, 
+			 &SG_PATTERN(obj)->ast);
+
+  /* here comes the painful part 
+     we the following steps
+     1. save the current root array into the stack.
+     2. scavenge the root instruction.
+     3. update the pointer offsets.
+  */
+  rootSize = SG_PATTERN(obj)->prog->rootLength;
+  start = SG_PATTERN(obj)->prog->root;
+  /* step 1 save */
+  save = ALLOC_TEMP_BUFFER(sizeof(inst_t) * rootSize);
+  memcpy(save, start, sizeof(inst_t) * rootSize);
+  /* step 2 scavenge */
+  scavenge_general_pointer((void **)&SG_PATTERN(obj)->prog->root, start);
+  root = SG_PATTERN(obj)->prog->root;
+  /* step 3 update */
+  for (i = 0; i < rootSize; i++) {
+    inst_t *inst = &root[i];
+    int op = INST_OPCODE(inst), offset;
+#define UPDATE(p)						\
+    do {							\
+      offset = (&(&save[i])->arg.pos)->p - start;		\
+      (&(inst->arg.pos))->p = &root[offset];			\
+    } while (0)
+
+    switch (op) {
+    case RX_SPLIT:
+    case RX_BRANCH:
+    case RX_BRANCHA:
+      UPDATE(y);
+    case RX_JMP:
+    case RX_AHEAD:
+    case RX_NAHEAD:
+    case RX_BEHIND:
+    case RX_NBEHIND:
+    case RX_ONCE:
+      UPDATE(x);
+      break;
+    default: break;
+    }
+  }
+  FREE_TEMP_BUFFER(save);  
+}
+
 /* If where is NULL means, it's from the top most position.
    (obj should be pinned)
  */
@@ -795,4 +859,5 @@ static void init_scav_fun()
   SET_CLASS_SCAV(SYNTAX, savlage_syntax);
   SET_CLASS_SCAV(MACRO, salvage_macro);
   SET_CLASS_SCAV(TUPLE, salvage_tuple);
+  SET_CLASS_SCAV(PATTERN, salvage_regex_pattern);
 }

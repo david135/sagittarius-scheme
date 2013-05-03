@@ -125,6 +125,35 @@ typedef struct SgMatcherRec
   SgChar    *submatch[1];
 } SgMatcher;
 
+/* Instructions for GenCGC we need to refer this. */
+enum {
+  RX_ANY,			/* match everything (one character) */
+  RX_CHAR,			/* match one character */
+  RX_SET,			/* match one charset */
+  RX_NSET,			/* match one charset */
+  RX_STR,			/* match string(not supported yet) */
+  RX_SPLIT,			/* split current (virtual) thread */
+  RX_JMP,
+  RX_SAVE,			/* save current match for submatch */
+  /* add more */
+  RX_EMPTY,			/* start, end anchor and word boundary */
+  RX_FAIL,			/* match failed */
+  RX_MATCH,			/* matched */
+  RX_BREF,			/* backreference */
+  /* these ahead releated use index as its argument. */
+  RX_AHEAD,			/* look ahead */
+  RX_BEHIND,			/* look behind */
+  RX_NAHEAD,			/* negative look ahead */
+  RX_NBEHIND,			/* negative look behind */
+  RX_ONCE,			/* standalone */
+  RX_RESTORE,			/* recover from look ahead/behind */
+  /* condition */
+  RX_BRANCH,
+  RX_BRANCHA,
+  RX_INST_COUNT
+};
+
+
 SG_CLASS_DECL(Sg_MatcherClass);
 #define SG_CLASS_MATCHER   (&Sg_MatcherClass)
 #define SG_MATCHER(obj)   ((SgMatcher *)obj)

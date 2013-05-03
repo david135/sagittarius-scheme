@@ -29,6 +29,7 @@
  */
 /* we need to use internal mutex and so */
 #include <string.h>
+#include <sagittarius/alloca.h>
 #define LIBSAGITTARIUS_BODY
 #include "sagittarius/gencgc.h"
 #include "gc-internal.h"
