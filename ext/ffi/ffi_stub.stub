@@ -12,8 +12,12 @@
 (define-type <func-info> "SgFuncInfo*")
 (define-type <cstruct> "SgCStruct*")
 
-(define-c-proc open-shared-library (file::<string>) 
-  (result (Sg_MakePointer (Sg_OpenSharedObject file))))
+(define-c-proc open-shared-library (file::<string> :optional (raise::<boolean> #f)) 
+  (let ((p::void* (Sg_OpenSharedObject file)))
+    (when (and raise (== p NULL))
+      (Sg_Error (UC "%A") (Sg_GetSharedError)))
+    
+    (result (Sg_MakePointer p))))
 
 (define-c-proc lookup-shared-library (handle::<pointer> symbol::<string>) 
   (result (Sg_MakePointer (Sg_LookupSharedObject (cast void* 
@@ -72,17 +76,22 @@
     (result (Sg_MakePointer p))))
 
 ;; struct
-(define-c-proc create-c-struct (name::<symbol> layouts) Sg_CreateCStruct)
+(define-c-proc create-c-struct (name::<symbol> layouts packed?::<boolean>)
+  Sg_CreateCStruct)
 
 ;; allocates c-struct with GC
 (define-c-proc allocate-c-struct (st::<cstruct>) 
   ;; allocates byte
-  (let ((p::char* (SG_NEW2 char_ptr (-> st size))))
-    (memset p 0 (-> st size))
+  (let ((p::char* (SG_NEW2 char_ptr (ref (-> st type) size))))
+    (memset p 0 (ref (-> st type) size))
     (result (Sg_MakePointer p))))
 
+(define-c-proc describe-c-struct
+  (st::<cstruct> :optional (p (Sg_CurrentOutputPort))) ::<void>
+  Sg_DescCStruct)
+
 (define-c-proc size-of-c-struct (st::<cstruct>) ::<fixnum>
-  (result (-> st size)))
+  (result (ref (-> st type) size)))
 
 (define-c-proc c-struct-ref (p::<pointer> st::<cstruct> name::<symbol>) 
   Sg_CStructRef)

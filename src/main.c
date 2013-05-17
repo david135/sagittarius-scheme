@@ -299,7 +299,7 @@ int main(int argc, char **argv)
   int forceInteactiveP = FALSE, noMainP = FALSE;
   int exit_code = 0;
   SgVM *vm;
-  SgObject repl, lib;
+  SgObject repl, lib, preimport = SG_NIL;
 
   static struct option long_options[] = {
     {"loadpath", optional_argument, 0, 'L'},
@@ -365,7 +365,10 @@ int main(int argc, char **argv)
       }
       break;
     case 'I':
+      /* at this point the current library doesn't have anything do it later.
       Sg_ImportLibrary(vm->currentLibrary, Sg_Intern(Sg_MakeStringC(optarg)));
+      */
+      preimport = Sg_Cons(Sg_Intern(Sg_MakeStringC(optarg)), preimport);
       break;
 #if 0
     case '6':
@@ -458,6 +461,11 @@ int main(int argc, char **argv)
 				      SG_INTERN("import"),
 				      SG_INTERN("library"),
 				      SG_INTERN("define-library")));
+  }
+  if (!SG_NULLP(preimport)) {
+    SG_FOR_EACH(preimport, Sg_ReverseX(preimport)) {
+      Sg_ImportLibrary(vm->currentLibrary, SG_CAR(preimport));
+    }
   }
   /* set profiler */
   if (profiler_mode) {

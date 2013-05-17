@@ -19,27 +19,12 @@
   (test-assert "suffix(1)" (string? (shared-object-suffix)))
 
   ;; for now, we do not support anonymous struct
-  (cond-expand
-   ;; The patch is from Stephen Lewis.
-   (64bit
-    ;; on 64-bit architecture gcc aligns elements on 8 byte boundary
-    (define-c-struct inner
-      (int value2)
-      (int pad2)
-      (char* str))
-    
-    (define-c-struct data-to-store
-      (int value1)
-      (int pad1)
-      (struct inner inner)))
-   (else
-    (define-c-struct inner
-      (int value2)
-      (char* str))
-    
-    (define-c-struct data-to-store
-      (int value1)
-      (struct inner inner))))
+  (define-c-struct inner
+    (int value2)
+    (char* str))
+  (define-c-struct data-to-store
+    (int value1)
+    (struct inner inner))
 
   ;; for test convenience
   (define pointer-ref-c-uint8_t   pointer-ref-c-uint8)
@@ -157,6 +142,38 @@
 			       (c-struct-ref st data-to-store 'inner.str))))
 		  r)))
 
+  ;; new api's for c-struct
+  (test-equal "c-struct accessor"
+	      100 
+	      (let ((st (allocate-c-struct data-to-store)))
+		(data-to-store-value1-set! st 100)
+		(data-to-store-value1-ref st)))
+
+  ;; new feature array
+  (define-c-struct struct-with-array
+    (int array 4 int*))
+
+  (test-equal "c-struct array"
+	      #(1 2 3 4)
+	      (let* ((st (allocate-c-struct struct-with-array)))
+		(struct-with-array-int*-set! st #(1 2 3 4))
+		(struct-with-array-int*-ref st)))
+
+  ;; this depends on the memmory condition but
+  ;; fresh memory is always initialised with 0 padding.
+  (test-equal "c-struct array"
+	      #(1 2 3 0)
+	      (let* ((st (allocate-c-struct struct-with-array)))
+		(struct-with-array-int*-set! st #(1 2 3))
+		(struct-with-array-int*-ref st)))
+  
+  ;; should we check the array size on runtime?
+  (test-equal "c-struct array"
+	      #(1 2 3 4)
+	      (let* ((st (allocate-c-struct struct-with-array)))
+		(struct-with-array-int*-set! st #(1 2 3 4 5))
+		(struct-with-array-int*-ref st)))
+
   ;;(pointer-ref-test bool #t)
 
   (pointer-ref-test char #t)
@@ -216,6 +233,12 @@
     (test-assert "set-pointer-value!" (set-pointer-value! p 1))
     (test-equal "set-pointer-value!" 1 (pointer->integer p))
     (test-error "set-pointer-value!" values (set-pointer-value! p 'a)))
+
+  ;; extra
+  (define-c-struct size-check
+    (char  c)
+    (short s))
+  (test-equal "size-check" 4 (size-of-c-struct size-check))
   )
  (else
   #t))

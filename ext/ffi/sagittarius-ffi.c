@@ -245,7 +245,7 @@ void Sg_ReleaseCallback(SgCallback *callback)
 static void cstruct_printer(SgObject self, SgPort *port, SgWriteContext *ctx)
 {
   Sg_Printf(port, UC("#<c-struct %A %d>"), 
-	    SG_CSTRUCT(self)->name, SG_CSTRUCT(self)->size);
+	    SG_CSTRUCT(self)->name, SG_CSTRUCT(self)->type.size);
 }
 
 SG_DEFINE_BUILTIN_CLASS_SIMPLE(Sg_CStructClass, cstruct_printer);
@@ -268,13 +268,26 @@ static SgCStruct* make_cstruct(size_t size)
 static SgObject SYMBOL_STRUCT = SG_UNDEF;
 static SgLibrary *impl_lib = NULL;
 
-SgObject Sg_CreateCStruct(SgObject name, SgObject layouts)
+/* compute offset
+   from: http://en.wikipedia.org/wiki/Data_structure_alignment
+ */
+static inline size_t compute_offset(size_t offset, size_t align)
+{
+  return (offset + align - 1) & ~(align - 1);
+}
+
+static inline size_t compute_padding(size_t offset, size_t align)
+{
+  return (-offset) & (align - 1);
+}
+
+SgObject Sg_CreateCStruct(SgObject name, SgObject layouts, int packedp)
 {
   SgCStruct *st;
   SgObject cp;
   SgVM *vm = Sg_VM();
   int index = 0;
-  size_t size;
+  size_t size, max_type, offset, padding;
   if (!SG_LISTP(layouts)) {
     Sg_Error(UC("list required but got %S"), layouts);
   }
@@ -289,12 +302,13 @@ SgObject Sg_CreateCStruct(SgObject name, SgObject layouts)
       ;; array
       (name type . (size . type-symbol)) ...)
    */
-  size = 0;
+  padding = offset = max_type = size = 0;
   SG_FOR_EACH(cp, layouts) {
     SgObject layout = SG_CAR(cp);
     SgObject typename;
     int type;
     ffi_type *ffi;
+    size_t array_off = 0;
     ASSERT(SG_INTP(SG_CADR(layout)));
 
     st->layouts[index].name = SG_CAR(layout);
@@ -318,20 +332,26 @@ SgObject Sg_CreateCStruct(SgObject name, SgObject layouts)
 	st->type.elements[index] = &SG_CSTRUCT(st2)->type;
 	st->layouts[index].type = &SG_CSTRUCT(st2)->type;
 	st->layouts[index].cstruct = SG_CSTRUCT(st2);
-	st->layouts[index].tag = FFI_RETURN_TYPE_STRUCT;
-	size += SG_CSTRUCT(st2)->size;
+	st->layouts[index].tag = FFI_RETURN_TYPE_STRUCT;	
+	size += SG_CSTRUCT(st2)->type.size;
+	padding = compute_padding(size, SG_CSTRUCT(st2)->type.alignment);
+	size += padding;
+	/* increment offset so that new offset won't be the same as before... */
+	/* FIXME this is ugly! */
+	if (index) offset += 1;
+	offset = compute_offset(offset, SG_CSTRUCT(st2)->type.alignment);
+
+	st->layouts[index].offset = offset;
+	if (SG_CSTRUCT(st2)->type.alignment > max_type) 
+	  max_type = SG_CSTRUCT(st2)->type.alignment;
       } else if (SG_INTP(SG_CAR(SG_CDDR(layout)))) {
-	SgObject size_of, gloc;
 	int asize = SG_INT_VALUE(SG_CAR(SG_CDDR(layout)));
 	type = SG_INT_VALUE(SG_CADR(layout));
 	ffi = lookup_ffi_return_type(type);
-	size_of = Sg_Sprintf(UC("size-of-%A"), SG_CDR(SG_CDDR(layout)));
-	gloc = Sg_FindBinding(impl_lib, Sg_Intern(size_of), SG_FALSE);
-	if (SG_FALSEP(gloc)) {
-	  Sg_Error(UC("struct layout contains invalid array type %S"), layouts);
-	}
-	asize = asize * SG_INT_VALUE(SG_GLOC_GET(SG_GLOC(gloc))) - SG_INT_VALUE(SG_GLOC_GET(SG_GLOC(gloc)));
-	size += asize;
+	array_off = asize * ffi->size;
+	size += array_off;
+	st->layouts[index].array = array_off;
+	array_off -= ffi->alignment;
 	goto primitive_type;
       } else {
 	Sg_Error(UC("invalid struct layout %S"), layouts);
@@ -339,16 +359,33 @@ SgObject Sg_CreateCStruct(SgObject name, SgObject layouts)
     } else {
       type = SG_INT_VALUE(SG_CADR(layout));
       ffi = lookup_ffi_return_type(type);
+      size += ffi->size;
     primitive_type:
+      if (ffi->size > max_type) max_type = ffi->size;
+      /* compute new offset */
+      padding = compute_padding(size, ffi->alignment);
+      size += padding;
+      /* padded size - alignment is offset ... */
+      /* offset = compute_offset(offset + 1, ffi->alignment); */
+      offset = size - ffi->alignment - array_off;
+
       st->type.elements[index] = ffi;
       st->layouts[index].type = ffi;
       st->layouts[index].cstruct = NULL;
       st->layouts[index].tag = type;
-      size += ffi->alignment;
+      st->layouts[index].offset = offset;
+      /* FIXME ugly!!! */
+      offset += array_off;
     }
     index++;
   }
-  st->size = size;		/* alignment */
+
+  st->packed = packedp;
+  st->type.alignment = max_type;
+  /* fixup size */
+  max_type--;
+  size = (size + max_type) & ~max_type;
+  st->type.size = size;
   return SG_OBJ(st);
 }
 
@@ -378,53 +415,42 @@ static SgObject parse_member_name(SgSymbol *name)
 }
 
 static size_t calculate_alignment(SgObject names, SgCStruct *st,
-				  int *foundP, int *type)
+				  int *foundP, int *type, int *array, int *size)
 {
-  size_t align = 0;
+  size_t i;
   SgObject name = SG_CAR(names);
-  size_t size = st->fieldCount, i;
   struct_layout_t *layouts = st->layouts;
 
   /* names are list of property name for struct.
      name        => (name)
      name1.name2 => (name1 name2)
    */
-  for (i = 0; i < size; i++) {
+  for (i = 0; i < st->fieldCount; i++) {
     /* property found */
     if (SG_EQ(name, layouts[i].name)) {
       /* it's this one */
-      if (!layouts[i].cstruct && SG_NULLP(SG_CDR(names))) {
+      if (SG_NULLP(SG_CDR(names))) {
 	*foundP = TRUE;
 	*type = layouts[i].tag;
-	return align;
+	*array = layouts[i].array;
+	*size = layouts[i].type->size;
+	return layouts[i].offset;
       /* property was struct */
       } else if (layouts[i].cstruct) {
-	/* struct in struct */
-	if (SG_NULLP(SG_CDR(names))) {
-	  align += layouts[i].cstruct->size;
-	} else {
-	  /* search from here */
-	  int foundP2 = FALSE, type2;
-	  align += calculate_alignment(SG_CDR(names),
-				       layouts[i].cstruct,
-				       &foundP2,
-				       &type2);
-	  /* second name was a member of the struct */
-	  if (foundP2) {
-	    *foundP = TRUE;
-	    *type = type2;
-	    return align;
-	  }
+	size_t align = layouts[i].offset;
+	/* search from here */
+	align += calculate_alignment(SG_CDR(names),
+				     layouts[i].cstruct,
+				     foundP, type, array, size);
+	/* second name was a member of the struct */
+	if (foundP) {
+	  return align;
 	}
-      }
-    } else {
-      align += layouts[i].type->alignment;
-      if (layouts[i].array != -1) {
-	align += layouts[i].array;
       }
     }
   }
-  return align;
+  /* not found! */
+  return 0;
 }
 
 static SgHashTable *ref_table;
@@ -484,8 +510,9 @@ static SgObject convert_c_to_scheme(int rettype, SgPointer *p, size_t align)
   case FFI_RETURN_TYPE_UINT64_T:
     return Sg_MakeIntegerFromU64(POINTER_REF(uint64_t, p, align));
   case FFI_RETURN_TYPE_POINTER :
-  case FFI_RETURN_TYPE_STRUCT  :
     return make_pointer(POINTER_REF(uintptr_t, p, align));
+  case FFI_RETURN_TYPE_STRUCT  :
+    return make_pointer((uintptr_t)&POINTER_REF(uintptr_t, p, align));
   case FFI_RETURN_TYPE_CALLBACK:
     return Sg_HashTableRef(ref_table, (POINTER_REF(void*, p, align)), SG_FALSE);
   default:
@@ -497,28 +524,93 @@ static SgObject convert_c_to_scheme(int rettype, SgPointer *p, size_t align)
 SgObject Sg_CStructRef(SgPointer *p, SgCStruct *st, SgSymbol *name)
 {
   SgObject names = parse_member_name(name);
-  int foundP = FALSE, type = 0;
-  size_t align = calculate_alignment(names, st, &foundP, &type);
+  int foundP = FALSE, type = 0, array, size;
+  size_t align = calculate_alignment(names, st, &foundP, &type, &array, &size);
 
   if (!foundP || type == 0) {
     Sg_Error(UC("c-struct %A does not have a member named %A"), st->name, name);
     return SG_UNDEF;		/* dummy */
   }
-
-  return convert_c_to_scheme(type, p, align);
+  if (array < 0) {
+    return convert_c_to_scheme(type, p, align);
+  } else {
+    /* TODO what should we return for array? so far vector.*/
+    SgObject vec;
+    int i;
+    array /= size;
+    vec = Sg_MakeVector(array, SG_UNDEF);
+    for (i = 0; i < array; i++) {
+      SG_VECTOR_ELEMENT(vec, i) = 
+	convert_c_to_scheme(type, p, align + (i * size));
+    }
+    return vec;
+  }
 }
 
 void Sg_CStructSet(SgPointer *p, SgCStruct *st, SgSymbol *name, SgObject value)
 {
   SgObject names = parse_member_name(name);
-  int foundP = FALSE, type = 0;
-  size_t align = calculate_alignment(names, st, &foundP, &type);
+  int foundP = FALSE, type = 0, array, size;
+  size_t align = calculate_alignment(names, st, &foundP, &type, &array, &size);
 
   if (!foundP || type == 0) {
     Sg_Error(UC("c-struct %A does not have a member named %A"), st->name, name);
     return;		/* dummy */
   }
-  Sg_PointerSet(p, (int)align, type, value);
+  if (array < 0) {
+    Sg_PointerSet(p, (int)align, type, value);
+  } else {
+    int i;
+    /* TODO what should we return for array? so far vector.*/
+    if (!SG_VECTORP(value)) {
+      Sg_Error(UC("Array member %A requires a vector but got %S"), value);
+      return;
+    }
+    array /= size;
+    for (i = 0; i < array && i < SG_VECTOR_SIZE(value); i++) {
+      Sg_PointerSet(p, (int)(align + (i * size)), type, 
+		    SG_VECTOR_ELEMENT(value, i));
+    }
+  }
+}
+
+static inline void put_indent(SgPort *port, int indent)
+{
+  int i;
+  for (i = 0; i < indent; i++) {
+    Sg_PutcUnsafe(SG_PORT(port), ' ');
+  }
+}
+
+static void desc_c_struct_rec(SgCStruct *ct, SgPort *port, int indent)
+{
+  size_t i;
+  put_indent(SG_PORT(port), indent);
+  Sg_Printf(SG_PORT(port), UC("%A (%d):\n"), ct->name, ct->type.size);
+  for (i = 0; i < ct->fieldCount; i++) {
+    put_indent(SG_PORT(port), indent + 2);
+    Sg_Printf(SG_PORT(port), UC("%2d %A"), ct->layouts[i].offset,
+	      ct->layouts[i].name);
+    if (ct->layouts[i].cstruct) {
+      Sg_PutcUnsafe(SG_PORT(port), '\n');
+      desc_c_struct_rec(ct->layouts[i].cstruct, port, indent + 4);
+    } else {
+      Sg_Printf(SG_PORT(port), UC("(%d"), ct->layouts[i].type->size);
+      if (ct->layouts[i].array > 0) {
+	Sg_Printf(SG_PORT(port), UC(" x %d"), 
+		  ct->layouts[i].array / ct->layouts[i].type->size);
+      }
+      Sg_PutcUnsafe(SG_PORT(port), ')');
+    }
+    Sg_PutcUnsafe(SG_PORT(port), '\n');
+  }
+}
+
+void Sg_DescCStruct(SgCStruct *ct, SgObject port)
+{
+  SG_PORT_LOCK(SG_PORT(port));
+  desc_c_struct_rec(ct, SG_PORT(port), 0);
+  SG_PORT_UNLOCK(SG_PORT(port));
 }
 
 /* from ruby-ffi module */
@@ -737,137 +829,48 @@ static ffi_type* lookup_ffi_return_type(int rettype)
 /* TODO cleanup the code. use macro! */
 static int convert_scheme_to_c_value(SgObject v, int type, void **result)
 {
+#define CONVERT(type, conv)					\
+  do {								\
+    if (SG_EXACT_INTP(v)) {					\
+      if (SG_INTP(v)) {						\
+	*((type *)result) = SG_INT_VALUE(v);			\
+      } else {							\
+	*((type *)result) = conv(v, SG_CLAMP_NONE, NULL);	\
+      }								\
+    } else {							\
+      *((type *)result) = (type)0;				\
+    }								\
+  } while (0)
+
+#define SCONVERT(type) CONVERT(type, Sg_GetIntegerClamp)
+#define UCONVERT(type) CONVERT(type, Sg_GetUIntegerClamp)
+
   switch (type) {
   case FFI_RETURN_TYPE_BOOL    :
     *((intptr_t *)result) = !SG_FALSEP(v);
     return TRUE;
-  case FFI_RETURN_TYPE_SHORT   :
-    if (!SG_EXACT_INTP(v)) goto ret0;
-    if (SG_INTP(v)) {
-      *((short *)result) = SG_INT_VALUE(v);
-    } else {
-      *((short *)result) = Sg_GetIntegerClamp(v, SG_CLAMP_NONE, NULL);
-    }
-    break;
-  case FFI_RETURN_TYPE_INT     :
-    if (!SG_EXACT_INTP(v)) goto ret0;
-    if (SG_INTP(v)) {
-      *((int *)result) = SG_INT_VALUE(v);
-    } else {
-      *((int *)result) = Sg_GetIntegerClamp(v, SG_CLAMP_NONE, NULL);
-    }
-    break;
-  case FFI_RETURN_TYPE_LONG    :
-    if (!SG_EXACT_INTP(v)) goto ret0;
-    if (SG_INTP(v)) {
-      *((long *)result) = SG_INT_VALUE(v);
-    } else {
-      *((long *)result) = Sg_GetIntegerClamp(v, SG_CLAMP_NONE, NULL);
-    }
-    break;
-  case FFI_RETURN_TYPE_INT8_T  :
-    if (!SG_EXACT_INTP(v)) goto ret0;
-    if (SG_INTP(v)) {
-      *((int8_t *)result) = SG_INT_VALUE(v);
-    } else {
-      *((int8_t *)result) = Sg_GetIntegerClamp(v, SG_CLAMP_NONE, NULL);
-    }
-    break;
-  case FFI_RETURN_TYPE_INT16_T :
-    if (!SG_EXACT_INTP(v)) goto ret0;
-    if (SG_INTP(v)) {
-      *((int16_t *)result) = SG_INT_VALUE(v);
-    } else {
-      *((int16_t *)result) = Sg_GetIntegerClamp(v, SG_CLAMP_NONE, NULL);
-    }
-    break;
-  case FFI_RETURN_TYPE_INT32_T :
-    if (!SG_EXACT_INTP(v)) goto ret0;
-    if (SG_INTP(v)) {
-      *((int32_t *)result) = SG_INT_VALUE(v);
-    } else {
-      *((int32_t *)result) = Sg_GetIntegerClamp(v, SG_CLAMP_NONE, NULL);
-    }
-    break;
-  case FFI_RETURN_TYPE_USHORT  :
-    if (!SG_EXACT_INTP(v)) goto ret0;
-    if (SG_INTP(v)) {
-      *((unsigned short *)result) = SG_INT_VALUE(v);
-    } else {
-      *((unsigned short *)result) = Sg_GetUIntegerClamp(v, SG_CLAMP_NONE, NULL);
-    }
-    break;
-  case FFI_RETURN_TYPE_UINT    :
-    if (!SG_EXACT_INTP(v)) goto ret0;
-    if (SG_INTP(v)) {
-      *((unsigned int *)result) = SG_INT_VALUE(v);
-    } else {
-      *((unsigned int *)result) = Sg_GetUIntegerClamp(v, SG_CLAMP_NONE, NULL);
-    }
-    break;
-  case FFI_RETURN_TYPE_ULONG   :
-    if (!SG_EXACT_INTP(v)) goto ret0;
-    if (SG_INTP(v)) {
-      *((unsigned long *)result) = SG_INT_VALUE(v);
-    } else {
-      *((unsigned long *)result) = Sg_GetUIntegerClamp(v, SG_CLAMP_NONE, NULL);
-    }
-    break;
-  case FFI_RETURN_TYPE_SIZE_T  :
-    if (!SG_EXACT_INTP(v)) goto ret0;
-    if (SG_INTP(v)) {
-      *((size_t *)result) = SG_INT_VALUE(v);
-    } else {
-      *((size_t *)result) = Sg_GetUIntegerClamp(v, SG_CLAMP_NONE, NULL);
-    }
-    break;
-  case FFI_RETURN_TYPE_UINT8_T :
-    if (!SG_EXACT_INTP(v)) goto ret0;
-    if (SG_INTP(v)) {
-      *((uint8_t *)result) = SG_INT_VALUE(v);
-    } else {
-      *((uint8_t *)result) = Sg_GetUIntegerClamp(v, SG_CLAMP_NONE, NULL);
-    }
-    break;
-  case FFI_RETURN_TYPE_UINT16_T: 
-    if (!SG_EXACT_INTP(v)) goto ret0;
-    if (SG_INTP(v)) {
-      *((uint16_t *)result) = SG_INT_VALUE(v);
-    } else {
-      *((uint16_t *)result) = Sg_GetUIntegerClamp(v, SG_CLAMP_NONE, NULL);
-    }
-    break;
-  case FFI_RETURN_TYPE_UINT32_T:
-    if (!SG_EXACT_INTP(v)) goto ret0;
-    if (SG_INTP(v)) {
-      *((uint32_t *)result) = SG_INT_VALUE(v);
-    } else {
-      *((uint32_t *)result) = Sg_GetUIntegerClamp(v, SG_CLAMP_NONE, NULL);
-    }
-    break;
+  case FFI_RETURN_TYPE_SHORT   : SCONVERT(short); break;
+  case FFI_RETURN_TYPE_INT     : SCONVERT(int); break;
+  case FFI_RETURN_TYPE_LONG    : SCONVERT(long); break;
+  case FFI_RETURN_TYPE_INT8_T  : SCONVERT(int8_t); break;
+  case FFI_RETURN_TYPE_INT16_T : SCONVERT(int16_t); break;
+  case FFI_RETURN_TYPE_INT32_T : SCONVERT(int32_t); break;
+
+  case FFI_RETURN_TYPE_USHORT  : UCONVERT(unsigned short); break;
+  case FFI_RETURN_TYPE_UINT    : UCONVERT(unsigned int); break;
+  case FFI_RETURN_TYPE_ULONG   : UCONVERT(unsigned long); break;
+  case FFI_RETURN_TYPE_SIZE_T  : UCONVERT(size_t); break;
+  case FFI_RETURN_TYPE_UINT8_T : UCONVERT(uint8_t); break;
+  case FFI_RETURN_TYPE_UINT16_T: UCONVERT(uint16_t); break;
+  case FFI_RETURN_TYPE_UINT32_T: UCONVERT(uint32_t); break;
 
   case FFI_RETURN_TYPE_INT64_T :
-    if (SG_EXACT_INTP(v)) {
-      if (SG_INTP(v)) {
-	*((int64_t *)result) = SG_INT_VALUE(v);
-      } else {
-	*((int64_t *)result) = Sg_GetIntegerS64Clamp(v, SG_CLAMP_NONE, NULL);
-      }
-    } else {
-      *((int64_t *)result) = 0;
-    }
+    CONVERT(int64_t, Sg_GetIntegerS64Clamp);
     break;
   case FFI_RETURN_TYPE_UINT64_T:
-    if (SG_EXACT_INTP(v)) {
-      if (SG_INTP(v)) {
-	*((uint64_t *)result) = SG_INT_VALUE(v);
-      } else {
-	*((uint64_t *)result) = Sg_GetIntegerU64Clamp(v, SG_CLAMP_NONE, NULL);
-      }
-    } else {
-      *((uint64_t *)result) = 0;
-    }
+    CONVERT(uint64_t, Sg_GetIntegerU64Clamp);
     break;
+
   case FFI_RETURN_TYPE_FLOAT   :
     if (!SG_REALP(v)) *((float *)result) = 0.0;
     else *((float *)result) = (float)Sg_GetDouble(v);
@@ -912,7 +915,7 @@ static int convert_scheme_to_c_value(SgObject v, int type, void **result)
     /* callback will be treated separately */
   case FFI_RETURN_TYPE_CALLBACK:
   case FFI_RETURN_TYPE_VOID    :
-    *((intptr_t *)result) = 0;
+    *((intptr_t *)result) = (intptr_t)0;
     return TRUE;
   default:
     Sg_Panic("unknown FFI return type: %d", type);
