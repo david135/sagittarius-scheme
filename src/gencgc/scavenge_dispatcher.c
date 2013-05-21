@@ -43,6 +43,7 @@
 #include <sagittarius/library.h>
 #include <sagittarius/macro.h>
 #include <sagittarius/pair.h>
+#include <sagittarius/parameter.h>
 #include <sagittarius/port.h>
 #include <sagittarius/reader.h>
 #include <sagittarius/record.h>
@@ -179,24 +180,13 @@ static int target_p(SgObject o, const char *name)
 }
 #endif
 
-static void salvage_hashtable(void **where, SgObject obj)
+static int scav_hashtable_entry(SgHashCore *core)
 {
-  SgHashCore *core;
   SgHashIter itr;
-  SgHashEntry *e;
   int moved = FALSE;
-  /* page_index_t index = find_page_index(obj); */
-  copy_root_object(where, obj, copy_object);
-  core = SG_HASHTABLE_CORE(obj);
-  copy_root_object(&core->buckets, core->buckets, copy_large_object);
-  /* scavenge_general_pointer(&core->buckets, core->buckets); */
-  Sg_HashIterInit(core, &itr);
-  /* TODO how should we treet this? and do we use this? */
-  /* preserve_pointer(core->data); */
+  SgHashEntry *e;
 
-  /* We probably don't need following code as long as object is copied. */
-  /* salvage_scheme_pointer(&core->generalHasher, core->generalHasher); */
-  /* salvage_scheme_pointer(&core->generalCompare, core->generalCompare); */
+  Sg_HashIterInit(core, &itr);
   while ((e = Sg_HashIterNext(&itr)) != NULL) {
     /* The entry pointer must be already preserved or if it doesn't
        then it's not on stack nor register so we don't have to preserve
@@ -216,7 +206,25 @@ static void salvage_hashtable(void **where, SgObject obj)
     scavenge((intptr_t *)POINTER2BLOCK(e), 
 	     MEMORY_SIZE(POINTER2BLOCK(e))/N_WORD_BYTES);
   }
+  return moved;
+}
 
+static void salvage_hashtable(void **where, SgObject obj)
+{
+  SgHashCore *core;
+  int moved = FALSE;
+  /* page_index_t index = find_page_index(obj); */
+  copy_root_object(where, obj, copy_object);
+  core = SG_HASHTABLE_CORE(obj);
+  copy_root_object(&core->buckets, core->buckets, copy_large_object);
+  /* scavenge_general_pointer(&core->buckets, core->buckets); */
+  /* TODO how should we treet this? and do we use this? */
+  /* preserve_pointer(core->data); */
+
+  /* We probably don't need following code as long as object is copied. */
+  /* salvage_scheme_pointer(&core->generalHasher, core->generalHasher); */
+  /* salvage_scheme_pointer(&core->generalCompare, core->generalCompare); */
+  moved = scav_hashtable_entry(core);
   /* it's probably better to check if the real entry has been moved or not
      but for now.*/
   if (SG_HASHTABLE(obj)->type == SG_HASH_EQ && moved) {
@@ -653,6 +661,14 @@ void salvage_regex_pattern(void **where, void *obj)
   FREE_TEMP_BUFFER(save);  
 }
 
+static void salvage_parameter(void **where, void *obj)
+{
+  copy_root_object(where, obj, copy_object);
+  salvage_scheme_pointer((void **)&SG_PARAMETER(obj)->converter, 
+			 SG_PARAMETER(obj)->converter);
+}
+
+
 /* If where is NULL means, it's from the top most position.
    (obj should be pinned)
  */
@@ -836,6 +852,19 @@ static void scavenge_continuation_frame(SgVM *vm)
   scavenge_cont_frame_rec(vm, (void **)&vm->cont, vm->cont);
 }
 
+static void scav_weak_hash_tables()
+{
+  SgWeakHashTable *table;
+  for (table = SG_WEAK_HASHTABLE(weak_hashtables); table; table = table->next) {
+    /* do entry scavenge */
+    SgHashCore *core = SG_WEAK_HASHTABLE_CORE(table);
+    int moved = scav_hashtable_entry(core);
+    if (table->type == SG_HASH_EQ && moved) {
+      core->rehashNeeded = TRUE;
+    }
+  }
+}
+
 static void init_scav_fun()
 {
 #define SET_CLASS_SCAV(cls, proc)		\
@@ -860,4 +889,5 @@ static void init_scav_fun()
   SET_CLASS_SCAV(MACRO, salvage_macro);
   SET_CLASS_SCAV(TUPLE, salvage_tuple);
   SET_CLASS_SCAV(PATTERN, salvage_regex_pattern);
+  SET_CLASS_SCAV(PARAMETER, salvage_parameter);
 }
