@@ -2043,7 +2043,7 @@ static void scavenge_newspace_generation(generation_index_t generation)
    * is O(W^2+N) as Bruno Haible warns in
    * http://www.haible.de/bruno/papers/cs/weak/WeakDatastructures-writeup.html
    * see "Implementation 2". */
-  /* scav_weak_hash_tables(); */
+  scav_weak_hash_tables();
 
   /* Flush the current regions updating the tables. */
   gc_alloc_update_all_page_tables();
@@ -2086,7 +2086,7 @@ static void scavenge_newspace_generation(generation_index_t generation)
       /* Record all new areas now. */
       record_new_objects = 2;
 
-      /* scav_weak_hash_tables(); */
+      scav_weak_hash_tables();
 
       /* Flush the current regions updating the tables. */
       gc_alloc_update_all_page_tables();
@@ -2102,7 +2102,7 @@ static void scavenge_newspace_generation(generation_index_t generation)
 	scavenge(page_address(page) + offset, size);
       }
 
-      /* scav_weak_hash_tables(); */
+      scav_weak_hash_tables();
 
       /* Flush the current regions updating the tables. */
       gc_alloc_update_all_page_tables();
