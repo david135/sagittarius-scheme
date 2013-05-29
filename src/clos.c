@@ -1118,6 +1118,9 @@ static SgObject class_allocate(SgClass *klass, SgObject initargs)
 
   Sg_InitMutex(&instance->mutex, FALSE);
   Sg_InitCond(&instance->cv);
+#ifndef USE_BOEHM_GC
+  instance->magic = CLASS_MAGIC_VALUE;
+#endif
   /* should we add finalizer for mutex? */
   return SG_OBJ(instance);
 }

@@ -130,6 +130,8 @@ SgObject Sg_WeakVectorSet(SgWeakVector *v, int index, SgObject value)
   return SG_UNDEF;
 }
 
+/* We only need this weak box trick for Boehm GC. */
+#ifdef USE_BOEHM_GC
 /* weak box is a SgObject. but not public */
 struct SgWeakBoxRec
 {
@@ -190,9 +192,6 @@ void* Sg_WeakBoxRef(SgWeakBox *wbox)
   return wbox->ptr;
 }
 
-
-#define MARK_GONE_ENTRY(ht, e) (ht->goneEntries++)
-
 static uint32_t weak_key_hash(const SgHashCore *hc, intptr_t key)
 {
   SgWeakHashTable *wh = SG_WEAK_HASHTABLE(hc->data);
@@ -226,14 +225,17 @@ static int weak_key_compare(const SgHashCore *hc, intptr_t key,
   }
   /* entry key must always be weak box */
   box = (SgWeakBox *)entryKey;
-  realentrykey = (intptr_t)Sg_WeakBoxRef(box);
   if (Sg_WeakBoxEmptyP(box)) {
     return FALSE;
   } else {
+    realentrykey = (intptr_t)Sg_WeakBoxRef(box);
     return wh->compare(hc, realkey, realentrykey);
   }
 }
+#endif
 
+
+#define MARK_GONE_ENTRY(ht, e) (ht->goneEntries++)
 SgObject Sg_MakeWeakHashTableSimple(SgHashType type,
 				    SgWeakness weakness,
 				    int initSize,
@@ -246,6 +248,7 @@ SgObject Sg_MakeWeakHashTableSimple(SgHashType type,
   wh->defaultValue = defaultValue;
   wh->goneEntries = 0;
 
+#ifdef USE_BOEHM_GC
   if (weakness & SG_WEAK_KEY) {
     if (!Sg_HashCoreTypeToProcs(type, &wh->hasher, &wh->compare)) {
       Sg_Error(UC("[internal error] Sg_MakeWeakHashTableSimple: unsupported type: %d"), type);
@@ -253,7 +256,9 @@ SgObject Sg_MakeWeakHashTableSimple(SgHashType type,
     /* wh->keyStore = Sg_MakeWeakVector(initSize); */
     Sg_HashCoreInitGeneral(&wh->core, weak_key_hash, weak_key_compare,
 			   initSize, wh);
-  } else {
+  } else 
+#endif
+  {
     Sg_HashCoreInitSimple(&wh->core, type, initSize, wh);
   }
   return SG_OBJ(wh);
@@ -278,14 +283,15 @@ SgObject Sg_WeakHashTableRef(SgWeakHashTable *table,
   SgHashEntry *e = Sg_HashCoreSearch(SG_WEAK_HASHTABLE_CORE(table),
 				     (intptr_t)key, SG_HASH_GET);
   if (!e) return fallback;
-  if (table->weakness & SG_WEAK_VALUE) {
+#ifdef USE_BOEHM_GC
+  else if (table->weakness & SG_WEAK_VALUE) {
     void *val = Sg_WeakBoxRef((SgWeakBox*)e->value);
     if (Sg_WeakBoxEmptyP((SgWeakBox*)e->value)) return table->defaultValue;
     ASSERT(val != NULL);
     return SG_OBJ(val);
-  } else {
+  } else 
+#endif
     return SG_HASH_ENTRY_VALUE(e);
-  }
 }
 
 /* ugly solution for managing entry count of weak hash table. */
@@ -305,25 +311,34 @@ SgObject Sg_WeakHashTableSet(SgWeakHashTable *table,
   SgHashEntry *e;
   intptr_t proxy;
 
+#ifdef USE_BOEHM_GC
   if (table->weakness & SG_WEAK_KEY) {
     proxy = (intptr_t)Sg_MakeWeakBox(key);
     Sg_RegisterFinalizer(key, key_finalizer, table);
-  } else {
+  } else
+#endif
     proxy = (intptr_t)key;
-  }
 
   e = Sg_HashCoreSearch(SG_WEAK_HASHTABLE_CORE(table), proxy,
 			(flags & SG_HASH_NO_CREATE)
 			   ? SG_HASH_GET: SG_HASH_CREATE);
   if (!e) return SG_UNBOUND;
-  if (table->weakness & SG_WEAK_VALUE) {
+  else if (table->weakness & SG_WEAK_VALUE) {
     if (flags & SG_HASH_NO_OVERWRITE && e->value) {
+#ifdef USE_BOEHM_GC
       void *val = Sg_WeakBoxRef((SgWeakBox *)e->value);
       if (!Sg_WeakBoxEmptyP((SgWeakBox *)e->value)) {
 	return SG_OBJ(val);
       }
+#else
+      return SG_HASH_ENTRY_VALUE(e);
+#endif
     }
+#ifdef USE_BOEHM_GC
     SG_HASH_ENTRY_SET_VALUE(e, Sg_MakeWeakBox(value));
+#else
+    SG_HASH_ENTRY_SET_VALUE(e, value);
+#endif
     return value;
   } else {
     if (flags & SG_HASH_NO_OVERWRITE && e->value) {
@@ -341,9 +356,14 @@ SgObject Sg_WeakHashTableDelete(SgWeakHashTable *table,
 				     (intptr_t)key, SG_HASH_DELETE);
   if (e && e->value) {
     if (table->weakness & SG_WEAK_VALUE) {
+#ifdef USE_BOEHM_GC
       void *val = Sg_WeakBoxRef((SgWeakBox*)e->value);
       if (!Sg_WeakBoxEmptyP((SgWeakBox*)e->value))
 	return SG_OBJ(val);
+#else
+      if (e->value)
+	return e->value;
+#endif
       else
 	return SG_UNBOUND;
     } else {
@@ -390,7 +410,8 @@ int Sg_WeakHashIterNext(SgWeakHashIter *iter,
   for (;;) {
     SgHashEntry *e = Sg_HashIterNext(&iter->iter);
     if (e == NULL) return FALSE;
-    if (iter->table->weakness & SG_WEAK_KEY) {
+#ifdef USE_BOEHM_GC
+    else if (iter->table->weakness & SG_WEAK_KEY) {
       SgWeakBox *box = (SgWeakBox *)e->key;
       SgObject realkey = SG_OBJ(Sg_WeakBoxRef(box));
       if (Sg_WeakBoxEmptyP(box)) {
@@ -398,11 +419,15 @@ int Sg_WeakHashIterNext(SgWeakHashIter *iter,
 	continue;
       }
       *key = realkey;
-    } else {
+    }
+#endif
+    else {
       *key = (SgObject)e->key;
     }
 
-    if (iter->table->weakness & SG_WEAK_VALUE) {
+    if (FALSE);
+#ifdef USE_BOEHM_GC
+    else if (iter->table->weakness & SG_WEAK_VALUE) {
       SgWeakBox *box = (SgWeakBox *)e->value;
       SgObject realval = SG_OBJ(Sg_WeakBoxRef(box));
       if (Sg_WeakBoxEmptyP(box)) {
@@ -410,7 +435,9 @@ int Sg_WeakHashIterNext(SgWeakHashIter *iter,
       } else {
 	*value = realval;
       }
-    } else {
+    } 
+#endif
+    else {
       *value = (SgObject)e->value;
     }
     return TRUE;
@@ -423,6 +450,8 @@ int Sg_WeakHashTableShrink(SgWeakHashTable *table)
   SgHashIter iter;
   SgHashEntry *e = NULL;
   int count = 0;
+  /* for GENCGC, gc will handle this */
+#ifdef USE_BOEHM_GC
   Sg_HashIterInit(SG_WEAK_HASHTABLE_CORE(table), &iter);
   while ((e = Sg_HashIterNext(&iter)) != NULL) {
     if (table->weakness & SG_WEAK_KEY) {
@@ -442,5 +471,6 @@ int Sg_WeakHashTableShrink(SgWeakHashTable *table)
       }
     }
   }
+#endif
   return count;
 }

@@ -91,7 +91,9 @@ struct SgClassRec
     SG_INSTANCE_HEADER;
     double align_dummy;
   } classHdr;
-
+#ifndef USE_BOEHM_GC
+  int                  magic;
+#endif
   SgClassPrintProc     printer;
   SgClassCompareProc   compare;
   SgClassSerializeProc serialize;
@@ -123,6 +125,9 @@ struct SgClassRec
   /* mutex */
   SgInternalMutex mutex;
   SgInternalCond  cv;
+#ifndef USE_BOEHM_GC
+  void           *scav_func;
+#endif
 };
 
 #define SG_CLASS(obj)  ((SgClass*)(obj))
@@ -171,9 +176,17 @@ extern SgClass *Sg_ObjectCPL[];
 #define SG_CLASS_DEFAULT_CPL   (Sg_DefaultCPL)
 #define SG_CLASS_OBJECT_CPL    (Sg_ObjectCPL)
 
+#ifdef USE_BOEHM_GC
+#define CLASS_MAGIC_VALUE_SETTER /* dummy */
+#else
+#define CLASS_MAGIC_VALUE 0x46495963
+#define CLASS_MAGIC_VALUE_SETTER CLASS_MAGIC_VALUE, /* don't remove ',' */
+#endif
+
 #define SG_DEFINE_CLASS_FULL(cname, coreSize, flag, reader, scanner, writer, printer, compare, serialize, allocate, cpa) \
   SgClass CLASS_KEYWORD cname = {					\
     {{ SG_CLASS_STATIC_TAG(Sg_ClassClass), NULL }},			\
+    CLASS_MAGIC_VALUE_SETTER						\
     printer,								\
     compare,								\
     serialize,								\

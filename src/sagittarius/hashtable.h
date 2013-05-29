@@ -63,7 +63,10 @@ struct SgHashCoreRec
   SgHashCompareProc *compare;
   SgObject generalHasher;	/* for make-hashtable */
   SgObject generalCompare; 	/* ditto */
-  void   *data; 
+  void   *data;
+#ifndef USE_BOEHM_GC
+  int    rehashNeeded;
+#endif
 };
 
 struct SgHashIterRec
@@ -132,6 +135,15 @@ SG_EXTERN void Sg_HashCoreCopy(SgHashCore *dst,
 			       const SgHashCore *src);
 
 SG_EXTERN void Sg_HashCoreClear(SgHashCore *ht, int k);
+
+
+#ifndef USE_BOEHM_GC
+/* to update entry object itself this should not be used from
+   outside of the world. */
+SG_EXTERN void Sg_HashCoreReplaceEntry(SgHashCore *table, SgHashEntry *oe,
+				       SgHashEntry *ne);
+#endif
+
 
 /* iterator */
 SG_EXTERN void Sg_HashIterInit(SgHashCore *table,

@@ -29,30 +29,7 @@
  *
  *  $Id: $
  */
-#include <sagittarius/config.h>
-#include <string.h>
-
-#ifndef __GNUC__
-# ifdef HAVE_ALLOCA_H
-#  include <alloca.h>
-# else
-#  ifdef _AIX
-#pragma alloca
-#  else
-#   ifndef alloca /* predefined by HP cc +Olibcalls */
-char *alloca ();
-#   endif
-#  endif
-# endif
-#else
-# ifdef HAVE_ALLOCA_H
-#  include <alloca.h>
-# endif
-# ifdef HAVE_MALLOC_H
-/* MinGW helds alloca() in "malloc.h" instead of "alloca.h" */
-#  include <malloc.h>
-# endif
-#endif
+#include <sagittarius/alloca.h>
 
 #define LIBSAGITTARIUS_BODY
 #include "sagittarius/string.h"
@@ -157,12 +134,6 @@ static SgString* make_string(int size)
 
 static SgInternalMutex smutex;
 static SgHashTable *stable;
-
-#ifdef _MSC_VER
-/* _alloca is in <malloc.h> */
-#include <malloc.h>
-#define alloca _alloca
-#endif
 
 #ifdef HAVE_ALLOCA
 #define ALLOC_TEMP_STRING(var, size)					\
