@@ -910,6 +910,9 @@ void Sg__InitLibrary()
 			SG_MAKE_STRING(".sls"),
 			SG_MAKE_STRING(".scm"));
 
+#ifndef USE_BOEHM_GC
+  GC_register_libraries(ALL_LIBRARIES);
+#endif
 }
 
 /*
