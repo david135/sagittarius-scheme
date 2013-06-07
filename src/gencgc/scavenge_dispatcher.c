@@ -43,7 +43,6 @@
 #include <sagittarius/library.h>
 #include <sagittarius/macro.h>
 #include <sagittarius/pair.h>
-#include <sagittarius/parameter.h>
 #include <sagittarius/port.h>
 #include <sagittarius/reader.h>
 #include <sagittarius/record.h>
@@ -661,14 +660,6 @@ void salvage_regex_pattern(void **where, void *obj)
   FREE_TEMP_BUFFER(save);  
 }
 
-static void salvage_parameter(void **where, void *obj)
-{
-  copy_root_object(where, obj, copy_object);
-  salvage_scheme_pointer((void **)&SG_PARAMETER(obj)->converter, 
-			 SG_PARAMETER(obj)->converter);
-}
-
-
 /* If where is NULL means, it's from the top most position.
    (obj should be pinned)
  */
@@ -889,5 +880,4 @@ static void init_scav_fun()
   SET_CLASS_SCAV(MACRO, salvage_macro);
   SET_CLASS_SCAV(TUPLE, salvage_tuple);
   SET_CLASS_SCAV(PATTERN, salvage_regex_pattern);
-  SET_CLASS_SCAV(PARAMETER, salvage_parameter);
 }
