@@ -179,7 +179,26 @@ static int target_p(SgObject o, const char *name)
 }
 #endif
 
-static int scav_hashtable_entry(SgHashCore *core)
+
+/* static inline */
+int weak_hash_entry_alivep(SgWeakness weakness, SgObject key, SgObject value)
+{
+  switch (weakness) {
+  case SG_WEAK_KEY:
+    return survived_gc_yet(key);
+  case SG_WEAK_VALUE:
+    return survived_gc_yet(value);
+  case SG_WEAK_BOTH:
+    return (survived_gc_yet(key) && survived_gc_yet(value));
+  default:
+    ASSERT(FALSE);
+    /* Shut compiler up. */
+    return FALSE;
+  }
+}
+
+static int scav_hashtable_entry(SgHashCore *core, int weakp, 
+				SgWeakness weakness)
 {
   SgHashIter itr;
   int moved = FALSE;
@@ -192,18 +211,24 @@ static int scav_hashtable_entry(SgHashCore *core)
        but copy. */
     page_index_t eindex = find_page_index(e);
     /* if the entry is in from space we need to copy it */
-    if (page_table[eindex].gen == from_space) {
-      /* not on stack so copy it */
-      /* NOTE: do not use sizeof(SgHashEntry) the actual entry is
-	 not the same size of it. */
-      SgHashEntry *z = copy_object(e);
-      SET_MEMORY_FORWARDED(POINTER2BLOCK(e), z);
-      Sg_HashCoreReplaceEntry(core, e, z);
-      e = z;
-      moved = TRUE;
+    if (!weakp || 
+	weak_hash_entry_alivep(weakness, 
+			       SG_HASH_ENTRY_KEY(e),
+			       SG_HASH_ENTRY_VALUE(e))) {
+      intptr_t oldkey = SG_HASH_ENTRY_KEY(e);
+      if (page_table[eindex].gen == from_space) {
+	/* not on stack so copy it */
+	/* NOTE: do not use sizeof(SgHashEntry) the actual entry is
+	   not the same size of it. */
+	SgHashEntry *z = copy_object(e);
+	SET_MEMORY_FORWARDED(POINTER2BLOCK(e), z);
+	Sg_HashCoreReplaceEntry(core, e, z);
+	e = z;
+      }
+      scavenge((intptr_t *)POINTER2BLOCK(e), 
+	       MEMORY_SIZE(POINTER2BLOCK(e))/N_WORD_BYTES);
+      if (oldkey != SG_HASH_ENTRY_KEY(e)) moved = TRUE;
     }
-    scavenge((intptr_t *)POINTER2BLOCK(e), 
-	     MEMORY_SIZE(POINTER2BLOCK(e))/N_WORD_BYTES);
   }
   return moved;
 }
@@ -223,13 +248,21 @@ static void salvage_hashtable(void **where, SgObject obj)
   /* We probably don't need following code as long as object is copied. */
   /* salvage_scheme_pointer(&core->generalHasher, core->generalHasher); */
   /* salvage_scheme_pointer(&core->generalCompare, core->generalCompare); */
-  moved = scav_hashtable_entry(core);
+  moved = scav_hashtable_entry(core, FALSE, SG_WEAK_KEY);
   /* it's probably better to check if the real entry has been moved or not
      but for now.*/
   if (SG_HASHTABLE(obj)->type == SG_HASH_EQ && moved) {
     core->rehashNeeded = TRUE;
   }
 }
+
+static void salvage_weak_hashtable(void **where, SgObject obj)
+{
+  copy_root_object(where, obj, copy_object);
+  SG_WEAK_HASHTABLE(obj)->next = weak_hashtables;
+  weak_hashtables = obj;
+}
+
 
 static void salvage_port(void **where, SgObject obj)
 {
@@ -716,43 +749,31 @@ static void scan_weak_hashtable(SgWeakHashTable *table)
   SgHashIter itr;
   SgHashEntry *e;
   SgWeakness weakness = table->weakness;
+  page_index_t index = find_page_index(core->buckets);
 
-  core->buckets = copy_large_object(core->buckets);
+  /* the buckets might be already moved by general pointer scavenge
+     so check if it's moved or not.*/
+  if (index > 0 && page_table[index].gen == from_space) {
+    core->buckets = copy_large_object(core->buckets);
+  }
   Sg_HashIterInit(core, &itr);
-
-  /* TODO how should we treet this? */
-  preserve_pointer(core->data);
-  salvage_scheme_pointer(&core->generalHasher, core->generalHasher);
-  salvage_scheme_pointer(&core->generalCompare, core->generalCompare);
+  
   while ((e = Sg_HashIterNext(&itr)) != NULL) {
     /* The entry pointer must be already preserved or if it doesn't
        then it's not on stack nor register so we don't have to preserve
        but copy. */
     page_index_t eindex = find_page_index(e);
-    if (!page_table[eindex].dont_move) {
-      /* not on stack so copy it */
-      e = copy_object(e);
-    }
     if (weakness & SG_WEAK_KEY) {
       if (!survived_gc_yet(SG_HASH_ENTRY_KEY(e))) {
 	core->entryCount--;
 	table->goneEntries++;
 	e->key = table->defaultValue;
-      } else {
-	salvage_entry_key(e);
       }
-    } else {
-      /* if it's not weak salvage it */
-      salvage_entry_key(e);
     }
     if (weakness & SG_WEAK_VALUE) {
       if (!survived_gc_yet(SG_HASH_ENTRY_VALUE(e))) {
 	e->value = table->defaultValue;
-      } else {
-	salvage_entry_value(e);
       }
-    } else {
-      salvage_entry_value(e);
     }
   }
 
@@ -849,8 +870,10 @@ static void scav_weak_hash_tables()
   for (table = SG_WEAK_HASHTABLE(weak_hashtables); table; table = table->next) {
     /* do entry scavenge */
     SgHashCore *core = SG_WEAK_HASHTABLE_CORE(table);
-    int moved = scav_hashtable_entry(core);
-    if (table->type == SG_HASH_EQ && moved) {
+    scav_hashtable_entry(core, TRUE, table->weakness);
+    /* FIXME it's better to check if the entry moved or not,
+       but somehow it doesn't work. */
+    if (table->type == SG_HASH_EQ) {
       core->rehashNeeded = TRUE;
     }
   }
@@ -865,6 +888,7 @@ static void init_scav_fun()
   } while (0)
 
   SET_CLASS_SCAV(HASHTABLE, salvage_hashtable);
+  SET_CLASS_SCAV(WEAK_HASHTABLE, salvage_weak_hashtable);
   SET_CLASS_SCAV(STRING, salvage_string);
   SET_CLASS_SCAV(SYMBOL, salvage_symbol);
   SET_CLASS_SCAV(KEYWORD, salvage_keyword);

@@ -30,7 +30,7 @@
  *  $Id: $
  */
 #include <sagittarius/alloca.h>
-
+#include <string.h>
 #define LIBSAGITTARIUS_BODY
 #include "sagittarius/string.h"
 #include "sagittarius/collection.h"
