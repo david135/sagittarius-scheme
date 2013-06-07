@@ -10,6 +10,7 @@
 
 	    c-callback
 	    free-c-callback
+	    callback?
 	    ;; malloc
 	    c-malloc
 	    c-free
@@ -28,6 +29,7 @@
 
 	    ;; c-struct
 	    define-c-struct
+	    c-struct?
 	    allocate-c-struct
 	    size-of-c-struct
 	    c-struct-ref
@@ -260,7 +262,7 @@
 	(assertion-violation 'c-function "wrong return type" ret-type))
       (let* ((ret-type (cdr stub-ret-type))
 	     (signatures (list->string (make-sigunatures arg-types)))
-	     (function (create-function-info pointer ret-type
+	     (function (create-function-info pointer name ret-type
 					    signatures
 					    (car stub-ret-type) arg-types)))
 	(lambda args
@@ -496,7 +498,8 @@
       (uint32_t           . ,FFI_RETURN_TYPE_UINT32_T)
       (int64_t            . ,FFI_RETURN_TYPE_INT64_T )
       (uint64_t           . ,FFI_RETURN_TYPE_UINT64_T)
-      (wchar_t*           . ,FFI_RETURN_TYPE_WCHAR_STR)))
+      (wchar_t*           . ,FFI_RETURN_TYPE_WCHAR_STR)
+      (callback           . ,FFI_RETURN_TYPE_CALLBACK)))
 
   (define callback-argument-type-class
     `((bool               . #\l)
@@ -523,7 +526,6 @@
       (float              . #\f)
       (double             . #\d)
       (size_t             . ,(if (= size-of-size_t 4) #\W #\Q))
-      (void*              . #\p)
-      (wchar_t*           . #\p)))
+      (void*              . #\p)))
   
   )
