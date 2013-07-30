@@ -380,10 +380,19 @@ static void salvage_vm(void **where, void *obj)
   salvage_scheme_pointer(&vm->ac, vm->ac);
   salvage_scheme_pointer(&vm->cl, vm->cl);
 
+  /* this part is actually harmful since we preserve vm stack
+     FIXME it's better not to preserve vm stack */
+#if 0
+  /* scrub stack */
+  for (stack = vm->sp; stack < vm->stackEnd; stack++) {
+    *stack = NULL;
+  }
+
   /* copy stack, I think FP and SP always point on stack,
      if I remember correctly... */
   sp_diff = vm->sp - vm->stack;
   fp_diff = vm->fp - vm->stack;
+
   copy_root_object(&vm->stack, vm->stack, copy_large_object);
   vm->sp = vm->stack + sp_diff;
   vm->fp = vm->stack + fp_diff;
@@ -398,11 +407,12 @@ static void salvage_vm(void **where, void *obj)
   /* source info */
   /* TODO, if we use GENCGC then we can simply remove this
      by implementing annotated pair. */
-  if (weak_hashtables) {
-    SG_WEAK_HASHTABLE(weak_hashtables)->next = vm->sourceInfos;
-  } else {
-    weak_hashtables = vm->sourceInfos;
-  }
+  SG_WEAK_HASHTABLE(vm->sourceInfos)->next = weak_hashtables;
+  weak_hashtables = vm->sourceInfos;
+  SG_WEAK_HASHTABLE(vm->parameters)->next = weak_hashtables;
+  weak_hashtables = vm->parameters;
+
+#endif 
 }
 
 static void * trans_list(void *obj)
@@ -470,8 +480,8 @@ static void salvage_list(void **where, void *obj)
 static void salvage_library(void **where, void *obj)
 {
   /* if the given library is already forwarded then the rest of the
-     objects must be salvaged. */
-  check_forwarded(obj);
+     objects must be salvaged already. */
+  /* check_forwarded(obj); */
   copy_root_object(where, obj, copy_object);
   salvage_scheme_pointer(&SG_LIBRARY_NAME(obj), SG_LIBRARY_NAME(obj));
   salvage_scheme_pointer((void **)&SG_LIBRARY_TABLE(obj),
@@ -803,16 +813,10 @@ static void scavenge_bindings(SgObject binding_libraries)
     while ((e = Sg_HashIterNext(&itr)) != NULL) {
       /* the entry must be a library */
       /* We can't do keys here must be handled other place. */
-#if 0
-      SgObject lib = SG_HASH_ENTRY_VALUE(e);
-      /* only binding table */
-      salvage_hashtable((void **)&SG_LIBRARY_TABLE(lib), SG_LIBRARY_TABLE(lib));
-#else
       salvage_scheme_pointer((void **)&e->value, e->value);
-#endif
-
     }
-
+    /* in case ... */
+    core->rehashNeeded = TRUE;
   } else {
     Sg_Panic("Library list is not set!");
   }
@@ -843,12 +847,12 @@ static void scavenge_cont_frame_rec(SgVM *vm, void **where, SgContFrame *cont)
 	     frame so collect it. */
 	  SgObject *f = new_cont->env;
 	  int i;
-	  for (i = 0; i < new_cont->size; i++, f++) {
-	    if (new_cont->fp) {
+	  if (new_cont->fp) {
+	    for (i = 0; i < new_cont->size; i++, f++) 
 	      salvage_scheme_pointer(f, *f);
-	    } else {
+	  } else {
+	    for (i = 0; i < new_cont->size; i++, f++) 
 	      scavenge_general_pointer(f, *f);
-	    }
 	  }
 	}
       }

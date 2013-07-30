@@ -49,7 +49,7 @@ SG_EXTERN void	Sg_DeleteCleanupHandler(void *handle);
 SG_EXTERN void 	Sg_Panic(const char* msg, ...);
 SG_EXTERN void 	Sg_Abort(const char* msg);
 /* gc wrappers */
-SG_EXTERN void 	Sg_GC();
+SG_EXTERN void 	Sg_GC(int gen);
 SG_EXTERN void 	Sg_RegisterFinalizer(SgObject z, SgFinalizerProc finalizer, void *data);
 SG_EXTERN void 	Sg_UnregisterFinalizer(SgObject z);
 SG_EXTERN void 	Sg_RegisterDL(void *data_start, void *data_end,

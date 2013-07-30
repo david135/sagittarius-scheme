@@ -1684,8 +1684,7 @@ static inline int forwarding_pointer_p(void *p)
 
 static inline int survived_gc_yet(void *p)
 {
-  return (!is_scheme_pointer(p) || !from_space_p(p) ||
-	  forwarding_pointer_p(p));
+  return (!is_scheme_pointer(p) || !from_space_p(p) || forwarding_pointer_p(p));
 }
 
 static void *weak_hashtables = NULL;
@@ -1724,7 +1723,7 @@ void scavenge(intptr_t *start, intptr_t n_words)
 		      n_bytes_scavenged + sizeof(memory_header_t))) {
     /* the real ptr indicates real container of the objects which
        we might be interested in. */
-    intptr_t *real_ptr = ALLOCATED_POINTER(object_ptr);
+    intptr_t * volatile real_ptr = ALLOCATED_POINTER(object_ptr);
     /* indicating container can know exact bytes allocated.
        now we need to check inside of the object_ptr to move. */
     size_t limit = MEMORY_SIZE(object_ptr);
@@ -2446,10 +2445,23 @@ garbage_collect_generation(generation_index_t generation, int raise)
     }
     /* all thread (VM) must be preserved */
     preserve_pointer(th->thread);
+    /* FIXME: this is not what I want */
     /* treat VM stack the same as C stack for now */
+    {
+      /* scrub vm stack */
+      void **stack;
+      for (stack = SG_VM(th->thread)->sp; stack < SG_VM(th->thread)->stackEnd;
+	   stack++) {
+	*stack = NULL;
+      }
+    }
     for (ptr = SG_VM(th->thread)->stack; ptr < SG_VM(th->thread)->sp; ptr++) {
       preserve_pointer(*ptr);
     }
+    salvage_weak_hashtable(&SG_VM(th->thread)->sourceInfos,
+			   SG_VM(th->thread)->sourceInfos);
+    salvage_weak_hashtable(&SG_VM(th->thread)->parameters,
+			   SG_VM(th->thread)->parameters);
   }
 
   /* preserve static area. */
