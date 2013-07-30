@@ -1,8 +1,8 @@
-;;; -*- Scheme -*-
+;;; -*- mode:scheme; coding:utf-8; -*-
 ;;;
 ;;; hmac.scm - Keyed-Hashing for Message Authentication code library.
 ;;;  
-;;;   Copyright (c) 2010-2012  Takashi Kato  <ktakashi@ymail.com>
+;;;   Copyright (c) 2010-2013  Takashi Kato  <ktakashi@ymail.com>
 ;;;   
 ;;;   Redistribution and use in source and binary forms, with or without
 ;;;   modification, are permitted provided that the following conditions
@@ -29,12 +29,12 @@
 ;;;  
 
 (library (rfc hmac)
-    (export HMAC
-	    <hmac>)
+    (export HMAC <hmac> verify-mac)
     (import (rnrs) (sagittarius)
 	    (math)
 	    (sagittarius control)
-	    (clos user))
+	    (clos user)
+	    (crypto mac))
 
   ;; hash functions
   (define (hmac-init algo)
@@ -87,7 +87,7 @@
       (bytevector-copy! buffer 0 out 0 (min hashsize (bytevector-length out)))
       out))
 
-  (define-class <hmac> (<user-hash-algorithm>)
+  (define-class <hmac> (<mac>)
     ((hash :init-keyword :hash)
      (i-key :init-keyword :i-key)
      (key   :init-keyword :key)))

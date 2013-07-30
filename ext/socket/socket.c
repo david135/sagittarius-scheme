@@ -66,16 +66,25 @@ static SgString* get_address_string_rec(const struct sockaddr *addr,
 {
   int ret;
   char host[NI_MAXHOST];
+  char ip[NI_MAXHOST];
   char serv[NI_MAXSERV];
-  char name[NI_MAXSERV + NI_MAXHOST + 1];
+  char name[NI_MAXSERV + (NI_MAXHOST<<1) + 1];
   do {
     ret = getnameinfo(addr,
 		      addrlen,
 		      host, sizeof(host),
-		      serv, sizeof(serv), NI_NUMERICSERV);
+		      serv, sizeof(serv), 
+		      NI_NUMERICSERV);
+  } while (EAI_AGAIN == ret);
+  do {
+    ret = getnameinfo(addr,
+		      addrlen,
+		      ip, sizeof(ip),
+		      serv, sizeof(serv), 
+		      NI_NUMERICSERV | NI_NUMERICHOST);
   } while (EAI_AGAIN == ret);
   if (port_p) {
-    snprintf(name, sizeof(name), "%s:%s", host, serv);
+    snprintf(name, sizeof(name), "%s(%s):%s", host, ip, serv);
   } else {
     snprintf(name, sizeof(name), "%s", host);
   }
@@ -359,10 +368,9 @@ SgAddrinfo* Sg_GetAddrinfo(SgObject node, SgObject service, SgAddrinfo *hints)
   return result;
 }
 
-SgObject Sg_CreateSocket(SgAddrinfo *info)
+SgObject Sg_CreateSocket(int family, int socktype, int protocol)
 {
-  struct addrinfo *p = info->ai;
-  const SOCKET fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+  const SOCKET fd = socket(family, socktype, protocol);
   if (-1 == fd) {
     return SG_FALSE;
   }
@@ -571,6 +579,9 @@ void Sg_SocketClose(SgSocket *socket)
     return;
   }
 #ifdef _WIN32
+  /* FIXME socket-close should not shutdown socket but we don't have
+     any way to flush socket other than shutting down write side of
+     socket descriptor on Windows. */
   shutdown(socket->socket, SD_SEND);
   closesocket(socket->socket);
 #else
@@ -697,6 +708,18 @@ SgObject Sg_SocketName(SgObject socket)
   else return SG_FALSE;
 }
 
+SgObject Sg_SocketInfo(SgObject socket)
+{
+  struct sockaddr_storage name;
+  int len = sizeof(name), ret;
+  ret = getsockname(SG_SOCKET(socket)->socket, (struct sockaddr *)&name, &len);
+  if (ret == 0) {
+    return make_socket_info(&name);
+  } else {
+    return SG_FALSE;
+  }
+}
+
 SgObject Sg_IpAddressToString(SgObject ip)
 {
   return ip_to_string(SG_IP_ADDRESS(ip));
@@ -796,6 +819,14 @@ static int socket_close(SgObject self)
   if (!SG_PORT(self)->closed) {
     SG_PORT(self)->closed = TRUE;
     Sg_SocketClose(SG_PORT_SOCKET(self));
+  }
+  return SG_PORT(self)->closed;
+}
+
+static int socket_close_only_port(SgObject self)
+{
+  if (!SG_PORT(self)->closed) {
+    SG_PORT(self)->closed = TRUE;
   }
   return SG_PORT(self)->closed;
 }
@@ -924,31 +955,61 @@ static int socket_ready(SgObject self)
   return (state != 0);
 }
 
-SgObject Sg_MakeSocketPort(SgSocket *socket)
+static inline SgObject make_socket_port(SgSocket *socket,
+					enum SgPortDirection d, 
+					int closeP)
 {
-  SgPort *z = make_port(SG_IN_OUT_PORT, SG_BINARY_PORT_TYPE, SG_BUFMODE_NONE);
+  SgPort *z = make_port(d, SG_BINARY_PORT_TYPE, SG_BUFMODE_NONE);
   SgBinaryPort *b = make_binary_port(SG_CUSTOM_BINARY_PORT_TYPE, socket);
 
   z->closed = FALSE;
   z->flush = socket_flush;
-  z->close = socket_close;
+  if (closeP) {
+    z->close = socket_close;
+  } else {
+    z->close = socket_close_only_port;
+  }
   z->ready = socket_ready;
   z->impl.bport = b;
 
   b->open = socket_open;
-  b->getU8 = socket_get_u8;
-  b->lookAheadU8 = socket_look_ahead_u8;
-  b->readU8 = socket_read_u8;
-  b->readU8All = socket_read_u8_all;
-  b->putU8 = socket_put_u8;
-  b->putU8Array = socket_put_u8_array;
-
+  switch (d) {
+  case SG_INPUT_PORT: case SG_IN_OUT_PORT:
+    b->getU8 = socket_get_u8;
+    b->lookAheadU8 = socket_look_ahead_u8;
+    b->readU8 = socket_read_u8;
+    b->readU8All = socket_read_u8_all;
+    break;
+  default: break;
+  }
+  switch (d) {
+  case SG_OUTPUT_PORT: case SG_IN_OUT_PORT:
+    b->putU8 = socket_put_u8;
+    b->putU8Array = socket_put_u8_array;
+  default: break;
+  }
   b->bufferWriter = NULL;
   SG_PORT_U8_AHEAD(z) = EOF;
   return SG_OBJ(z);
 }
 
-void Sg_ShutdownPort(SgPort *port)
+SgObject Sg_MakeSocketPort(SgSocket *socket, int closeP)
+{
+  return make_socket_port(socket, SG_IN_OUT_PORT, closeP);
+}
+
+SgObject  Sg_MakeSocketInputPort(SgSocket *socket)
+{
+  /* I hope compiler is smart enough to remove if and switch. */
+  return make_socket_port(socket, SG_INPUT_PORT, FALSE);
+}
+SgObject  Sg_MakeSocketOutputPort(SgSocket *socket)
+{
+  /* I hope compiler is smart enough to remove if and switch. */
+  return make_socket_port(socket, SG_OUTPUT_PORT, FALSE);
+}
+
+void Sg_ShutdownPort(SgPort *port, int how)
 {
   if (SG_BINARY_PORT(port)->type != SG_BINARY_CUSTOM_PORT_TYPE ||
       !SG_SOCKETP(SG_PORT_SOCKET(port))) {
@@ -956,7 +1017,7 @@ void Sg_ShutdownPort(SgPort *port)
   }
   if (!Sg_PortClosedP(port)) {
     Sg_FlushPort(port);
-    Sg_SocketShutdown(SG_PORT_SOCKET(port), 1);
+    Sg_SocketShutdown(SG_PORT_SOCKET(port), how);
   }
 }
 

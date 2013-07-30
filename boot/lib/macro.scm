@@ -107,6 +107,7 @@
 (define .match-syntax-case (make-identifier 'match-syntax-case '()
 					    '(core syntax-case)))
 (define .list (make-identifier 'list '() '(core syntax-case)))
+(define .lambda (make-identifier 'lambda '() '(core syntax-case)))
 
 ;; exclude '...
 (define (collect-unique-ids expr)
@@ -227,15 +228,15 @@
 		      (receive (pattern env patvars) (parse-pattern p)
 			(cons `(,.list (,syntax-quote. ,pattern)
 				       #f
-				       (lambda (,.vars)
+				       (,.lambda (,.vars)
 					 ,(rewrite expr patvars #t)))
 			      env)))
 		     ((p fender expr)
 		      (receive (pattern env patvars) (parse-pattern p)
 			(cons `(,.list (,syntax-quote. ,pattern)
-				       (lambda (,.vars)
+				       (,.lambda (,.vars)
 					 ,(rewrite fender patvars #t))
-				       (lambda (,.vars)
+				       (,.lambda (,.vars)
 					 ,(rewrite expr patvars #t)))
 			      env)))))
 		 clauses))))
@@ -881,31 +882,45 @@
 	  (expand-template tmpl 0 vars)))))
 
 ;; datum->syntax
-(define (datum->syntax template-id datum)
-  (define seen (make-eq-hashtable))
-  (define (rewrite expr frame library)
-    (let loop ((expr expr))
-      (cond ((pair? expr)
-	     (let ((a (loop (car expr)))
-		   (d (loop (cdr expr))))
-	       (if (and (eq? a (car expr)) (eq? d (cdr expr)))
-		   expr
-		   (cons a d))))
-	    ((vector? expr)
-	     (list->vector (loop (vector->list expr))))
-	    ((symbol? expr)
-	     (cond ((hashtable-ref seen expr))
-		   (else 
-		    (let* ((dummy (make-identifier expr '() library))
-			   (id (make-identifier dummy frame library)))
-		      (hashtable-set! seen expr id)
-		      id))))
-	    (else expr))))
-  (or (identifier? template-id)
-      (assertion-violation 
-       'datum->syntax 
-       (format "expected identifier, but got ~s" template-id)))
-  (rewrite datum (id-envs template-id) (id-library template-id)))
+(define datum->syntax
+  (lambda (template-id datum)
+    (define seen (make-eq-hashtable))
+    ;; most of the case template-id has the same library as
+    ;; usage env but probably some case doesn't (i haven't confirm it)
+    ;; but we need the current usage env frame to lookup
+    ;; proper pending identifier.
+    ;; honestly i have no idea what i'm doing here...
+    (define use-env (current-usage-env))
+    (define (rewrite expr frame library)
+      (let loop ((expr expr))
+	(cond ((pair? expr)
+	       (let ((a (loop (car expr)))
+		     (d (loop (cdr expr))))
+		 (if (and (eq? a (car expr)) (eq? d (cdr expr)))
+		     expr
+		     (cons a d))))
+	      ((vector? expr)
+	       (list->vector (loop (vector->list expr))))
+	      ((symbol? expr)
+	       (let ((id (p1env-lookup-name use-env expr LEXICAL BOUNDARY
+					    (id-library template-id))))
+		 ;; if the returned name is already lexical scoped 
+		 ;; (env is not null), then it will be treated correctly
+		 ;; if the id is not lexical identifier but found something,
+		 ;; most definitely it needs to be the same pending
+		 ;; identifier. See issue 117
+		 (cond (id)
+		       ((hashtable-ref seen expr))
+		       (else 
+			(let ((id (make-pattern-identifier expr frame library)))
+			  (hashtable-set! seen expr id)
+			  id)))))
+	      (else expr))))
+    (or (identifier? template-id)
+	(assertion-violation 
+	 'datum->syntax 
+	 (format "expected identifier, but got ~s" template-id)))
+    (rewrite datum (id-envs template-id) (id-library template-id))))
 
 ;; syntax->datum
 (define (syntax->datum syntax)

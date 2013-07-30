@@ -41,6 +41,7 @@
 	    tls-socket-accept
 	    tls-socket-peer
 	    tls-socket-name
+	    tls-socket-info
 	    tls-socket-info-values
 	    call-with-tls-socket
 	    <tls-socket>
@@ -57,6 +58,7 @@
 	    call-with-socket
 	    socket-peer
 	    socket-name
+	    socket-info
 	    socket-info-values
 	    ;; to send handshake explicitly
 	    tls-server-handshake
@@ -64,6 +66,8 @@
 
 	    ;; for testing
 	    *cipher-suites*
+	    ;; socket conversion
+	    socket->tls-socket
 	    )
     (import (rnrs)
 	    (core errors)
@@ -243,20 +247,31 @@
   (define (tls-packet->bytevector p)
     (call-with-bytevector-output-port (^o (write-tls-packet p o))))
 
-  (define (make-server-tls-socket port certificates
-				  :key (prng (secure-random RC4))
+  (define (%make-tls-server-socket raw-socket :key
+				   (prng (secure-random RC4))
+				   (private-key #f)
+				   (version *tls-version-1.2*)
+				   (certificates '())
+				   (authorities '()))
+    (make <tls-server-socket> :raw-socket raw-socket
+	  :version version :prng prng
+	  ;; so far we don't need this but for later
+	  :private-key private-key
+	  :certificates certificates
+	  :authorities authorities
+	  :session (make-initial-session prng <tls-server-session>)))
+
+  (define (make-server-tls-socket port certificates :key
+				  (prng (secure-random RC4))
 				  (private-key #f)
 				  (version *tls-version-1.2*)
 				  (authorities '())
 				  :allow-other-keys opt)
     (let1 raw-socket (apply make-server-socket port opt)
-      (make <tls-server-socket> :raw-socket raw-socket
-	    :version version :prng prng
-	    ;; so far we don't need this but for later
-	    :private-key private-key
-	    :certificates certificates
-	    :authorities authorities
-	    :session (make-initial-session prng <tls-server-session>))))
+      (%make-tls-server-socket raw-socket
+			       :certificates certificates
+			       :prng prng :private-key private-key
+			       :version version :authorities authorities)))
 
   (define (tls-socket-accept socket :key (handshake #t) (raise-error #t))
     (let* ((raw-socket (socket-accept (~ socket 'raw-socket)))
@@ -275,10 +290,13 @@
 
   (define (verify-mac socket finish label restore-message?)
     (let* ((session (~ socket 'session))
-	   (messages (get-output-bytevector (~ session 'messages)))
+	   (messages ((if restore-message?
+			  get-output-bytevector
+			  extract-output-bytevector) (~ session 'messages)))
 	   (session-verify (tls-finished-data finish))
 	   (verify (finish-message-hash session label messages)))
       ;; verify message again
+      #;
       (when restore-message? 
 	(put-bytevector (~ session 'messages) messages))
       (or (bytevector=? session-verify verify)
@@ -456,7 +474,7 @@
 	(unless (null? (~ socket 'authorities))
 	  (let1 message (get-output-bytevector (~ session 'messages))
 	    ;; we need this later so restore it
-	    (put-bytevector (~ session 'messages) message)
+	    ;;(put-bytevector (~ session 'messages) message)
 	    (set! (~ session 'verify-message) message)))
 	(if (is-dh? session)
 	    ;; Diffie-Hellman key exchange
@@ -481,7 +499,7 @@
 			     0 *change-cipher-spec* #f)
       (let* ((session (~ socket 'session))
 	     (out (~ session 'messages))
-	     (handshake-messages (get-output-bytevector out))
+	     (handshake-messages (extract-output-bytevector out))
 	     (client-finished (~ session 'client-finished)))
 	(set! (~ session 'client-finished) #f) ;; for GC
 	(tls-socket-send-inner socket
@@ -535,8 +553,24 @@
 		       (tls-error 'tls-handshake "unexpected object"
 				  *unexpected-message* o)))))))))
 
-  (define (make-client-tls-socket server service
-				  :key (prng (secure-random RC4))
+  (define (%make-tls-client-socket raw-socket :key
+				   (prng (secure-random RC4))
+				   (version *tls-version-1.2*)
+				   (session #f)
+				   (cipher-suites *cipher-suites*)
+				   (certificates '())
+				   (private-key #f)
+				   :allow-other-keys)
+    (make <tls-client-socket> :raw-socket raw-socket
+	  :version version :prng prng
+	  :cipher-suites cipher-suites
+	  :certificates certificates
+	  :private-key private-key
+	  :session (if session
+		       session
+		       (make-initial-session prng <tls-client-session>))))
+  (define (make-client-tls-socket server service :key
+				  (prng (secure-random RC4))
 				  (version *tls-version-1.2*)
 				  (session #f)
 				  (handshake #t)
@@ -545,19 +579,22 @@
 				  (private-key #f)
 				  :allow-other-keys opt)
     (let* ((raw-socket (apply make-client-socket server service opt))
-	   (socket (make <tls-client-socket> :raw-socket raw-socket
-			 :version version :prng prng
-			 :cipher-suites cipher-suites
-			 :certificates certificates
-			 :private-key private-key
-			 :session (if session
-				      session
-				      (make-initial-session prng
-				       <tls-client-session>)))))
+	   (socket (%make-tls-client-socket raw-socket
+					    :prng prng
+					    :version version
+					    :session session
+					    :cipher-suites cipher-suites
+					    :certificates certificates
+					    :private-key private-key)))
       (if handshake
 	  (tls-client-handshake socket)
 	  socket)))
 
+  (define (socket->tls-socket socket :key (client-socket #t)
+			      :allow-other-keys opt)
+    (if client-socket
+	(apply %make-tls-client-socket socket opt)
+	(apply %make-tls-server-socket socket opt)))
 
   (define (finish-message-hash session label handshake-messages)
     (PRF session 12 ;; For 1.2 check cipher
@@ -663,7 +700,7 @@
       (let* ((session (~ socket 'session))
 	     (in (~ session 'messages))
 	     (position (port-position in))
-	     (message (get-output-bytevector in)))
+	     (message (extract-output-bytevector in)))
 	(define (handle-1.1 rsa-cipher message)
 	  (make-tls-signature
 	   (encrypt rsa-cipher
@@ -776,7 +813,7 @@
       (let* ((out (~ session 'messages))
 	     (handshake-messages (get-output-bytevector out)))
 	;; add message again
-	(put-bytevector out handshake-messages)
+	;;(put-bytevector out handshake-messages)
 	(tls-socket-send-inner socket
 	 (make-tls-handshake *finished*
 	  (make-tls-finished (finish-message-hash session
@@ -1393,8 +1430,10 @@
     (socket-peer (~ socket 'raw-socket)))
   (define (tls-socket-name socket)
     (socket-name (~ socket 'raw-socket)))
-  (define (tls-socket-info-values socket)
-    (socket-info-values (~ socket 'raw-socket)))
+  (define (tls-socket-info socket)
+    (socket-info (~ socket 'raw-socket)))
+  (define (tls-socket-info-values socket :key (type 'peer))
+    (socket-info-values (~ socket 'raw-socket) type))
 
   ;; to make call-with-socket available for tls-socket
   (define-method socket-close ((o <tls-socket>))
@@ -1416,6 +1455,8 @@
     (tls-socket-peer o))
   (define-method socket-name ((o <tls-socket>))
     (tls-socket-name o))
-  (define-method socket-info-values ((o <tls-socket>))
-    (tls-socket-info-values o))
+  (define-method socket-info ((o <tls-socket>))
+    (tls-socket-info o))
+  (define-method socket-info-values ((o <tls-socket>) . opt)
+    (apply tls-socket-info-values o opt))
   )

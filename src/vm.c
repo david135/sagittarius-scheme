@@ -462,7 +462,7 @@ static inline void report_error(SgObject exception, SgObject out)
   Sg_FlushAllPort(FALSE);
 }
 
-void Sg_ReportError(SgObject e, SgObject out)
+void Sg_ReportError(volatile SgObject e, SgObject out)
 {
   SgVM *vm = Sg_VM();
 
@@ -534,14 +534,15 @@ static void vm_dump_code_rec(SgCodeBuilder *cb, int indent)
     if (info->argc != 0) {
       /* for now insn argument is only one */
       SgObject arg = SG_OBJ(code[i + 1]);
-      if (SG_CODE_BUILDERP(arg)) {
+      if (!info->label && SG_CODE_BUILDERP(arg)) {
 	s = Sg_GetStringFromStringPort(out);
 	Sg_Puts(vm->logPort, SG_STRING(s));
 	Sg_Printf(vm->logPort, UC(" %S\n"), arg);
 	vm_dump_code_rec(SG_CODE_BUILDER(arg), indent + 2);
 	need_line_break = FALSE;
       } else {
-	Sg_Printf(out, UC(" %#S"), arg);
+	if (info->label) Sg_Printf(out, UC(" %d"), arg);
+	else Sg_Printf(out, UC(" %#S"), arg);
 	s = Sg_GetStringFromStringPort(out);
 	Sg_Puts(vm->logPort, SG_STRING(s));
 	if (info->hasSrc) {
@@ -635,6 +636,7 @@ SgObject Sg_Compile(SgObject o, SgObject e)
   }
   SG_WHEN_ERROR {
     restore_vm();
+    r = SG_UNDEF;
     SG_NEXT_HANDLER;
   }
   SG_END_PROTECT;
@@ -1187,30 +1189,37 @@ static SgWord boundaryFrameMark = NOP;
 
 #define SKIP(vm, n)        (PC(vm) += (n))
 #define FETCH_OPERAND(pc)  SG_OBJ((*(pc)++))
-#define PEEK_OPERAND(pc)   SG_OBJ((*(pc)))
+#define PEEK_OPERAND(pc)   ((intptr_t)(*(pc)))
+
+#define FIND_GLOBAL(vm, id, ret)					\
+  do {									\
+    (ret) = Sg_FindBinding(SG_IDENTIFIER_LIBRARY(id),			\
+			   SG_IDENTIFIER_NAME(id),			\
+			   SG_UNBOUND);					\
+    if (SG_UNBOUNDP(ret)) {						\
+      (ret) = Sg_Apply2(&Sg_GenericUnboundVariable,			\
+			SG_IDENTIFIER_NAME(id),				\
+			SG_IDENTIFIER_LIBRARY(id));			\
+      if (Sg_ConditionP(ret)) {						\
+	Sg_Raise(ret, FALSE);						\
+      }									\
+    }									\
+  } while (0)
 
 #define REFER_LOCAL(vm, n)   *(FP(vm) + n)
 #define INDEX_CLOSURE(vm, n)  SG_CLOSURE(CL(vm))->frees[n]
-#define REFER_GLOBAL(vm, ret)						\
-  do {									\
-    ret = FETCH_OPERAND(PC(vm));					\
-    if (SG_GLOCP(ret)) {						\
-      ret = SG_GLOC_GET(SG_GLOC(ret));					\
-    } else {								\
-      SgObject lib = SG_IDENTIFIER_LIBRARY(ret);			\
-      SgObject value = Sg_FindBinding(SG_FALSEP(lib)			\
-				      ? vm->currentLibrary : lib,	\
-				      SG_IDENTIFIER_NAME(ret),		\
-				      SG_UNBOUND);			\
-      if (SG_GLOCP(value)) {						\
-	ret = SG_GLOC_GET(SG_GLOC(value));				\
-	*(PC(vm)-1) = SG_WORD(value);					\
-      } else {								\
-	Sg_UndefinedViolation((ret),					\
-			      Sg_Sprintf(UC("unbound variable %S"),	\
-					 SG_IDENTIFIER_NAME(ret)));	\
-      }									\
-    }									\
+#define REFER_GLOBAL(vm, ret)			\
+  do {						\
+    SgObject id = FETCH_OPERAND(PC(vm));	\
+    if (SG_GLOCP(id)) {				\
+      ret = SG_GLOC_GET(SG_GLOC(id));		\
+    } else {					\
+      FIND_GLOBAL(vm, id, ret);			\
+      if (SG_GLOCP(ret)) {			\
+	*(PC(vm)-1) = SG_WORD(ret);		\
+	(ret) = SG_GLOC_GET(SG_GLOC(ret));	\
+      }						\
+    }						\
   } while (0)
 
 

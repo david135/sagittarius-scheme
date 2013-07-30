@@ -81,6 +81,7 @@
 
 	    ;;  socket options
 	    SOL_SOCKET
+	    SOMAXCONN
 	    SO_ACCEPTCONN SO_BINDTODEVICE SO_BROADCAST
 	    SO_DEBUG SO_DONTROUTE SO_ERROR
 	    SO_KEEPALIVE SO_LINGER SO_OOBINLINE
@@ -108,6 +109,7 @@
 	    ;; socket-info
 	    socket-peer
 	    socket-name
+	    socket-info
 	    socket-info-values
 	    ;; ip-address
 	    ip-address->string
@@ -139,6 +141,10 @@
 
   (define (next-addrinfo info) (slot-ref info 'next))
 
+  (define (create-socket info)
+    (make-socket (slot-ref info 'family) (slot-ref info 'socktype)
+		 (slot-ref info 'protocol)))
+
   (define (make-client-socket node service
 			      :optional (ai-family AF_INET)
 					(ai-socktype SOCK_STREAM)
@@ -152,13 +158,13 @@
 				      :flags ai-flags
 				      :protocol ai-protocol))
 	   (info (get-addrinfo node service hints)))
-      (let loop ((socket (make-socket info)) (info info))
+      (let loop ((socket (create-socket info)) (info info))
 	(define (retry info)
 	  (let ((next (slot-ref info 'next)))
 	    (unless next
 	      (assertion-violation 'make-client-socket "no next addrinfo"
 				   node service))
-	    (loop (make-socket next) next)))
+	    (loop (create-socket next) next)))
 	(or (and-let* (( socket )
 		       ( info ))
 	      (socket-connect! socket info))
@@ -178,13 +184,14 @@
 				      :flags AI_PASSIVE
 				      :protocol ai-protocol))
 	   (info (get-addrinfo #f service hints)))
-      (let loop ((socket (make-socket info)) (info info))
+      (let loop ((socket (create-socket info)) (info info))
 	(define (retry info)
 	  (let ((next (slot-ref info 'next)))
 	    (unless next
 	      (assertion-violation 'make-server-socket 
 				   "no next addrinfo" service))
-	    (loop (make-socket next) next)))
+	    (loop (create-socket next) next)))
+
 	(or (and-let* (( socket )
 		       ( info )
 		       ( (socket-setsockopt! socket SOL_SOCKET SO_REUSEADDR 1) )
@@ -209,8 +216,11 @@
   (define (socket-error-select timeout . rest)
     (receive (r w e) (socket-select '() '() rest timeout) e))
 
-  (define (socket-info-values socket)
-    (let ((peer (socket-peer socket)))
+  ;; for backward compatibility
+  (define (socket-info-values socket :key (type 'peer))
+    (let ((peer (if (eq? type 'peer)
+		    (socket-peer socket)
+		    (socket-info socket))))
       (if peer
 	  (values (slot-ref peer 'hostname)
 		  (slot-ref peer 'ip-address)

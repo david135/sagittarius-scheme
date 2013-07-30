@@ -1,4 +1,5 @@
 ;; -*- mode: scheme; coding: utf-8; -*-
+#!read-macro=sagittarius/regex
 (library (sagittarius ffi)
     (export open-shared-library
 	    lookup-shared-library
@@ -158,16 +159,18 @@
 	    pointer->string
 	    pointer->bytevector
 	    deref
+
+	    ;; c-variable
+	    c-variable c-variable?
+
 	    ;; clos
 	    <pointer> <function-info> <callback> <c-struct>)
-    (import (core)
+    (import (rnrs)
 	    (core base)
-	    (core errors)
-	    (core syntax)
-	    (core misc)
 	    (clos user)
 	    (srfi :13 strings)
 	    (sagittarius)
+	    (sagittarius regex)
 	    (sagittarius dynamic-module))
   (load-dynamic-module "sagittarius--ffi")
 
@@ -219,6 +222,30 @@
 	      ((zero? (pointer-ref-c-uint8 pointer i))
 	       (bytevector->string (getter) transcoder))
 	    (put-u8 out (pointer-ref-c-uint8 pointer i))))))
+
+  (define (wchar-pointer->string pointer)
+    (if (null-pointer? pointer)
+	(assertion-violation 'pointer->string "NULL pointer is given")
+	(let-values (((out getter) (open-bytevector-output-port)))
+	  (let ((buf (make-bytevector size-of-wchar_t)))
+	    (do ((i 0 (+ i size-of-wchar_t)))
+		((zero? (pointer-ref-c-wchar pointer i))
+		 (bytevector->string (getter)
+				     (make-transcoder 
+				      (case size-of-wchar_t
+					((2) (utf-16-codec))
+					((4) (utf-32-codec)))
+				      (native-eol-style))))
+	      (let ((wc (pointer-ref-c-wchar pointer i)))
+		(case size-of-wchar_t
+		  ((2) 
+		   (bytevector-u16-set! buf 0 wc (endianness big))
+		   (put-bytevector out buf))
+		  ((4)
+		   ;; utf-32-codec uses native endian if it's not specified
+		   ;; endianness.
+		   (bytevector-u32-native-set! buf 0 wc)
+		   (put-bytevector out buf)))))))))
 
   (define (pointer->bytevector p size)
     (if (null-pointer? p)
@@ -527,5 +554,68 @@
       (double             . #\d)
       (size_t             . ,(if (= size-of-size_t 4) #\W #\Q))
       (void*              . #\p)))
+
+  ;; c-varibale
+  (define-class <c-variable> () 
+    ((pointer :init-keyword :pointer)
+     (getter  :init-keyword :getter)
+     (setter  :init-keyword :setter)))
+
+  ;; make this work like parameters :)
+  ;; TODO how should we treat with void*?
+  (define-method object-apply ((o <c-variable>))
+    ((slot-ref o 'getter) (slot-ref o 'pointer)))
+  (define-method object-apply ((o <c-variable>))
+    ((slot-ref o 'getter) (slot-ref o 'pointer)))
+
+  (define-method object-apply ((o <c-variable>) v)
+    (let ((setter (slot-ref o 'setter)))
+      (if setter
+	  (setter (slot-ref o 'pointer) v)
+	  (error 'c-variable "variable is immutable" o))))
+
+  (define-method (setter object-apply) ((o <c-variable>) v) (o v))
+
+  (define-method write-object ((o <c-variable>) out)
+    (format out "#<c-varible ~a>" (slot-ref o 'pointer)))
+
+  (define (make-c-variable lib name getter setter)
+    (let ((p (lookup-shared-library lib (symbol->string name))))
+      (make <c-variable> :pointer p :getter getter :setter setter)))
+
+  (define (c-variable? o) (is-a? o <c-variable>))
+  (define-syntax c-variable
+    (lambda (x)
+      (define (get-accessor type)
+	(let ((name (symbol->string (syntax->datum type))))
+	  (regex-match-cond 
+	    ((#/(.+?)_t$/ name) (#f name)
+	     (list (string->symbol (string-append "pointer-ref-c-" name))
+		   (string->symbol (string-append "pointer-set-c-" name "!"))))
+	    (else
+	     (list (string->symbol (string-append "pointer-ref-c-" name))
+		   (string->symbol (string-append "pointer-set-c-" name "!")))))
+	  ))
+      (syntax-case x (char* void* wchar_t*)
+	;; We make char* and wchar_t* immutable from Scheme.
+	((_ lib char* name)
+	 #'(c-variable lib name (lambda (p) (pointer->string (deref p 0))) #f))
+	((_ lib wchar_t* name)
+	 #'(c-variable lib name 
+		       (lambda (p) (wchar-pointer->string (deref p 0))) #f))
+	;; TODO how should we treat this? for now direct pointer access
+	((_ lib void* name)
+	 ;; pointer is not immutable but I don't know the best way to
+	 ;; handle set! with setter. So for now make it like this
+	 #'(c-variable lib name (lambda (p) p) #f))
+	((_ lib type name)
+	 (with-syntax (((getter setter) 
+			(datum->syntax #'k (get-accessor #'type))))
+	   #'(c-variable lib name 
+			 (lambda (p) (getter p 0))
+			 (lambda (p v) (setter p 0 v)))))
+	((_ lib name getter setter)
+	 #'(make-c-variable lib 'name getter setter)))))
+
   
   )
