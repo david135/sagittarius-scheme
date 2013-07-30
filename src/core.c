@@ -208,13 +208,12 @@ void Sg_Init()
 }
 
 /* GC related */
-void Sg_GC()
+void Sg_GC(int gen)
 {
 #ifdef USE_BOEHM_GC
   GC_gcollect();
 #else
-  /* TODO  */
-  GC_collect_garbage(0);
+  GC_collect_garbage(gen);
 #endif
 }
 

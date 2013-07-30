@@ -265,7 +265,7 @@ static void register_buffered_port(SgPort *port)
     if (tried_gc) {
       Sg_Panic("active buffered port table overflow.");
     } else {
-      Sg_GC();
+      Sg_GC(0);
       tried_gc = TRUE;
       need_gc = FALSE;
       goto retry;
