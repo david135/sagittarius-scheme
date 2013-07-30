@@ -932,6 +932,7 @@ static SgBignum* bignum_sub_int(SgBignum *br, SgBignum *bx, SgBignum *by)
     for (i = 0; i < ysize; i++) {
       br->elements[i] = by->elements[i];
     }
+    /* 0 - n must be - */
     SG_BIGNUM_SET_SIGN(br, SG_BIGNUM_GET_SIGN(by));
   } else if (ysize == 0) {
     for (i = 0; i < xsize; i++) {
@@ -987,6 +988,9 @@ static SgBignum* bignum_sub(SgBignum *bx, SgBignum *by)
     bignum_sub_int(br, bx, by);
   } else {
     bignum_add_int(br, bx, by);
+    if (SG_BIGNUM_GET_SIGN(bx) == 0) {
+      SG_BIGNUM_SET_SIGN(br, -1);
+    }
   }
   return br;
 }
@@ -1038,8 +1042,6 @@ SgObject Sg_BignumSubSI(SgBignum *a, long b)
   return Sg_NormalizeBignum(bignum_add_si(a, -b));
 }
 
-#define USE_FAST_MULTIPLY
-
 /* MSVC doesn't allow us to typedef blow. Well, that's how it suppose to be
    I think... */
 typedef unsigned long ulong;
@@ -1055,18 +1057,166 @@ typedef uint64_t dlong;
 #define SHIFT_MAGIC 5
 #endif
 
-#ifdef USE_FAST_MULTIPLY
 /* forward declaration */
 static ulong* multiply_to_len(ulong *x, int xlen, ulong *y, int ylen, ulong *z);
 static ulong mul_add(ulong *out, ulong *in, int len, ulong k);
 
-static SgBignum* bignum_mul_word(SgBignum *br, SgBignum *bx,
-				 unsigned long y, int off)
+/* whatever i did, it's slow. */
+#if 0
+#include <emmintrin.h>
+
+typedef struct
 {
-  multiply_to_len(bx->elements, SG_BIGNUM_GET_COUNT(bx), &y, 1, 
-		  br->elements + off);
+  ulong r0lo;			/* r0 low */
+  ulong r0hi;			/* r0 high */
+  ulong r1lo;			/* r1 low */
+  ulong r1hi;			/* r1 high */
+} r4;
+
+static inline SgBignum* bignum_mul_word(SgBignum *br, SgBignum *bx,
+					unsigned long y)
+{
+  int size = SG_BIGNUM_GET_COUNT(bx);
+  /* do trivial case first */
+  if (size == 1) {
+    /* only one element in bx */
+    dlong p;
+    p = (dlong)bx->elements[0] * y;
+    br->elements[0] = (ulong)p;
+    br->elements[1] = (ulong)(p >> WORD_BITS);
+    return br;
+  } else if (size == 2) {
+    /* only 2 elements in bx */
+    dlong p;
+    p = (dlong)bx->elements[0] * y;
+    br->elements[0] = (ulong)p;
+    p = (dlong)bx->elements[1] * y + (ulong)(p >> WORD_BITS);
+    br->elements[1] = (ulong)p;
+    br->elements[2] = (ulong)(p >> WORD_BITS);
+    return br;
+  } else {
+    /* more than 3 elements means at least one loop */
+#if 1
+    /* try use SSE as mere (64 bit) register. 
+       why is there no 64x64 multiplication? */
+    int i;
+    __m128i p, x, yy, t;
+    yy = _mm_cvtsi32_si128(y);
+    for (i = 0; i < size; i++) {
+      x = _mm_cvtsi32_si128(bx->elements[i]);
+      t = _mm_cvtsi32_si128(br->elements[i]); /* carry is here */
+      p = _mm_add_epi64(_mm_mul_epu32(x, yy), t);
+      _mm_storel_epi64(&br->elements[i], p);
+    }
+    /* the last carry is already stored */
+    return br;
+#else
+    /* following was actually slow... */
+    /* debug */
+/* #define DEBUG_SSE2 */
+#ifdef DEBUG_SSE2
+#define dump_m128(m)					\
+  do {							\
+    r4 r_ __attribute__((aligned(16)));			\
+    _mm_store_si128((__m128i *)&r_, (m));		\
+    fprintf(stderr, "%08lx:%08lx:%08lx:%08lx:%s\n",	\
+	    r_.r0hi, r_.r0lo, r_.r1hi, r_.r1lo, #m);	\
+  } while (0)
+#else
+#define dump_m128(m)		/* dummy */
+#endif
+    /* 
+       p0(h,l) = x0 * y
+       p1(h,l) = x1 * y + p0(h)
+       p2(h,l) = x2 * y + p1(h)
+
+       i.e.)
+         p0    = 0x0000002e257a5000
+         p0(h) =         0x0000002e
+	 x1y   = 0x0000002478ce03be
+	 p1    = 0x0000002478ce03ec
+	 p1(h) =         0x00000024 = high(low(x1y) + p0(h)) + high(x1y)
+
+       pn(h) = high(low(xn * y) + pn-1(h)) + high(xn * y)
+
+       c0 register holds pn-1(h)
+       c1 register holds pn(h)
+     */
+#define compute_sse(x0, x1)						\
+  do {									\
+    /* compute carry from previous (r1 register) */			\
+    /* carry pi-1 and pi-2 */						\
+    c1 = _mm_shuffle_epi32(p, _MM_SHUFFLE(0,1,2,3));			\
+    c1 = _mm_and_si128(c1, ml); /* mask */				\
+    dump_m128(c1);							\
+    xx = _mm_set_epi64x((x1), (x0));					\
+    p  = _mm_mul_epu32(xx, yy); /* (x0 * y0) & (x1 * y1)  */		\
+    dump_m128(p);							\
+    c0 = _mm_and_si128(p, ml);  /* low(x1y) */				\
+    c0 = _mm_add_epi64(c0, c1); /* low(x1y) + p0(h) */			\
+    dump_m128(c0);							\
+    xx = _mm_srli_epi64(c0, WORD_BITS);	/* high(low(x1y) + p0(h)) */	\
+    c0 = _mm_srli_epi64(p, WORD_BITS);  /* high(x1y) */			\
+    dump_m128(xx);							\
+    xx = _mm_add_epi64(xx, c0);	/* high(low(x1y) +p0(h)) + high(x1y) */ \
+    dump_m128(xx);							\
+    /* now xx contains p1(h) in r1 so shuffle it */			\
+    /* p1 = x*y + (ulong)(p0>>32) */					\
+    xx = _mm_and_si128(xx, mx); /* clear r0,r1,r2 */			\
+    xx = _mm_shuffle_epi32(xx, _MM_SHUFFLE(1,0,3,2));			\
+    c1 = _mm_and_si128(c1, mx);						\
+    dump_m128(xx);							\
+    c0 = _mm_or_si128(xx, c1);						\
+    dump_m128(c0);							\
+    p  = _mm_add_epi64(p, c0);						\
+    dump_m128(p);							\
+  } while (0)
+
+    int i;
+    __m128i p, xx, yy, c0, c1, ml, mx;
+    __attribute__((aligned(16))) r4 pr = {0, 0, 0, 0};
+
+    yy = _mm_set_epi64x(y, y);
+    ml = _mm_set_epi32(0, 0xffffffffUL, 0, 0xffffffffUL);
+    mx = _mm_set_epi32(0, 0, 0, 0xffffffffUL);
+    /* set 0 */
+    p = _mm_setzero_si128();
+    for (i = 0; i < size - 1; i += 2) {
+      compute_sse(bx->elements[i], bx->elements[i+1]);
+      _mm_store_si128((__m128i *)&pr, p);
+      br->elements[i]   = pr.r0lo;
+      br->elements[i+1] = pr.r1lo;
+    }
+    /* do the rest */
+    if (size & 1) {
+      compute_sse(bx->elements[i], 0);
+      _mm_store_si128((__m128i *)&pr, p);
+      br->elements[i]   = pr.r0lo;
+      br->elements[i+1] = pr.r0hi;
+    } else {
+      br->elements[i] = pr.r1hi;
+    }
+    return br;
+#undef compute_sse
+#endif
+  }
+}
+#else
+static inline SgBignum* bignum_mul_word(SgBignum *br, SgBignum *bx,
+					unsigned long y)
+{
+  int i;
+  register dlong p;
+  p = (dlong)bx->elements[0] * y;
+  br->elements[0] = (ulong)p;
+  for (i = 1; i < SG_BIGNUM_GET_COUNT(bx); i++) {
+    p = (dlong)bx->elements[i] * y + (ulong)(p >> WORD_BITS);
+    br->elements[i] = (ulong)p;
+  }
+  br->elements[i] = (ulong)(p >> WORD_BITS);
   return br;
 }
+#endif
 
 static SgBignum* bignum_mul(SgBignum *bx, SgBignum *by)
 {
@@ -1079,72 +1229,29 @@ static SgBignum* bignum_mul(SgBignum *bx, SgBignum *by)
   return br;
 }
 
-#else
-static SgBignum* bignum_mul_word(SgBignum *br, SgBignum *bx,
-				 unsigned long y, int off)
-{
-  unsigned long hi, lo, x, r0, r1, c;
-  unsigned int i, j;
-  unsigned int size = SG_BIGNUM_GET_COUNT(br);
-  for (i = 0; i < SG_BIGNUM_GET_COUNT(bx); i++) {
-    x = bx->elements[i];
-    UMUL(hi, lo, x, y);
-    c = 0;
-    
-    r0 = br->elements[i + off];
-    UADD(r1, c, r0, lo);
-    /* ASSERT(size > i+off); */
-    br->elements[i + off] = r1;
-
-    /* ASSERT(size > i+off+1); */
-    r0 = br->elements[i + off + 1];
-    UADD(r1, c, r0, hi);
-    br->elements[i + off + 1] = r1;
-
-    for (j = i + off + 2; c && j < size; j++) {
-      /* ASSERT(size > j); */
-      r0 = br->elements[j];
-      UADD(r1, c, r0, 0);
-      br->elements[j] = r1;
-    }
-  }
-  return br;
-}
-
-static SgBignum* bignum_mul(SgBignum *bx, SgBignum *by)
-{
-  unsigned int i;
-  SgBignum *br = make_bignum(SG_BIGNUM_GET_COUNT(bx) + SG_BIGNUM_GET_COUNT(by));
-  for (i = 0; i < SG_BIGNUM_GET_COUNT(by); i++) {
-    bignum_mul_word(br, bx, by->elements[i], i);
-  }
-  SG_BIGNUM_SET_SIGN(br, SG_BIGNUM_GET_SIGN(bx) * SG_BIGNUM_GET_SIGN(by));
-  return br;
-}
-#endif
-
 static SgBignum* bignum_mul_si(SgBignum *bx, long y)
 {
   SgBignum *br;
   unsigned long yabs;
 
   if (y == 1) return bx;
-  if (y == 0) {
+  else if (y == 0) {
     br = make_bignum(1);
     SG_BIGNUM_SET_SIGN(br, 0);
     br->elements[0] = 0;
     return br;
-  }
-  if (y == -1) {
+  } else if (y == -1) {
     br = SG_BIGNUM(Sg_BignumCopy(bx));
     SG_BIGNUM_SET_SIGN(br, -SG_BIGNUM_GET_SIGN(bx));
+    return br;
+  } else {
+    br = make_bignum(SG_BIGNUM_GET_COUNT(bx) + 1);
+    yabs = (y < 0) ? -y : y;
+    SG_BIGNUM_SET_SIGN(br, SG_BIGNUM_GET_SIGN(bx));
+    bignum_mul_word(br, bx, yabs);
+    if (y < 0) SG_BIGNUM_SET_SIGN(br, -SG_BIGNUM_GET_SIGN(br));
+    return br;
   }
-  br = make_bignum(SG_BIGNUM_GET_COUNT(bx) + 1);
-  yabs = (y < 0) ? -y : y;
-  SG_BIGNUM_SET_SIGN(br, SG_BIGNUM_GET_SIGN(bx));
-  bignum_mul_word(br, bx, yabs, 0);
-  if (y < 0) SG_BIGNUM_SET_SIGN(br, -SG_BIGNUM_GET_SIGN(br));
-  return br;
 }
 
 
@@ -1398,6 +1505,9 @@ SgObject Sg_BignumSqrt(SgBignum *bn)
   bn_sqrt(workpad);
   if (bn->elements[0] == workpad->elements[0] * workpad->elements[0]) {
     SgBignum *s2 = Sg_BignumMul(workpad, workpad);
+    /* set the same sign for temp otherwise cmp returns non 0 even the
+       value is the same. */
+    SG_BIGNUM_SET_SIGN(s2, SG_BIGNUM_GET_SIGN(bn));
     if (Sg_BignumCmp(bn, s2) == 0) {
       if (SG_BIGNUM_GET_SIGN(bn) > 0) return Sg_BignumToInteger(workpad);
       return Sg_MakeComplex(SG_MAKE_INT(0), Sg_BignumToInteger(workpad));
@@ -1409,6 +1519,18 @@ SgObject Sg_BignumSqrt(SgBignum *bn)
   return Sg_MakeComplex(Sg_MakeFlonum(0.0), Sg_MakeFlonum(s));
 }
 
+SgObject Sg_BignumSqrtApprox(SgBignum *bn)
+{
+  int count;
+  SgBignum *workpad;
+
+  count = SG_BIGNUM_GET_COUNT(bn);
+  ALLOC_TEMP_BIGNUM(workpad, count);
+  memcpy(workpad->elements, bn->elements, sizeof(long) * count);
+  bn_sqrt(workpad);
+  if (SG_BIGNUM_GET_SIGN(bn) > 0) return Sg_BignumToInteger(workpad);
+  else return Sg_MakeComplex(SG_MAKE_INT(0), Sg_BignumToInteger(workpad));
+}
 
 SgObject Sg_MakeBignumWithSize(int size, unsigned long init)
 {
@@ -1422,17 +1544,12 @@ SgObject Sg_BignumAccMultAddUI(SgBignum *acc, unsigned long coef,
 {
   SgBignum *r;
   unsigned int rsize = SG_BIGNUM_GET_COUNT(acc) + 1, i;
-#ifdef USE_FAST_MULTIPLY
   unsigned long carry;
-#endif
   ALLOC_TEMP_BIGNUM(r, rsize);
   r->elements[0] = c;
-#ifdef USE_FAST_MULTIPLY
   carry = mul_add(r->elements, acc->elements, SG_BIGNUM_GET_COUNT(acc), coef);
   r->elements[SG_BIGNUM_GET_COUNT(acc)] = carry;
-#else
-  bignum_mul_word(r, acc, coef, 0);
-#endif
+
   if (r->elements[rsize - 1] == 0) {
     for (i = 0; i < SG_BIGNUM_GET_COUNT(acc); i++) {
       acc->elements[i] = r->elements[i];
@@ -2032,7 +2149,7 @@ static ulong* multiply_to_len(ulong *x, int xlen, ulong *y, int ylen, ulong *z)
   }
   z[i] = (ulong)(p >> WORD_BITS);
 
-  /* add in subsequent wors, storing the most significant word which is new
+  /* add in subsequent words, storing the most significant word which is new
      each time */
   for (i = 1; i < ylen; i++) {
     z[xlen + i] = mul_add((z+i), x, xlen, y[i]);

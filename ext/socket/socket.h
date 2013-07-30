@@ -41,6 +41,10 @@
 # pragma comment(lib, "iphlpapi.lib")
 #endif
 # define snprintf _snprintf
+/* what a crap!! */
+# define SHUT_RD   SD_RECEIVE 
+# define SHUT_WR   SD_SEND 
+# define SHUT_RDWR SD_BOTH 
 #else
 # include <sys/socket.h>
 # include <netdb.h>
@@ -121,7 +125,7 @@ SG_EXTERN SgAddrinfo* Sg_MakeAddrinfo();
 SG_EXTERN SgAddrinfo* Sg_GetAddrinfo(SgObject node, SgObject service,
 				     SgAddrinfo *hints);
 
-SG_EXTERN SgObject  Sg_CreateSocket(SgAddrinfo *info);
+SG_EXTERN SgObject  Sg_CreateSocket(int family, int socktype, int protocol);
 
 SG_EXTERN SgObject  Sg_SocketSetopt(SgSocket *socket, int level,
 				    int opname, SgObject value);
@@ -147,8 +151,10 @@ SG_EXTERN SgObject  Sg_SocketErrorMessage(SgSocket *socket);
 SG_EXTERN int       Sg_SocketNonblocking(SgSocket *socket);
 SG_EXTERN int       Sg_SocketBlocking(SgSocket *socket);
 
-SG_EXTERN SgObject  Sg_MakeSocketPort(SgSocket *socket);
-SG_EXTERN void      Sg_ShutdownPort(SgPort *port);
+SG_EXTERN SgObject  Sg_MakeSocketPort(SgSocket *socket, int close);
+SG_EXTERN SgObject  Sg_MakeSocketInputPort(SgSocket *socket);
+SG_EXTERN SgObject  Sg_MakeSocketOutputPort(SgSocket *socket);
+SG_EXTERN void      Sg_ShutdownPort(SgPort *port, int how);
 
 /* select */
 SG_EXTERN SgObject  Sg_SocketSelect(SgObject reads, SgObject writes,
@@ -157,6 +163,7 @@ SG_EXTERN SgObject  Sg_SocketSelect(SgObject reads, SgObject writes,
 /* misc */
 SG_EXTERN SgObject  Sg_SocketPeer(SgObject socket);
 SG_EXTERN SgObject  Sg_SocketName(SgObject socket);
+SG_EXTERN SgObject  Sg_SocketInfo(SgObject socket);
 SG_EXTERN SgObject  Sg_IpAddressToString(SgObject ip);
 
 SG_CDECL_END

@@ -156,4 +156,43 @@
   (test-equal "issue 87" 'ok (foo))
   )
 
+;; issue 117
+(let ()
+  (define-syntax include
+    (lambda (x)
+      (syntax-case x ()
+	((k)
+	 (datum->syntax #'k '(+ a 1))))))
+  (define-syntax m
+    (syntax-rules ()
+      ((_) (lambda (a) (include)))))
+  (test-equal "issue 117" 3 ((m) 2)))
+
+;; issue 128
+(library (A)
+    (export def)
+    (import (rnrs))
+  (define-syntax def
+    (lambda (x)
+      (syntax-case x ()
+	((_ name)
+	 #'(define-syntax name
+	     (lambda (z)
+	       (syntax-case z ()
+		 ((_ a b)
+		  #'(name a))
+		 ((_ a)
+		  #'a))))))))
+)
+(library (B)
+    (export foo)
+    (import (A) 
+	    (only (sagittarius) %macroexpand)
+	    (sagittarius compiler)
+	    (pp))
+  (def foo)
+)
+(import (B))
+(test-equal "issue 128" 1 (foo 1))
+
 (test-end)

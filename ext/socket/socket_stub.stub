@@ -27,7 +27,8 @@
   (check-string-or-false make-client-socket service)
   (result (Sg_GetAddrinfo node service hints)))
 
-(define-c-proc make-socket (info::<addrinfo>) Sg_CreateSocket)
+(define-c-proc make-socket (f::<fixnum> t::<fixnum> :optional (p::<fixnum> 0))
+  Sg_CreateSocket)
 (define-c-proc socket-setsockopt!
   (socket::<socket> level::<fixnum> name::<fixnum> value) Sg_SocketSetopt)
 (define-c-proc socket-getsockopt
@@ -45,9 +46,18 @@
 
 (define-c-proc socket? (o) ::<boolean> SG_SOCKETP)
 
-(define-c-proc socket-port (o::<socket>) Sg_MakeSocketPort)
+;; socket ports
+(define-c-proc socket-port (o::<socket> :optional (close?::<boolean> #t)) 
+  Sg_MakeSocketPort)
+(define-c-proc socket-input-port (o::<socket>)   Sg_MakeSocketInputPort)
+(define-c-proc socket-output-port (o::<socket>)  Sg_MakeSocketOutputPort)
 
-(define-c-proc shutdown-output-port (o::<port>) ::<void> Sg_ShutdownPort)
+(define-c-proc shutdown-port (o::<port> how::<fixnum>) ::<void> 
+  (Sg_ShutdownPort o how))
+(define-c-proc shutdown-output-port (o::<port>) ::<void> 
+  (Sg_ShutdownPort o SHUT_WR))
+(define-c-proc shutdown-input-port (o::<port>) ::<void> 
+  (Sg_ShutdownPort o SHUT_RD))
 
 (define-c-proc socket-accept (o::<socket>) Sg_SocketAccept)
 
@@ -90,6 +100,7 @@
 
 (define-c-proc socket-peer (o::<socket>) Sg_SocketPeer)
 (define-c-proc socket-name (o::<socket>) Sg_SocketName)
+(define-c-proc socket-info (o::<socket>) Sg_SocketInfo)
 (define-c-proc ip-address->string (ip::<ip-address>) Sg_IpAddressToString)
 (define-c-proc ip-address->bytevector (ip::<ip-address>) 
   (result (-> ip ip)))

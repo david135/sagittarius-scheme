@@ -889,4 +889,23 @@
 ;; issue 112
 (test-assert "#x800000" (positive? #x800000))
 
+;; issue 120
+(test-error "list-sort" (list-sort #f '()))
+(test-error "list-sort" (list-sort #f '(a)))
+
+;; issue 121
+(test-error "make-bytevector" (make-bytevector -1))
+
+;; log handling bignum
+(test-equal "(log (expt 2 2048))" 1419.565425786768 (log (expt 2 2048)))
+(test-equal "(log (expt 2 2048))" 1419.565425786768+3.141592653589793i
+	    (log (- (expt 2 2048))))
+
+;; issue 125
+(test-equal "(sqrt (- (expt 2 2048)))" (- (expt 2 2048))
+	    (* (sqrt (- (expt 2 2048))) (sqrt (- (expt 2 2048)))))
+
+;; issue 126
+(test-assert "(- 0 bignum)" (negative? (- 0 (expt 2 2048))))
+
 (test-end)

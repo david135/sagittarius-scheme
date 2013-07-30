@@ -1323,10 +1323,10 @@
     (Sg_ByteVectorCopyX src sstart dst dstart k))
 
   (define-c-proc make-bytevector (len::<fixnum> :optional (fill::<fixnum> 0))
+    (check-non-negative-fixnum make-bytevector len)
     (result (Sg_MakeByteVector len fill)))
 
-  (define-c-proc bytevector? (o) ::<boolean>
-    (result (SG_BVECTORP o)))
+  (define-c-proc bytevector? (o) ::<boolean> SG_BVECTORP)
 
   (define-c-proc bytevector-length (bv::<bytevector>) ::<fixnum>
     (result (SG_BVECTOR_SIZE bv)))
@@ -1345,7 +1345,7 @@
 
   (define-cise-stmt bv-check-index
     ((_ name bv index)
-     `(unless (> (SG_BVECTOR_SIZE ,bv) ,index)
+     `(unless (and (> (SG_BVECTOR_SIZE ,bv) ,index) (>= ,index 0))
 	(assertion-violation ',name "index out of range"
 			     (SG_LIST2 ,bv (SG_MAKE_INT ,index)))))
     ((_ name bv index offset)

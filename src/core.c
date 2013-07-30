@@ -90,7 +90,7 @@ extern void Sg__Init_core_errors();
 extern void Sg__Init_core_arithmetic();
 extern void Sg__Init_core_enums();
 /* extern void Sg__Init_match_core(); */
-extern void Sg__Init_sagittarius_interactive();
+/* extern void Sg__Init_sagittarius_interactive(); */
 
 extern void Sg__InitExtFeatures();
 
@@ -205,11 +205,6 @@ void Sg_Init()
 				    SG_UNBOUND));
   }
   init_cond_features();
-}
-
-void Sg_InitREPL()
-{
-  Sg__Init_sagittarius_interactive();
 }
 
 /* GC related */

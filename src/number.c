@@ -2124,8 +2124,10 @@ SgObject Sg_Mul(SgObject x, SgObject y)
 			    Sg_Mul(SG_COMPLEX(x)->imag, y));
     }
     else if (SG_COMPLEXP(y)) {
-      SgObject real = Sg_Sub(Sg_Mul(SG_COMPLEX(x)->real, SG_COMPLEX(y)->real), Sg_Mul(SG_COMPLEX(x)->imag, SG_COMPLEX(y)->imag));
-      SgObject imag = Sg_Add(Sg_Mul(SG_COMPLEX(x)->imag, SG_COMPLEX(y)->real), Sg_Mul(SG_COMPLEX(x)->real, SG_COMPLEX(y)->imag));
+      SgObject real = Sg_Sub(Sg_Mul(SG_COMPLEX(x)->real, SG_COMPLEX(y)->real),
+			     Sg_Mul(SG_COMPLEX(x)->imag, SG_COMPLEX(y)->imag));
+      SgObject imag = Sg_Add(Sg_Mul(SG_COMPLEX(x)->imag, SG_COMPLEX(y)->real),
+			     Sg_Mul(SG_COMPLEX(x)->real, SG_COMPLEX(y)->imag));
       return oprtr_norm_complex(real, imag);
     }
   }
@@ -3262,10 +3264,20 @@ SgObject Sg_Angle(SgObject obj)
   return SG_UNDEF;		/* dummy */
 }
 
+static inline SgObject log_handle_inf(SgObject n)
+{
+  /* passing argument must be always bignum */
+  /* Sg_BignumSqrtApprox returns approximate 
+     sqrt and returns always exact number */
+  SgObject r = Sg_BignumSqrtApprox(n);
+  return Sg_Add(Sg_Log(r), Sg_Log(r));  
+}
+
 SgObject Sg_Log(SgObject obj)
 {
   double real;
   double imag;
+
   if (SG_INTP(obj)) {
     long value = SG_INT_VALUE(obj);
     if (value > 0) {
@@ -3277,14 +3289,27 @@ SgObject Sg_Log(SgObject obj)
 			  Sg_MakeFlonum(atan2(0.0, real)));
   }
   if (SG_COMPLEXP(obj)) {
-    real = Sg_GetDouble(SG_COMPLEX(obj)->real);
-    imag = Sg_GetDouble(SG_COMPLEX(obj)->imag);
-    return Sg_MakeComplex(Sg_MakeFlonum(0.5 * log(real * real + imag * imag)),
-			  Sg_MakeFlonum(atan2(imag, real)));
+    SgObject or = SG_COMPLEX(obj)->real, oi = SG_COMPLEX(obj)->imag;
+
+    if (!SG_BIGNUMP(or) && !SG_BIGNUMP(oi)) {
+      real = Sg_GetDouble(or);
+      imag = Sg_GetDouble(oi);
+      return Sg_MakeComplex(Sg_MakeFlonum(0.5 * log(real * real + imag * imag)),
+			    Sg_MakeFlonum(atan2(imag, real)));
+    } else {
+      /* do the same but with Scheme function */
+      SgObject r2 = Sg_Mul(or, or);
+      SgObject i2 = Sg_Mul(oi, oi);
+      static SgObject HALF = NULL;
+      if (!HALF) HALF = Sg_MakeFlonum(0.5);
+      return Sg_MakeComplex(Sg_Mul(HALF, Sg_Log(Sg_Add(r2, i2))),
+			    Sg_Atan2(oi, or));
+    }
   }
   if (SG_REALP(obj)) {
     real = Sg_GetDouble(obj);
-    if (real > 0) return Sg_MakeFlonum(log(real));
+    if (isinf(real) && SG_BIGNUMP(obj)) return log_handle_inf(obj);
+    if (real >= 0) return Sg_MakeFlonum(log(real));
     imag = atan2(0.0, real);
     if (imag == 0.0) return Sg_MakeFlonum(0.5 * log(real * real));
     return Sg_MakeComplex(Sg_MakeFlonum(0.5 * log(real * real)),
