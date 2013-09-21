@@ -2,7 +2,7 @@
 /*
  * socket.c
  *
- *   Copyright (c) 2010  Takashi Kato <ktakashi@ymail.com>
+ *   Copyright (c) 2010-2013  Takashi Kato <ktakashi@ymail.com>
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -29,6 +29,13 @@
  *
  *  $Id: $
  */
+
+
+#include <sagittarius.h>
+#define LIBSAGITTARIUS_EXT_BODY
+#include <sagittarius/extend.h>
+#include "socket.h"
+
 #include <sys/types.h>
 #include <string.h>
 #include <signal.h>
@@ -38,15 +45,21 @@
 #define EAGAIN WSATRY_AGAIN
 #define EWOULDBLOCK WSAEWOULDBLOCK
 #define EPIPE WSAEINVAL
-#ifndef MSG_NOSIGNAL
-#define MSG_NOSIGNAL 0		/* no support */
-#endif
 #endif
 
-#include <sagittarius.h>
-#define LIBSAGITTARIUS_EXT_BODY
-#include <sagittarius/extend.h>
-#include "socket.h"
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0		/* no support (incl. *BSD/OSX) */
+#endif
+
+/* 
+   https://bugs.launchpad.net/libdrizzle/+bug/404662
+   Even though it said it's fixed HOWEVER h, on FreeBSD 9.1 it still
+   returns EAI_BADFLAGS! so we set this 0
+ */
+#ifdef __FreeBSD__
+#undef AI_V4MAPPED
+#define AI_V4MAPPED 0
+#endif
 
 static void socket_printer(SgObject self, SgPort *port, SgWriteContext *ctx)
 {
@@ -105,6 +118,14 @@ static void addrinfo_printer(SgObject self, SgPort *port, SgWriteContext *ctx)
 }
 
 SG_DEFINE_BUILTIN_CLASS_SIMPLE(Sg_AddrinfoClass, addrinfo_printer);
+
+static void sockaddr_printer(SgObject self, SgPort *port, SgWriteContext *ctx)
+{
+  SgSockaddr *addr = SG_SOCKADDR(self);
+  Sg_Printf(port, UC("#<sockaddr %d>"), addr->addr_size);
+}
+
+SG_DEFINE_BUILTIN_CLASS_SIMPLE(Sg_SockaddrClass, sockaddr_printer);
 
 #define IPv4_INADDER_SIZE 0x4
 #define IPv6_INADDER_SIZE 0x10
@@ -313,6 +334,15 @@ static void ai_protocol_set(SgAddrinfo *ai, SgObject protocol)
   ai->ai->ai_protocol = SG_INT_VALUE(protocol);
 }
 
+static SgObject ai_addr(SgAddrinfo *ai)
+{
+  SgSockaddr *addr = SG_NEW(SgSockaddr);
+  SG_SET_CLASS(addr, SG_CLASS_SOCKADDR);
+  addr->addr_size = ai->ai->ai_addrlen;
+  addr->addr = ai->ai->ai_addr;
+  return SG_OBJ(addr);
+}
+
 static SgObject ai_next(SgAddrinfo *ai)
 {
   if (ai->ai->ai_next) {
@@ -328,14 +358,10 @@ static SgSlotAccessor ai_slots[] = {
   SG_CLASS_SLOT_SPEC("family", 1, ai_family, ai_family_set),
   SG_CLASS_SLOT_SPEC("socktype", 2, ai_socktype, ai_socktype_set),
   SG_CLASS_SLOT_SPEC("protocol", 3, ai_protocol, ai_protocol_set),
-  SG_CLASS_SLOT_SPEC("next", 4, ai_next, NULL),
+  SG_CLASS_SLOT_SPEC("addr", 4, ai_addr, NULL),
+  SG_CLASS_SLOT_SPEC("next", 5, ai_next, NULL),
   { { NULL } }
 };
-
-static void addrinfo_finalizer(SgObject self, void *data)
-{
-  freeaddrinfo(SG_ADDRINFO(self)->ai);
-}
 
 SgAddrinfo* Sg_MakeAddrinfo()
 {
@@ -353,8 +379,9 @@ SgAddrinfo* Sg_GetAddrinfo(SgObject node, SgObject service, SgAddrinfo *hints)
     Sg_Utf32sToUtf8s(SG_STRING(service)) : NULL;
   int ret;
   SgAddrinfo *result = make_addrinfo();
+  struct addrinfo *ai, *cur, *prev, *next;
   do {
-    ret = getaddrinfo(cnode, csrv, hints->ai, &(result->ai));
+    ret = getaddrinfo(cnode, csrv, hints->ai, &ai);
   } while (EAI_AGAIN == ret);
 
   if (ret != 0) {
@@ -363,8 +390,23 @@ SgAddrinfo* Sg_GetAddrinfo(SgObject node, SgObject service, SgAddrinfo *hints)
 	       SG_FALSE, SG_LIST2(SG_OBJ(node), SG_OBJ(service)));
     return NULL;
   }
+  /* copy addr info */
+  result->ai = SG_NEW(struct addrinfo);
+  cur = result->ai;
+  for (next = ai, prev = NULL; next; 
+       next = next->ai_next, cur = cur->ai_next, prev = cur) {
+    memcpy(cur, next, sizeof(struct addrinfo));
+    /* copy sockaddr */
+    cur->ai_addr = SG_NEW2(struct sockaddr *, ai->ai_addrlen);
+    memcpy(cur->ai_addr, next->ai_addr, ai->ai_addrlen);
+    /* FIXME ugly check */
+    if (next->ai_next) {
+      cur->ai_next = SG_NEW(struct addrinfo);
+      if (prev) prev->ai_next = cur;
+    }
+  }
 
-  Sg_RegisterFinalizer(result, addrinfo_finalizer, NULL);
+  freeaddrinfo(ai);
   return result;
 }
 
@@ -374,6 +416,13 @@ SgObject Sg_CreateSocket(int family, int socktype, int protocol)
   if (-1 == fd) {
     return SG_FALSE;
   }
+
+#ifdef SO_NOSIGPIPE
+  const int option_value = 1;
+  if (-1 == setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &option_value, sizeof(option_value))) {
+    return SG_FALSE;
+  }
+#endif
   return make_socket_inner(fd);
 }
 
@@ -502,6 +551,40 @@ int Sg_SocketReceive(SgSocket *socket, uint8_t *data, int size, int flags)
   }
 }
 
+int Sg_SocketReceiveFrom(SgSocket *socket, uint8_t *data, int size, int flags,
+			 SgSockaddr *addr)
+{
+  /* int count = 0, osize = size; */
+  CLOSE_SOCKET("socket-recv", socket);
+  for (;;) {
+    const int ret = recvfrom(socket->socket, (char*)data, size,
+			     /* we don't want SIGPIPE */
+			     flags | MSG_NOSIGNAL, addr->addr,
+			     (socklen_t *)&addr->addr_size);
+    if (ret == -1) {
+      if (errno == EINTR) {
+	continue;
+      } else if (errno == EPIPE) {
+	if (flags & MSG_NOSIGNAL) {
+	  return 0;
+	} else {
+	  goto err;
+	}
+      } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+	/* most probably non-blocking socket */
+	return ret;
+      } else {
+      err:
+	Sg_IOError((SgIOErrorType)-1, SG_INTERN("socket-recv"), 
+		   Sg_GetLastErrorMessageWithErrorCode(last_error),
+		   SG_FALSE, SG_NIL);
+	return ret;
+      }
+    }
+    return ret;
+  }
+}
+
 int Sg_SocketSend(SgSocket *socket, uint8_t *data, int size, int flags)
 {
   int rest = size;
@@ -527,6 +610,45 @@ int Sg_SocketSend(SgSocket *socket, uint8_t *data, int size, int flags)
       } else {
       err:
 	Sg_IOError((SgIOErrorType)-1, SG_INTERN("socket-send"), 
+		   Sg_GetLastErrorMessageWithErrorCode(last_error),
+		   SG_FALSE, SG_NIL);
+	return ret;
+      }
+    }
+    sizeSent += ret;
+    rest -= ret;
+    data += ret;
+    size -= ret;
+  }
+  return sizeSent;
+}
+
+int Sg_SocketSendTo(SgSocket *socket, uint8_t *data, int size, int flags,
+		    SgSockaddr *addr)
+{
+  int rest = size;
+  int sizeSent = 0;
+
+  CLOSE_SOCKET("socket-send", socket);
+  while (rest > 0) {
+    const int ret = sendto(socket->socket, (char*)data, size, 
+			   /* we don't want SIGPIPE */
+			   flags | MSG_NOSIGNAL, addr->addr, addr->addr_size);
+    if (ret == -1) {
+      if (errno == EINTR) {
+	continue;
+      } else if (errno == EPIPE) {
+	if (flags & MSG_NOSIGNAL) {
+	  return 0;
+	} else {
+	  goto err;
+	}	
+      } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+	/* most probably non-blocking socket */
+	continue;
+      } else {
+      err:
+	Sg_IOError((SgIOErrorType)-1, SG_INTERN("socket-sendto"), 
 		   Sg_GetLastErrorMessageWithErrorCode(last_error),
 		   SG_FALSE, SG_NIL);
 	return ret;

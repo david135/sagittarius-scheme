@@ -16,7 +16,7 @@
      (define name (lambda formals body ...)))))
 (define-lambda f (t rest) `(t ,t))
 
-(test-begin "sagittarius specific")
+(test-begin "Sagittarius specific")
 (test-equal "bytevector->integer"
 	    #x12345678
 	    (bytevector->integer #vu8(#x12 #x34 #x56 #x78)))
@@ -907,5 +907,25 @@
 
 ;; issue 126
 (test-assert "(- 0 bignum)" (negative? (- 0 (expt 2 2048))))
+
+;; issue 129
+(test-assert "cond-expand" 
+	     (r6rs:eval '(cond-expand ((and (library (rnrs)) 
+				       (or sagittarius something)) 
+				  #t))
+		   '(sagittarius)))
+
+;; issue 132
+;; to avoid unbound variable on R6RS mode...
+#!compatible
+(test-assert "compiler error"
+	     (r6rs:eval '(define (parse-string input-string)
+			   (define (state0 c) (state13 (s1)))
+			   (define (state11 c) )
+			   (define (state12 c) (state11 (s2)))
+			   (define (state13 c) (case c ((#\\) (state12 (s3)))))
+			   (define (state29 c) (state0 (s4)) (state29 (s5)))
+			   'a)
+			(environment '(rnrs))))
 
 (test-end)

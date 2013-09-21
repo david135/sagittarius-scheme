@@ -2,7 +2,7 @@
 /*
  * port.c
  *
- *   Copyright (c) 2010  Takashi Kato <ktakashi@ymail.com>
+ *   Copyright (c) 2010-2013  Takashi Kato <ktakashi@ymail.com>
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -351,19 +351,19 @@ static void file_flush_internal(SgObject self)
   uint8_t *buf = SG_BINARY_PORT(self)->buffer;
   SgBinaryPort *bport = SG_BINARY_PORT(self);
   /* for shared buffered port such as stdout */
-  SG_PORT_LOCK(SG_PORT(self));
+  /* SG_PORT_LOCK(SG_PORT(self)); */
   while (SG_BINARY_PORT(self)->bufferIndex > 0) {
     int64_t written_size = SG_PORT_FILE(self)->write(SG_PORT_FILE(self),
 						     buf,
 						     bport->bufferIndex);
     buf += written_size;
     bport->bufferIndex -= written_size;
-    ASSERT(bport->bufferIndex >= 0);
+    /* ASSERT(bport->bufferIndex >= 0); */
   }
-  ASSERT(SG_BINARY_PORT(self)->bufferIndex == 0);
+  /* ASSERT(SG_BINARY_PORT(self)->bufferIndex == 0); */
   bport->bufferIndex = 0;
   bport->bufferSize = 0;
-  SG_PORT_UNLOCK(SG_PORT(self));
+  /* SG_PORT_UNLOCK(SG_PORT(self)); */
 }
 
 static void file_flush(SgObject self)
@@ -394,7 +394,7 @@ static void file_fill_buffer(SgObject self)
       read_size += result;
     }
   }
-  ASSERT(read_size <= PORT_DEFAULT_BUF_SIZE);
+  /* ASSERT(read_size <= PORT_DEFAULT_BUF_SIZE); */
   bp->bufferSize = read_size;
   bp->bufferIndex = 0;
 }
@@ -423,10 +423,6 @@ static int64_t file_read_from_buffer(SgObject self, uint8_t *dest,
   int need_unwind = FALSE;
   SgBinaryPort *bp = SG_BINARY_PORT(self);
 
-  if (SG_PORT_FILE(self)->seek) {
-    opos = SG_PORT_FILE(self)->seek(SG_PORT_FILE(self), 0, SG_CURRENT);
-  }
-
   while (read_size < req_size) {
     int64_t buf_diff = bp->bufferSize - bp->bufferIndex;
     int64_t size_diff = req_size - read_size;
@@ -437,6 +433,9 @@ static int64_t file_read_from_buffer(SgObject self, uint8_t *dest,
       read_size += size_diff;
       break;
     } else {
+      if (SG_PORT_FILE(self)->seek && opos == 0LL) {
+	opos = SG_PORT_FILE(self)->seek(SG_PORT_FILE(self), 0, SG_CURRENT);
+      }
       memcpy64(dest + read_size, bp->buffer + bp->bufferIndex, buf_diff);
       read_size += buf_diff;
       file_fill_buffer(self);
@@ -460,7 +459,7 @@ static int64_t file_read_from_buffer(SgObject self, uint8_t *dest,
   return read_size;
 }
 
-static void file_forward_position(SgObject self, int64_t offset)
+static inline void file_forward_position(SgObject self, int64_t offset)
 {
   SG_BINARY_PORT(self)->position += offset;
 }
@@ -627,29 +626,30 @@ SgObject Sg_MakeFileBinaryInputPort(SgFile *file, int bufferMode)
   return SG_OBJ(z);
 }
 
-static int64_t file_write_to_block_buffer(SgObject self, uint8_t *v, int64_t req_size)
+static int64_t file_write_to_block_buffer(SgObject self, uint8_t *v,
+					  int64_t req_size)
 {
   int64_t write_size = 0;
-  int64_t opos = SG_PORT_FILE(self)->seek(SG_PORT_FILE(self), 0, SG_CURRENT);
+  int64_t opos = 0;
   int need_unwind = FALSE;
-
+  SgBinaryPort *bp = SG_BINARY_PORT(self);
   if (req_size > 0) {
     SG_BINARY_PORT(self)->dirty = TRUE;
   }
+
   while (write_size < req_size) {
-    int64_t buf_diff =  PORT_DEFAULT_BUF_SIZE - SG_BINARY_PORT(self)->bufferIndex;
+    int64_t buf_diff = PORT_DEFAULT_BUF_SIZE - bp->bufferIndex;
     int64_t size_diff = req_size - write_size;
-    ASSERT(buf_diff >= 0);
-    ASSERT(req_size > write_size);
     if (buf_diff >= size_diff) {
-      memcpy64(SG_BINARY_PORT(self)->buffer + SG_BINARY_PORT(self)->bufferIndex,
-	       v + write_size, size_diff);
-      SG_BINARY_PORT(self)->bufferIndex += size_diff;
+      memcpy64(bp->buffer + bp->bufferIndex, v + write_size, size_diff);
+      bp->bufferIndex += size_diff;
       write_size += size_diff;
     } else {
-      memcpy64(SG_BINARY_PORT(self)->buffer + SG_BINARY_PORT(self)->bufferIndex,
-	       v + write_size, buf_diff);
-      SG_BINARY_PORT(self)->bufferIndex += buf_diff;
+      if (opos == 0LL) {
+	opos = SG_PORT_FILE(self)->seek(SG_PORT_FILE(self), 0, SG_CURRENT);
+      }
+      memcpy64(bp->buffer + bp->bufferIndex,v + write_size, buf_diff);
+      bp->bufferIndex += buf_diff;
       write_size += buf_diff;
       file_flush_internal(self);
       need_unwind = TRUE;
@@ -665,7 +665,7 @@ static int64_t file_write_to_line_buffer(SgObject self, uint8_t *v,
 					 int64_t req_size)
 {
   int64_t write_size = 0;
-  int64_t opos = SG_PORT_FILE(self)->seek(SG_PORT_FILE(self), 0, SG_CURRENT);
+  int64_t opos = 0;
   int need_unwind = FALSE;
   SgBinaryPort *bp = SG_BINARY_PORT(self);
 
@@ -675,6 +675,9 @@ static int64_t file_write_to_line_buffer(SgObject self, uint8_t *v,
   while (write_size < req_size) {
     int64_t buf_diff =  PORT_DEFAULT_BUF_SIZE - bp->bufferIndex;
     if (buf_diff == 0) {
+      if (opos == 0LL) {
+	opos = SG_PORT_FILE(self)->seek(SG_PORT_FILE(self), 0, SG_CURRENT);
+      }
       file_flush_internal(self);
       need_unwind = TRUE;
     }
@@ -689,6 +692,9 @@ static int64_t file_write_to_line_buffer(SgObject self, uint8_t *v,
 	*(bp->buffer + bp->bufferIndex) = *(v + write_size);
 	bp->bufferIndex++;
 	write_size++;
+      }
+      if (opos == 0LL) {
+	opos = SG_PORT_FILE(self)->seek(SG_PORT_FILE(self), 0, SG_CURRENT);
       }
       file_flush_internal(self);
       need_unwind = TRUE;
@@ -812,7 +818,7 @@ static int byte_array_get_u8(SgObject self)
   int size =  SG_BVECTOR_SIZE(SG_BINARY_PORT(self)->src.buffer.bvec);
   if (index >= size) return EOF;
   SG_BINARY_PORT(self)->position++;
-  return Sg_ByteVectorU8Ref(SG_BINARY_PORT(self)->src.buffer.bvec,
+  return SG_BVECTOR_ELEMENT(SG_BINARY_PORT(self)->src.buffer.bvec,
 			    SG_BINARY_PORT(self)->src.buffer.index++);
 }
 
@@ -821,7 +827,7 @@ static int byte_array_look_ahead_u8(SgObject self)
   int index = SG_BINARY_PORT(self)->src.buffer.index;
   int size =  SG_BVECTOR_SIZE(SG_BINARY_PORT(self)->src.buffer.bvec);
   if (index >= size) return EOF;
-  return Sg_ByteVectorU8Ref(SG_BINARY_PORT(self)->src.buffer.bvec,
+  return SG_BVECTOR_ELEMENT(SG_BINARY_PORT(self)->src.buffer.bvec,
 			    SG_BINARY_PORT(self)->src.buffer.index);
 }
 
@@ -836,7 +842,7 @@ static int64_t byte_array_read_u8(SgObject self, uint8_t *buf, int64_t size)
   int i; 
 
   for (i = 0; i < read_size; i++) {
-    buf[i] = Sg_ByteVectorU8Ref(bvec, bindex + i);
+    buf[i] = SG_BVECTOR_ELEMENT(bvec, bindex + i);
   }
   SG_BINARY_PORT(self)->src.buffer.index += (int)read_size;
   SG_BINARY_PORT(self)->position += read_size;
@@ -851,7 +857,6 @@ static int64_t byte_array_read_u8_all(SgObject self, uint8_t **buf)
   int rest_size = bsize - bindex;
 
   *buf = SG_NEW_ATOMIC2(uint8_t *, rest_size);
-  *buf = SG_BVECTOR_ELEMENTS(bvec);
   
   return byte_array_read_u8(self, *buf, rest_size);
 }
@@ -924,14 +929,10 @@ static int64_t put_byte_array_u8_array(SgObject self, uint8_t *ba,
 				       int64_t size)
 {
   SgBinaryPort *bp = SG_BINARY_PORT(self);
-  byte_buffer *buf = bp->src.obuf.current;
   int64_t i;
   for (i = 0; i < size; i++) {
-    buf->buf = ba[i];
-    buf->next = SG_NEW(byte_buffer);
-    buf = buf->next;
+    SG_STREAM_BUFFER_PUTB(bp->src.obuf.current, bp->src.obuf.current, ba[i]);
   }
-  bp->src.obuf.current = buf;
   return size;
 }
 
@@ -957,6 +958,7 @@ SgObject Sg_MakeByteArrayOutputPort(int size)
   z->ready = NULL;
   /* initialize binary output port */
   b->src.obuf.start = b->src.obuf.current = SG_NEW(byte_buffer);
+  b->src.obuf.start->position = 0;
   b->open = byte_array_open;
   b->getU8 = NULL;
   b->lookAheadU8 = NULL;
@@ -973,23 +975,6 @@ SgObject Sg_MakeByteArrayOutputPort(int size)
   This function always return new allocated byte array.
  */
 
-static int get_byte_buffer_count(byte_buffer *start, byte_buffer *current)
-{
-  int count = 0;
-  /* we need to skip the first buffer to count */
-  for (; start != current; start = start->next, count++);
-  return count;
-}
-
-static uint8_t * byte_buffer_to_bytes(uint8_t *ret, byte_buffer *start)
-{
-  int i;
-  for (i = 0; start; start = start->next, i++) {
-    ret[i] = start->buf;
-  }
-  return ret;
-}
-
 uint8_t* Sg_GetByteArrayFromBinaryPort(SgPort *port)
 {
   SgBinaryPort *bp = SG_BINARY_PORT(port);
@@ -1003,10 +988,11 @@ uint8_t* Sg_GetByteArrayFromBinaryPort(SgPort *port)
     memcpy(r, SG_BVECTOR_ELEMENTS(bp->src.buffer.bvec), bp->src.buffer.index);
     return r;
   } else {
-    size_t size = get_byte_buffer_count(bp->src.obuf.start,
-					bp->src.obuf.current);
+    size_t size;
+    SG_STREAM_BUFFER_COUNTB(size, bp->src.obuf.start);
     r = SG_NEW_ATOMIC2(uint8_t*, sizeof(uint8_t) * size);
-    return byte_buffer_to_bytes(r, bp->src.obuf.start);
+    SG_STREAM_BUFFER_GET_BUFFERB(r, bp->src.obuf.start);
+    return r;
   }
 }
 
@@ -1235,12 +1221,7 @@ static int string_oport_close(SgObject self)
 static void string_oport_putchar(SgObject self, SgChar c)
 {
   SgTextualPort *tp = SG_TEXTUAL_PORT(self);
-  char_buffer *buf = tp->src.ostr.current;
-  
-  buf->buf = c;
-  buf->next = SG_NEW(char_buffer);
-  buf->next->next = NULL;	/* just in case */
-  tp->src.ostr.current = buf->next;
+  SG_STREAM_BUFFER_PUTC(tp->src.ostr.current, tp->src.ostr.current, c);
 }
 
 static int64_t string_oport_put_string(SgObject self, SgChar *str,
@@ -1308,6 +1289,7 @@ SgObject Sg_MakeStringOutputPort(int bufferSize)
   z->ready = NULL;		/* always ready */
 
   t->src.ostr.start = t->src.ostr.current = SG_NEW(char_buffer);
+  t->src.ostr.start->position = 0;
   t->getChar = NULL;
   t->unGetChar = NULL;
   t->getLineNo = NULL;
@@ -1411,7 +1393,7 @@ static int custom_binary_get_u8(SgObject self)
   }
   /* make binary port's position as a mark */
   SG_CUSTOM_BINARY_PORT(self)->position += SG_INT_VALUE(result);
-  return Sg_ByteVectorU8Ref(bv, 0);
+  return SG_BVECTOR_ELEMENT(bv, 0);
 }
 
 static int custom_binary_lookahead_u8(SgObject self)
@@ -1433,7 +1415,7 @@ static int custom_binary_lookahead_u8(SgObject self)
   if (result == SG_MAKE_INT(0)) {
     return EOF;
   }
-  SG_CUSTOM_U8_AHEAD(self) = Sg_ByteVectorU8Ref(bv, 0);
+  SG_CUSTOM_U8_AHEAD(self) = SG_BVECTOR_ELEMENT(bv, 0);
   return SG_CUSTOM_U8_AHEAD(self);
 }
 
@@ -1619,7 +1601,7 @@ static SgChar custom_textual_get_char(SgObject self)
   SgChar c;
   if (SG_CUSTOM_PORT(self)->buffer == NULL || 
       SG_CUSTOM_PORT(self)->index == 0) {
-    SgObject s = Sg_MakeString(UC(" "), SG_HEAP_STRING);
+    SgObject s = Sg_ReserveString(1, ' ');
     SgObject result = Sg_Apply3(SG_CUSTOM_PORT(self)->read,
 			       s, start, count);
     if (!SG_INTP(result)) {
@@ -1797,16 +1779,6 @@ SgObject Sg_MakeCustomTextualPort(SgString *id,
   return SG_OBJ(z);
 }
 
-static SgObject byte_buffer_to_bytevector(SgByteVector *ret, byte_buffer *start)
-{
-  int i;
-  for (i = 0; start; start = start->next, i++) {
-    SG_BVECTOR_ELEMENT(ret, i) = start->buf;
-  }
-  return ret;
-}
-
-
 SgObject Sg_GetByteVectorFromBinaryPort(SgPort *port)
 {
   SgBinaryPort *bp;
@@ -1824,30 +1796,16 @@ SgObject Sg_GetByteVectorFromBinaryPort(SgPort *port)
       return SG_OBJ(bp->src.buffer.bvec);
     } else {
       /* recreate */
-      int size = get_byte_buffer_count(bp->src.obuf.start,
-				       bp->src.obuf.current);
-      SgByteVector *ret = Sg_MakeByteVector(size, 0);
-      return byte_buffer_to_bytevector(ret, bp->src.obuf.start);
+      int size;
+      SgByteVector *ret;
+      SG_STREAM_BUFFER_COUNTB(size, bp->src.obuf.start);
+      ret = Sg_MakeByteVector(size, 0);
+      SG_STREAM_BUFFER_GET_BUFFERB(SG_BVECTOR_ELEMENTS(ret), 
+				   bp->src.obuf.start);
+      return ret;
     }
   }
   return SG_UNDEF;		/* dummy */
-}
-
-static int get_char_buffer_count(char_buffer *start, char_buffer *current)
-{
-  int count = 0;
-  /* we need to skip the first buffer to count */
-  for (; start != current; start = start->next, count++);
-  return count;
-}
-
-static SgObject char_buffer_to_string(SgString *ret, char_buffer *start)
-{
-  int i;
-  for (i = 0; start; start = start->next, i++) {
-    SG_STRING_VALUE_AT(ret, i) = start->buf;
-  }
-  return ret;
 }
 
 SgObject Sg_GetStringFromStringPort(SgPort *port)
@@ -1860,10 +1818,12 @@ SgObject Sg_GetStringFromStringPort(SgPort *port)
     /* TODO should this return from current index? */
     return tp->src.buffer.str;
   } else {
-    int size = get_char_buffer_count(tp->src.ostr.start,
-				     tp->src.ostr.current);
-    SgString *ret = Sg_ReserveString(size, ' ');
-    return char_buffer_to_string(ret, tp->src.ostr.start);
+    int size;
+    SgString *ret;
+    SG_STREAM_BUFFER_COUNTC(size, tp->src.ostr.start);
+    ret = Sg_ReserveString(size, ' ');
+    SG_STREAM_BUFFER_GET_BUFFERC(SG_STRING_VALUE(ret), tp->src.ostr.start);
+    return ret;
   }
 }
 
@@ -2370,8 +2330,7 @@ int64_t Sg_PortPosition(SgPort *port)
       if (SG_INPORTP(port)) {
 	pos = (int64_t)bp->src.buffer.index;
       } else {
-	byte_buffer *c = bp->src.obuf.start;
-	for (pos = 0; c->next; pos++, c = c->next);
+	SG_STREAM_BUFFER_COUNTB(pos, bp->src.obuf.start);
       }
       break;
     case SG_CUSTOM_BINARY_PORT_TYPE: {
@@ -2399,8 +2358,7 @@ int64_t Sg_PortPosition(SgPort *port)
       if (SG_INPORTP(port)) {
 	pos = (int64_t)SG_TEXTUAL_PORT(port)->src.buffer.index;
       } else {
-	char_buffer *c = SG_TEXTUAL_PORT(port)->src.ostr.start;
-	for (pos = 0; c->next; pos++, c = c->next);
+	SG_STREAM_BUFFER_COUNTC(pos, SG_TEXTUAL_PORT(port)->src.ostr.start);
       }
       break;
     case SG_CUSTOM_TEXTUAL_PORT_TYPE: {
@@ -2466,10 +2424,7 @@ void Sg_SetPortPosition(SgPort *port, int64_t offset)
       if (SG_INPORTP(port)) {
 	bp->src.buffer.index = (int)offset;
       } else {
-	int64_t i;
-	byte_buffer *c = bp->src.obuf.start;
-	for (i = 0; i < offset && c->next; i++, c = c->next);
-	bp->src.obuf.current = c;
+	SG_STREAM_BUFFER_SET_POSITIONB(bp->src.obuf.start, offset);
       }
       bp->position = offset;
       break;
@@ -2500,10 +2455,8 @@ void Sg_SetPortPosition(SgPort *port, int64_t offset)
       if (SG_INPORTP(port)) {
 	SG_TEXTUAL_PORT(port)->src.buffer.index = (int)offset;
       } else {
-	int64_t i;
-	char_buffer *c = SG_TEXTUAL_PORT(port)->src.ostr.start;
-	for (i = 0; i < offset && c->next; i++, c = c->next);
-	SG_TEXTUAL_PORT(port)->src.ostr.current = c;
+	SG_STREAM_BUFFER_SET_POSITIONC(SG_TEXTUAL_PORT(port)->src.ostr.start,
+				       offset);
       }
       break;
     case SG_CUSTOM_TEXTUAL_PORT_TYPE: {

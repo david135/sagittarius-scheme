@@ -2,7 +2,7 @@
 /*
  * transcoder.c
  *
- *   Copyright (c) 2010  Takashi Kato <ktakashi@ymail.com>
+ *   Copyright (c) 2010-2013  Takashi Kato <ktakashi@ymail.com>
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -100,11 +100,14 @@ static SgObject get_mode(int mode)
   return SG_UNDEF;		/* dummy */
 }
 
+#define SRC_PORT(src_port, port)					\
+  do {									\
+    src_port = SG_TRANSCODED_PORT_SRC_PORT(port);			\
+  } while (0)
+
 #define PORT_MARK(mark, src_port, port)					\
   do {									\
-    ASSERT(SG_TEXTUAL_PORTP(port));					\
-    ASSERT(SG_TEXTUAL_PORT(port)->type==SG_TRANSCODED_TEXTUAL_PORT_TYPE);\
-    src_port = SG_TRANSCODED_PORT_SRC_PORT(port);			\
+    SRC_PORT(src_port, port);						\
     if (SG_BINARY_PORTP(src_port)) {					\
       (mark) = SG_BINARY_PORT(src_port)->position;			\
     } else if (SG_CUSTOM_PORTP(src_port)) {				\
@@ -145,7 +148,7 @@ static SgObject get_mode(int mode)
 static SgChar get_char_internal(SgObject self, SgPort *port)
 {
   SgTranscoder *tran = SG_TRANSCODER(self);
-  volatile int64_t mark;
+  int64_t mark;
   SgPort *src_port;
   /* we know here only binary or custom binary port can reach */
   PORT_MARK(mark, src_port, port);
@@ -349,35 +352,30 @@ int64_t Sg_TranscoderRead(SgObject self, SgPort *port,
     }									\
   } while (0)
 
-
 void Sg_TranscoderPutc(SgObject self, SgPort *tport, SgChar c)
 {
   SgTranscoder *tran = SG_TRANSCODER(self);
-  int64_t dummy;
   SgPort *port;
-  PORT_MARK(dummy, port, tport);
-  if (tran->eolStyle == E_NONE) {
-    dispatch_putchar(tran->codec, port, c, tran->mode);
-    return;
-  } else if (c == LF) {
+  SRC_PORT(port, tport);
+  if (c == LF) {
     switch (tran->eolStyle) {
     case LF:
     case CR:
     case NEL:
     case LS:
       dispatch_putchar(tran->codec, port, tran->eolStyle, tran->mode);
-      break;
+      return;
     case E_NONE:
       dispatch_putchar(tran->codec, port, c, tran->mode);
-      break;
+      return;
     case CRLF:
       dispatch_putchar(tran->codec, port, CR, tran->mode);
       dispatch_putchar(tran->codec, port, LF, tran->mode);
-      break;
+      return;
     case CRNEL:
       dispatch_putchar(tran->codec, port, CR, tran->mode);
       dispatch_putchar(tran->codec, port, NEL, tran->mode);
-      break;
+      return;
     }
   } else {
     dispatch_putchar(tran->codec, port, c, tran->mode);
@@ -412,9 +410,8 @@ int64_t Sg_TranscoderWrite(SgObject self, SgPort *tport,
 {
   SgTranscoder *tran = SG_TRANSCODER(self);
   volatile SgObject new_s = NULL;
-  int64_t dummy;
   SgPort *port;
-  PORT_MARK(dummy, port, tport);
+  SRC_PORT(port, tport);
   /* a bit ugly and slow solution. create string buffer and construct
      proper linefeed there.
    */
@@ -467,7 +464,12 @@ SgObject Sg_MakeTranscoder(SgCodec *codec, EolStyle eolStyle,
 /* compatible with ASCII */
 SgObject Sg_MakeNativeTranscoder()
 {
-  return Sg_MakeTranscoder(Sg_MakeUtf8Codec(), Sg_NativeEol(), SG_RAISE_ERROR);
+  static SgObject trans = NULL;
+  if (trans == NULL) {
+    trans = Sg_MakeTranscoder(Sg_MakeUtf8Codec(), Sg_NativeEol(), 
+			      SG_RAISE_ERROR);
+  }
+  return trans;
 }
 
 

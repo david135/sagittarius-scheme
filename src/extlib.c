@@ -12,13 +12,29 @@
 #include <sagittarius/cache.h>
 
 
-#line 986 "./extlib.stub"
+#line 1011 "./extlib.stub"
 typedef unsigned long ulong;
 
 static struct sg__rcRec {
-  SgObject d5[256];
+  SgObject d5[272];
 } sg__rc = {
   {  /* SgObject d5 */
+    SG_UNBOUND,
+    SG_UNBOUND,
+    SG_UNBOUND,
+    SG_UNBOUND,
+    SG_UNBOUND,
+    SG_UNBOUND,
+    SG_UNBOUND,
+    SG_UNBOUND,
+    SG_UNBOUND,
+    SG_UNBOUND,
+    SG_UNBOUND,
+    SG_UNBOUND,
+    SG_UNBOUND,
+    SG_UNBOUND,
+    SG_UNBOUND,
+    SG_UNBOUND,
     SG_UNBOUND,
     SG_UNBOUND,
     SG_UNBOUND,
@@ -4947,8 +4963,6 @@ static SgObject extlib_delimited_charP(SgObject *SG_FP, int SG_ARGC, void *data_
   {
 {
 int SG_RESULT = (int)NULL;
-
-#line 917 "./extlib.stub"
 SG_RESULT=(Sg_DelimitedCharP(c));
 SG_RETURN(SG_MAKE_BOOL(SG_RESULT));
 }
@@ -4969,8 +4983,6 @@ static SgObject extlib_constant_literalP(SgObject *SG_FP, int SG_ARGC, void *dat
   {
 {
 int SG_RESULT = (int)NULL;
-
-#line 920 "./extlib.stub"
 SG_RESULT=(Sg_ConstantLiteralP(o));
 SG_RETURN(SG_MAKE_BOOL(SG_RESULT));
 }
@@ -4994,14 +5006,32 @@ static SgObject extlib_digit_value(SgObject *SG_FP, int SG_ARGC, void *data_)
   {
 {
 SgObject SG_RESULT = (SgObject)NULL;
-
-#line 923 "./extlib.stub"
-return (Sg_DigitValue(c));
+SG_RESULT=(Sg_DigitValue(c));
 SG_RETURN(SG_OBJ_SAFE(SG_RESULT));
 }
   }
 }
 static SG_DEFINE_SUBR(extlib_digit_value__STUB, 1, 0,extlib_digit_value, SG_FALSE, NULL);
+
+static SgObject extlib_weak_vectorP(SgObject *SG_FP, int SG_ARGC, void *data_)
+{
+  SgObject o_scm;
+  SgObject o;
+  SG_ENTER_SUBR("weak-vector?");
+  if (SG_ARGC != 1)
+    Sg_WrongNumberOfArgumentsViolation(
+     SG_INTERN("weak-vector?"), 1, SG_ARGC, SG_NIL);
+  o_scm = SG_ARGREF(0);
+  o = (o_scm);
+  {
+{
+int SG_RESULT = (int)NULL;
+SG_RESULT=(SG_WEAK_VECTORP(o));
+SG_RETURN(SG_MAKE_BOOL(SG_RESULT));
+}
+  }
+}
+static SG_DEFINE_SUBR(extlib_weak_vectorP__STUB, 1, 0,extlib_weak_vectorP, SG_FALSE, NULL);
 
 static SgObject extlib_make_weak_vector(SgObject *SG_FP, int SG_ARGC, void *data_)
 {
@@ -5014,13 +5044,11 @@ static SgObject extlib_make_weak_vector(SgObject *SG_FP, int SG_ARGC, void *data
   size_scm = SG_ARGREF(0);
   if (!SG_INTP(size_scm))
     Sg_WrongTypeOfArgumentViolation(
-       sg__rc.d5[238], SG_MAKE_STRING("fixnum"), size_scm, SG_NIL);
+       sg__rc.d5[239], SG_MAKE_STRING("fixnum"), size_scm, SG_NIL);
   size = SG_INT_VALUE(size_scm);
   {
 {
 SgObject SG_RESULT = (SgObject)NULL;
-
-#line 926 "./extlib.stub"
 SG_RESULT=(Sg_MakeWeakVector(size));
 SG_RETURN(SG_OBJ_SAFE(SG_RESULT));
 }
@@ -5042,11 +5070,11 @@ static SgObject extlib_weak_vector_length(SgObject *SG_FP, int SG_ARGC, void *da
 {
 long SG_RESULT = (long)NULL;
 
-#line 929 "./extlib.stub"
+#line 926 "./extlib.stub"
 if ((!(SG_WEAK_VECTORP(o)))){{
-{Sg_WrongTypeOfArgumentViolation(sg__rc.d5[240],SG_MAKE_STRING("weak-vector"),o,SG_NIL);}}}
+{Sg_WrongTypeOfArgumentViolation(sg__rc.d5[241],SG_MAKE_STRING("weak-vector"),o,SG_NIL);}}}
 
-#line 932 "./extlib.stub"
+#line 929 "./extlib.stub"
 SG_RESULT=((SG_WEAK_VECTOR(o))->size);
 SG_RETURN(SG_MAKE_INT(SG_RESULT));
 }
@@ -5073,7 +5101,7 @@ static SgObject extlib_weak_vector_ref(SgObject *SG_FP, int SG_ARGC, void *data_
   k_scm = SG_ARGREF(1);
   if (!SG_INTP(k_scm))
     Sg_WrongTypeOfArgumentViolation(
-       sg__rc.d5[241], SG_MAKE_STRING("fixnum"), k_scm, SG_NIL);
+       sg__rc.d5[242], SG_MAKE_STRING("fixnum"), k_scm, SG_NIL);
   k = SG_INT_VALUE(k_scm);
   if (SG_ARGC > 2+1) {
     fallback_scm = SG_ARGREF(2);
@@ -5085,18 +5113,18 @@ static SgObject extlib_weak_vector_ref(SgObject *SG_FP, int SG_ARGC, void *data_
 {
 SgObject SG_RESULT = (SgObject)NULL;
 
-#line 936 "./extlib.stub"
+#line 933 "./extlib.stub"
 if ((!(SG_WEAK_VECTORP(wvec)))){{
-{Sg_WrongTypeOfArgumentViolation(sg__rc.d5[242],SG_MAKE_STRING("weak-vector"),wvec,SG_NIL);}}}
+{Sg_WrongTypeOfArgumentViolation(sg__rc.d5[243],SG_MAKE_STRING("weak-vector"),wvec,SG_NIL);}}}
 
-#line 939 "./extlib.stub"
+#line 936 "./extlib.stub"
 if (((k)<(0))||((k)>=((SG_WEAK_VECTOR(wvec))->size))){
 if (SG_UNBOUNDP(fallback)){
-{Sg_AssertionViolation(sg__rc.d5[242],SG_MAKE_STRING("index out of range"),
-#line 943 "./extlib.stub"
+{Sg_AssertionViolation(sg__rc.d5[243],SG_MAKE_STRING("index out of range"),
+#line 940 "./extlib.stub"
 SG_LIST2(wvec,SG_MAKE_INT(k)));}} else {
 SG_RESULT=(fallback);}} else {
-#line 946 "./extlib.stub"
+#line 943 "./extlib.stub"
 SG_RESULT=(Sg_WeakVectorRef(wvec,k,fallback));}
 SG_RETURN(SG_OBJ_SAFE(SG_RESULT));
 }
@@ -5121,23 +5149,23 @@ static SgObject extlib_weak_vector_setX(SgObject *SG_FP, int SG_ARGC, void *data
   k_scm = SG_ARGREF(1);
   if (!SG_INTP(k_scm))
     Sg_WrongTypeOfArgumentViolation(
-       sg__rc.d5[243], SG_MAKE_STRING("fixnum"), k_scm, SG_NIL);
+       sg__rc.d5[244], SG_MAKE_STRING("fixnum"), k_scm, SG_NIL);
   k = SG_INT_VALUE(k_scm);
   value_scm = SG_ARGREF(2);
   value = (value_scm);
   {
 
-#line 949 "./extlib.stub"
+#line 946 "./extlib.stub"
 if ((!(SG_WEAK_VECTORP(wvec)))){{
-{Sg_WrongTypeOfArgumentViolation(sg__rc.d5[242],SG_MAKE_STRING("weak-vector"),wvec,SG_NIL);}}}
+{Sg_WrongTypeOfArgumentViolation(sg__rc.d5[243],SG_MAKE_STRING("weak-vector"),wvec,SG_NIL);}}}
 
-#line 952 "./extlib.stub"
+#line 949 "./extlib.stub"
 if (((k)<(0))||((k)>=((SG_WEAK_VECTOR(wvec))->size))){{
-{Sg_AssertionViolation(sg__rc.d5[242],SG_MAKE_STRING("index out of range"),
-#line 955 "./extlib.stub"
+{Sg_AssertionViolation(sg__rc.d5[243],SG_MAKE_STRING("index out of range"),
+#line 952 "./extlib.stub"
 SG_LIST2(wvec,SG_MAKE_INT(k)));}}}
 
-#line 956 "./extlib.stub"
+#line 953 "./extlib.stub"
 Sg_WeakVectorSet(wvec,k,value);
 SG_RETURN(SG_UNDEF);
   }
@@ -5146,34 +5174,125 @@ static SG_DEFINE_SUBR(extlib_weak_vector_setX__STUB, 3, 0,extlib_weak_vector_set
 
 static SgObject extlib_make_weak_eq_hashtable(SgObject *SG_FP, int SG_ARGC, void *data_)
 {
-  SgObject k_scm;
-  long k;
+  SgObject init_size_scm = SG_MAKE_INT(200U);
+  long init_size;
+  SgObject weakness_scm = sg__rc.d5[111];
+  SgSymbol* weakness;
+  SgObject default__scm = SG_UNBOUND;
+  SgObject default_;
+  int SG_KEYARGC = SG_ARGC-1-0;
   SG_ENTER_SUBR("make-weak-eq-hashtable");
-  if ((SG_ARGC > 1 &&
+  if ((SG_ARGC > 6 &&
       !SG_NULLP(SG_ARGREF(SG_ARGC-1))) ||
       SG_ARGC < 0)
     Sg_WrongNumberOfArgumentsBetweenViolation(
-     SG_INTERN("make-weak-eq-hashtable"), 0, 1, SG_ARGC, SG_NIL);
-  if (SG_ARGC > 0+1) {
-    k_scm = SG_ARGREF(0);
-  } else {
-    k_scm = SG_MAKE_INT(200U);
+     SG_INTERN("make-weak-eq-hashtable"), 0, 6, SG_ARGC, SG_NIL);
+  if (SG_KEYARGC > 0 && SG_KEYARGC % 2)
+    Sg_AssertionViolation(sg__rc.d5[251], SG_MAKE_STRING("keyword list not even"), Sg_ArrayToList(SG_FP+0, SG_ARGC-1-0));
+  { int SG_KEYINDEX;
+      for (SG_KEYINDEX=0; SG_KEYINDEX<SG_KEYARGC; SG_KEYINDEX+=2) {
+      if (SG_EQ(SG_ARGREF(0+SG_KEYINDEX), sg__rc.d5[245])) {
+        init_size_scm = SG_ARGREF(0+SG_KEYINDEX+1);
+      } else 
+      if (SG_EQ(SG_ARGREF(0+SG_KEYINDEX), sg__rc.d5[247])) {
+        weakness_scm = SG_ARGREF(0+SG_KEYINDEX+1);
+      } else 
+      if (SG_EQ(SG_ARGREF(0+SG_KEYINDEX), sg__rc.d5[249])) {
+        default__scm = SG_ARGREF(0+SG_KEYINDEX+1);
+      }
+      else Sg_AssertionViolation(sg__rc.d5[251], SG_MAKE_STRING("unknown keyword"), SG_ARGREF(0+SG_KEYINDEX));
+    }
   }
-  if (!SG_INTP(k_scm) && !SG_INTP(k_scm))
+  if (!SG_INTP(init_size_scm) && !SG_INTP(init_size_scm))
     Sg_WrongTypeOfArgumentViolation(
-       sg__rc.d5[244], SG_MAKE_STRING("fixnum"), k_scm, SG_NIL);
-  k = SG_INT_VALUE(k_scm);
+       sg__rc.d5[251], SG_MAKE_STRING("fixnum"), init_size_scm, SG_NIL);
+  init_size = SG_INT_VALUE(init_size_scm);
+  if (!SG_SYMBOLP(weakness_scm) && !SG_SYMBOLP(weakness_scm))
+    Sg_WrongTypeOfArgumentViolation(
+       sg__rc.d5[251], SG_MAKE_STRING("symbol"), weakness_scm, SG_NIL);
+  weakness = SG_SYMBOL(weakness_scm);
+  default_ = (default__scm);
   {
 {
 SgObject SG_RESULT = (SgObject)NULL;
 
 #line 959 "./extlib.stub"
-SG_RESULT=(Sg_MakeWeakHashTableSimple(SG_HASH_EQ,SG_WEAK_BOTH,k,SG_UNDEF));
+{SgWeakness w=SG_WEAK_BOTH;SgObject v=SG_UNDEF;
+#line 961 "./extlib.stub"
+if (SG_EQ(weakness,sg__rc.d5[255])){w=(SG_WEAK_KEY);}else if(
+SG_EQ(weakness,sg__rc.d5[253])){w=(SG_WEAK_VALUE);}else if(
+SG_EQ(weakness,sg__rc.d5[111])){w=(SG_WEAK_BOTH);} else {
+{Sg_AssertionViolation(sg__rc.d5[252],SG_MAKE_STRING("weakness must be one of 'key, 'value or 'both"),
+#line 967 "./extlib.stub"
+SG_LIST1(weakness));}}
+if ((!(SG_UNBOUNDP(default_)))){{v=(default_);}}
+SG_RESULT=(Sg_MakeWeakHashTableSimple(SG_HASH_EQ,w,init_size,v));}
 SG_RETURN(SG_OBJ_SAFE(SG_RESULT));
 }
   }
 }
-static SG_DEFINE_SUBR(extlib_make_weak_eq_hashtable__STUB, 0, 2,extlib_make_weak_eq_hashtable, SG_FALSE, NULL);
+static SG_DEFINE_SUBR(extlib_make_weak_eq_hashtable__STUB, 0, 7,extlib_make_weak_eq_hashtable, SG_FALSE, NULL);
+
+static SgObject extlib_make_weak_eqv_hashtable(SgObject *SG_FP, int SG_ARGC, void *data_)
+{
+  SgObject init_size_scm = SG_MAKE_INT(200U);
+  long init_size;
+  SgObject weakness_scm = sg__rc.d5[111];
+  SgSymbol* weakness;
+  SgObject default__scm = SG_UNBOUND;
+  SgObject default_;
+  int SG_KEYARGC = SG_ARGC-1-0;
+  SG_ENTER_SUBR("make-weak-eqv-hashtable");
+  if ((SG_ARGC > 6 &&
+      !SG_NULLP(SG_ARGREF(SG_ARGC-1))) ||
+      SG_ARGC < 0)
+    Sg_WrongNumberOfArgumentsBetweenViolation(
+     SG_INTERN("make-weak-eqv-hashtable"), 0, 6, SG_ARGC, SG_NIL);
+  if (SG_KEYARGC > 0 && SG_KEYARGC % 2)
+    Sg_AssertionViolation(sg__rc.d5[257], SG_MAKE_STRING("keyword list not even"), Sg_ArrayToList(SG_FP+0, SG_ARGC-1-0));
+  { int SG_KEYINDEX;
+      for (SG_KEYINDEX=0; SG_KEYINDEX<SG_KEYARGC; SG_KEYINDEX+=2) {
+      if (SG_EQ(SG_ARGREF(0+SG_KEYINDEX), sg__rc.d5[245])) {
+        init_size_scm = SG_ARGREF(0+SG_KEYINDEX+1);
+      } else 
+      if (SG_EQ(SG_ARGREF(0+SG_KEYINDEX), sg__rc.d5[247])) {
+        weakness_scm = SG_ARGREF(0+SG_KEYINDEX+1);
+      } else 
+      if (SG_EQ(SG_ARGREF(0+SG_KEYINDEX), sg__rc.d5[249])) {
+        default__scm = SG_ARGREF(0+SG_KEYINDEX+1);
+      }
+      else Sg_AssertionViolation(sg__rc.d5[257], SG_MAKE_STRING("unknown keyword"), SG_ARGREF(0+SG_KEYINDEX));
+    }
+  }
+  if (!SG_INTP(init_size_scm) && !SG_INTP(init_size_scm))
+    Sg_WrongTypeOfArgumentViolation(
+       sg__rc.d5[257], SG_MAKE_STRING("fixnum"), init_size_scm, SG_NIL);
+  init_size = SG_INT_VALUE(init_size_scm);
+  if (!SG_SYMBOLP(weakness_scm) && !SG_SYMBOLP(weakness_scm))
+    Sg_WrongTypeOfArgumentViolation(
+       sg__rc.d5[257], SG_MAKE_STRING("symbol"), weakness_scm, SG_NIL);
+  weakness = SG_SYMBOL(weakness_scm);
+  default_ = (default__scm);
+  {
+{
+SgObject SG_RESULT = (SgObject)NULL;
+
+#line 973 "./extlib.stub"
+{SgWeakness w=SG_WEAK_BOTH;SgObject v=SG_UNDEF;
+#line 975 "./extlib.stub"
+if (SG_EQ(weakness,sg__rc.d5[255])){w=(SG_WEAK_KEY);}else if(
+SG_EQ(weakness,sg__rc.d5[253])){w=(SG_WEAK_VALUE);}else if(
+SG_EQ(weakness,sg__rc.d5[111])){w=(SG_WEAK_BOTH);} else {
+{Sg_AssertionViolation(sg__rc.d5[258],SG_MAKE_STRING("weakness must be one of 'key, 'value or 'both"),
+#line 981 "./extlib.stub"
+SG_LIST1(weakness));}}
+if ((!(SG_UNBOUNDP(default_)))){{v=(default_);}}
+SG_RESULT=(Sg_MakeWeakHashTableSimple(SG_HASH_EQV,w,init_size,v));}
+SG_RETURN(SG_OBJ_SAFE(SG_RESULT));
+}
+  }
+}
+static SG_DEFINE_SUBR(extlib_make_weak_eqv_hashtable__STUB, 0, 7,extlib_make_weak_eqv_hashtable, SG_FALSE, NULL);
 
 static SgObject extlib_weak_hashtableP(SgObject *SG_FP, int SG_ARGC, void *data_)
 {
@@ -5188,8 +5307,6 @@ static SgObject extlib_weak_hashtableP(SgObject *SG_FP, int SG_ARGC, void *data_
   {
 {
 int SG_RESULT = (int)NULL;
-
-#line 963 "./extlib.stub"
 SG_RESULT=(SG_WEAK_HASHTABLE_P(o));
 SG_RETURN(SG_MAKE_BOOL(SG_RESULT));
 }
@@ -5214,7 +5331,7 @@ static SgObject extlib_weak_hashtable_ref(SgObject *SG_FP, int SG_ARGC, void *da
   wh_scm = SG_ARGREF(0);
   if (!SG_WEAK_HASHTABLE_P(wh_scm))
     Sg_WrongTypeOfArgumentViolation(
-       sg__rc.d5[246], SG_MAKE_STRING("weak hashtable"), wh_scm, SG_NIL);
+       sg__rc.d5[260], SG_MAKE_STRING("weak hashtable"), wh_scm, SG_NIL);
   wh = SG_WEAK_HASHTABLE(wh_scm);
   key_scm = SG_ARGREF(1);
   key = (key_scm);
@@ -5228,7 +5345,7 @@ static SgObject extlib_weak_hashtable_ref(SgObject *SG_FP, int SG_ARGC, void *da
 {
 SgObject SG_RESULT = (SgObject)NULL;
 
-#line 968 "./extlib.stub"
+#line 990 "./extlib.stub"
 SG_RESULT=(Sg_WeakHashTableRef(wh,key,fallback));
 SG_RETURN(SG_OBJ_SAFE(SG_RESULT));
 }
@@ -5251,7 +5368,7 @@ static SgObject extlib_weak_hashtable_setX(SgObject *SG_FP, int SG_ARGC, void *d
   wh_scm = SG_ARGREF(0);
   if (!SG_WEAK_HASHTABLE_P(wh_scm))
     Sg_WrongTypeOfArgumentViolation(
-       sg__rc.d5[247], SG_MAKE_STRING("weak hashtable"), wh_scm, SG_NIL);
+       sg__rc.d5[261], SG_MAKE_STRING("weak hashtable"), wh_scm, SG_NIL);
   wh = SG_WEAK_HASHTABLE(wh_scm);
   key_scm = SG_ARGREF(1);
   key = (key_scm);
@@ -5259,7 +5376,7 @@ static SgObject extlib_weak_hashtable_setX(SgObject *SG_FP, int SG_ARGC, void *d
   value = (value_scm);
   {
 
-#line 971 "./extlib.stub"
+#line 993 "./extlib.stub"
 Sg_WeakHashTableSet(wh,key,value,0);
 SG_RETURN(SG_UNDEF);
   }
@@ -5279,13 +5396,11 @@ static SgObject extlib_weak_hashtable_deleteX(SgObject *SG_FP, int SG_ARGC, void
   wh_scm = SG_ARGREF(0);
   if (!SG_WEAK_HASHTABLE_P(wh_scm))
     Sg_WrongTypeOfArgumentViolation(
-       sg__rc.d5[248], SG_MAKE_STRING("weak hashtable"), wh_scm, SG_NIL);
+       sg__rc.d5[262], SG_MAKE_STRING("weak hashtable"), wh_scm, SG_NIL);
   wh = SG_WEAK_HASHTABLE(wh_scm);
   key_scm = SG_ARGREF(1);
   key = (key_scm);
   {
-
-#line 974 "./extlib.stub"
 Sg_WeakHashTableDelete(wh,key);
 SG_RETURN(SG_UNDEF);
   }
@@ -5303,13 +5418,11 @@ static SgObject extlib_weak_hashtable_keys_list(SgObject *SG_FP, int SG_ARGC, vo
   wh_scm = SG_ARGREF(0);
   if (!SG_WEAK_HASHTABLE_P(wh_scm))
     Sg_WrongTypeOfArgumentViolation(
-       sg__rc.d5[249], SG_MAKE_STRING("weak hashtable"), wh_scm, SG_NIL);
+       sg__rc.d5[263], SG_MAKE_STRING("weak hashtable"), wh_scm, SG_NIL);
   wh = SG_WEAK_HASHTABLE(wh_scm);
   {
 {
 SgObject SG_RESULT = (SgObject)NULL;
-
-#line 977 "./extlib.stub"
 SG_RESULT=(Sg_WeakHashTableKeys(wh));
 SG_RETURN(SG_OBJ_SAFE(SG_RESULT));
 }
@@ -5328,13 +5441,11 @@ static SgObject extlib_weak_hashtable_values_list(SgObject *SG_FP, int SG_ARGC, 
   wh_scm = SG_ARGREF(0);
   if (!SG_WEAK_HASHTABLE_P(wh_scm))
     Sg_WrongTypeOfArgumentViolation(
-       sg__rc.d5[250], SG_MAKE_STRING("weak hashtable"), wh_scm, SG_NIL);
+       sg__rc.d5[264], SG_MAKE_STRING("weak hashtable"), wh_scm, SG_NIL);
   wh = SG_WEAK_HASHTABLE(wh_scm);
   {
 {
 SgObject SG_RESULT = (SgObject)NULL;
-
-#line 980 "./extlib.stub"
 SG_RESULT=(Sg_WeakHashTableValues(wh));
 SG_RETURN(SG_OBJ_SAFE(SG_RESULT));
 }
@@ -5353,19 +5464,40 @@ static SgObject extlib_weak_hashtable_copy(SgObject *SG_FP, int SG_ARGC, void *d
   wh_scm = SG_ARGREF(0);
   if (!SG_WEAK_HASHTABLE_P(wh_scm))
     Sg_WrongTypeOfArgumentViolation(
-       sg__rc.d5[251], SG_MAKE_STRING("weak hashtable"), wh_scm, SG_NIL);
+       sg__rc.d5[265], SG_MAKE_STRING("weak hashtable"), wh_scm, SG_NIL);
   wh = SG_WEAK_HASHTABLE(wh_scm);
   {
 {
 SgObject SG_RESULT = (SgObject)NULL;
-
-#line 983 "./extlib.stub"
 SG_RESULT=(Sg_WeakHashTableCopy(wh));
 SG_RETURN(SG_OBJ_SAFE(SG_RESULT));
 }
   }
 }
 static SG_DEFINE_SUBR(extlib_weak_hashtable_copy__STUB, 1, 0,extlib_weak_hashtable_copy, SG_FALSE, NULL);
+
+static SgObject extlib_weak_hashtable_shrink(SgObject *SG_FP, int SG_ARGC, void *data_)
+{
+  SgObject wh_scm;
+  SgWeakHashTable* wh;
+  SG_ENTER_SUBR("weak-hashtable-shrink");
+  if (SG_ARGC != 1)
+    Sg_WrongNumberOfArgumentsViolation(
+     SG_INTERN("weak-hashtable-shrink"), 1, SG_ARGC, SG_NIL);
+  wh_scm = SG_ARGREF(0);
+  if (!SG_WEAK_HASHTABLE_P(wh_scm))
+    Sg_WrongTypeOfArgumentViolation(
+       sg__rc.d5[266], SG_MAKE_STRING("weak hashtable"), wh_scm, SG_NIL);
+  wh = SG_WEAK_HASHTABLE(wh_scm);
+  {
+{
+long SG_RESULT = (long)NULL;
+SG_RESULT=(Sg_WeakHashTableShrink(wh));
+SG_RETURN(SG_MAKE_INT(SG_RESULT));
+}
+  }
+}
+static SG_DEFINE_SUBR(extlib_weak_hashtable_shrink__STUB, 1, 0,extlib_weak_hashtable_shrink, SG_FALSE, NULL);
 
 static SgObject extlib_microsecond(SgObject *SG_FP, int SG_ARGC, void *data_)
 {
@@ -5377,9 +5509,9 @@ static SgObject extlib_microsecond(SgObject *SG_FP, int SG_ARGC, void *data_)
 {
 SgObject SG_RESULT = (SgObject)NULL;
 
-#line 988 "./extlib.stub"
+#line 1013 "./extlib.stub"
 {ulong sec=0;ulong usec=0;
-#line 990 "./extlib.stub"
+#line 1015 "./extlib.stub"
 Sg_GetTimeOfDay((&(sec)),(&(usec)));
 SG_RESULT=(Sg_MakeIntegerFromS64(((((int64_t )(sec)))*(1000000))+(usec)));}
 SG_RETURN(SG_OBJ_SAFE(SG_RESULT));
@@ -5402,7 +5534,7 @@ static SgObject extlib_immediateP(SgObject *SG_FP, int SG_ARGC, void *data_)
 {
 int SG_RESULT = (int)NULL;
 
-#line 994 "./extlib.stub"
+#line 1019 "./extlib.stub"
 SG_RESULT=((!(SG_PTRP(o))));
 SG_RETURN(SG_MAKE_BOOL(SG_RESULT));
 }
@@ -5427,7 +5559,7 @@ static SgObject extlib_get_mac_address(SgObject *SG_FP, int SG_ARGC, void *data_
   }
   if (!SG_INTP(pos_scm) && !SG_INTP(pos_scm))
     Sg_WrongTypeOfArgumentViolation(
-       sg__rc.d5[254], SG_MAKE_STRING("fixnum"), pos_scm, SG_NIL);
+       sg__rc.d5[269], SG_MAKE_STRING("fixnum"), pos_scm, SG_NIL);
   pos = SG_INT_VALUE(pos_scm);
   {
 {
@@ -5454,6 +5586,19 @@ SG_RETURN(SG_OBJ_SAFE(SG_RESULT));
   }
 }
 static SG_DEFINE_SUBR(extlib_uname__STUB, 0, 0,extlib_uname, SG_FALSE, NULL);
+
+static SgObject extlib_gc(SgObject *SG_FP, int SG_ARGC, void *data_)
+{
+  SG_ENTER_SUBR("gc");
+  if (SG_ARGC != 0)
+    Sg_WrongNumberOfArgumentsViolation(
+     SG_INTERN("gc"), 0, SG_ARGC, SG_NIL);
+  {
+Sg_GC();
+SG_RETURN(SG_UNDEF);
+  }
+}
+static SG_DEFINE_SUBR(extlib_gc__STUB, 0, 0,extlib_gc, SG_FALSE, NULL);
 
 void Sg__Init_sagittarius () {
   SgLibrary *lib = SG_LIBRARY(Sg_FindLibrary(SG_INTERN("(sagittarius)"), TRUE));
@@ -6007,58 +6152,82 @@ void Sg__Init_sagittarius () {
   sg__rc.d5[237] = SG_MAKE_STRING("digit-value");
   Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[237]), &extlib_digit_value__STUB);
   SG_PROCEDURE_NAME(&extlib_digit_value__STUB) = sg__rc.d5[237];
-  sg__rc.d5[238] = SG_MAKE_STRING("make-weak-vector");
-  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[238]), &extlib_make_weak_vector__STUB);
-  SG_PROCEDURE_NAME(&extlib_make_weak_vector__STUB) = sg__rc.d5[238];
-  sg__rc.d5[239] = SG_MAKE_STRING("weak-vector-length");
-  sg__rc.d5[240] = Sg_Intern(sg__rc.d5[239]); /* weak-vector-length */
-  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[239]), &extlib_weak_vector_length__STUB);
-  SG_PROCEDURE_NAME(&extlib_weak_vector_length__STUB) = sg__rc.d5[239];
-  sg__rc.d5[241] = SG_MAKE_STRING("weak-vector-ref");
-  sg__rc.d5[242] = Sg_Intern(sg__rc.d5[241]); /* weak-vector-ref */
-  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[241]), &extlib_weak_vector_ref__STUB);
-  SG_PROCEDURE_NAME(&extlib_weak_vector_ref__STUB) = sg__rc.d5[241];
-  SG_PROCEDURE_NAME(&extlib_weak_vector_setX__STUB) = sg__rc.d5[243];
+  sg__rc.d5[238] = SG_MAKE_STRING("weak-vector?");
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[238]), &extlib_weak_vectorP__STUB);
+  SG_PROCEDURE_NAME(&extlib_weak_vectorP__STUB) = sg__rc.d5[238];
+  sg__rc.d5[239] = SG_MAKE_STRING("make-weak-vector");
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[239]), &extlib_make_weak_vector__STUB);
+  SG_PROCEDURE_NAME(&extlib_make_weak_vector__STUB) = sg__rc.d5[239];
+  sg__rc.d5[240] = SG_MAKE_STRING("weak-vector-length");
+  sg__rc.d5[241] = Sg_Intern(sg__rc.d5[240]); /* weak-vector-length */
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[240]), &extlib_weak_vector_length__STUB);
+  SG_PROCEDURE_NAME(&extlib_weak_vector_length__STUB) = sg__rc.d5[240];
+  sg__rc.d5[242] = SG_MAKE_STRING("weak-vector-ref");
+  sg__rc.d5[243] = Sg_Intern(sg__rc.d5[242]); /* weak-vector-ref */
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[242]), &extlib_weak_vector_ref__STUB);
+  SG_PROCEDURE_NAME(&extlib_weak_vector_ref__STUB) = sg__rc.d5[242];
+  SG_PROCEDURE_NAME(&extlib_weak_vector_setX__STUB) = sg__rc.d5[244];
   Sg_SetterSet(SG_PROCEDURE(&extlib_weak_vector_ref__STUB), SG_PROCEDURE(&extlib_weak_vector_setX__STUB), TRUE);
-  sg__rc.d5[243] = SG_MAKE_STRING("weak-vector-set!");
-  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[243]), &extlib_weak_vector_setX__STUB);
-  SG_PROCEDURE_NAME(&extlib_weak_vector_setX__STUB) = sg__rc.d5[243];
-  sg__rc.d5[244] = SG_MAKE_STRING("make-weak-eq-hashtable");
-  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[244]), &extlib_make_weak_eq_hashtable__STUB);
-  SG_PROCEDURE_NAME(&extlib_make_weak_eq_hashtable__STUB) = sg__rc.d5[244];
-  sg__rc.d5[245] = SG_MAKE_STRING("weak-hashtable?");
-  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[245]), &extlib_weak_hashtableP__STUB);
-  SG_PROCEDURE_NAME(&extlib_weak_hashtableP__STUB) = sg__rc.d5[245];
-  sg__rc.d5[246] = SG_MAKE_STRING("weak-hashtable-ref");
-  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[246]), &extlib_weak_hashtable_ref__STUB);
-  SG_PROCEDURE_NAME(&extlib_weak_hashtable_ref__STUB) = sg__rc.d5[246];
-  SG_PROCEDURE_NAME(&extlib_weak_hashtable_setX__STUB) = sg__rc.d5[247];
+  sg__rc.d5[244] = SG_MAKE_STRING("weak-vector-set!");
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[244]), &extlib_weak_vector_setX__STUB);
+  SG_PROCEDURE_NAME(&extlib_weak_vector_setX__STUB) = sg__rc.d5[244];
+  sg__rc.d5[246] = SG_MAKE_STRING("init-size");
+  sg__rc.d5[245] = Sg_MakeKeyword(SG_STRING(sg__rc.d5[246])); /* init-size */
+  sg__rc.d5[248] = SG_MAKE_STRING("weakness");
+  sg__rc.d5[247] = Sg_MakeKeyword(SG_STRING(sg__rc.d5[248])); /* weakness */
+  sg__rc.d5[250] = SG_MAKE_STRING("default");
+  sg__rc.d5[249] = Sg_MakeKeyword(SG_STRING(sg__rc.d5[250])); /* default */
+  sg__rc.d5[251] = SG_MAKE_STRING("make-weak-eq-hashtable");
+  sg__rc.d5[252] = Sg_Intern(sg__rc.d5[251]); /* make-weak-eq-hashtable */
+  sg__rc.d5[254] = SG_MAKE_STRING("value");
+  sg__rc.d5[253] = Sg_Intern(sg__rc.d5[254]); /* value */
+  sg__rc.d5[256] = SG_MAKE_STRING("key");
+  sg__rc.d5[255] = Sg_Intern(sg__rc.d5[256]); /* key */
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[251]), &extlib_make_weak_eq_hashtable__STUB);
+  SG_PROCEDURE_NAME(&extlib_make_weak_eq_hashtable__STUB) = sg__rc.d5[251];
+  sg__rc.d5[257] = SG_MAKE_STRING("make-weak-eqv-hashtable");
+  sg__rc.d5[258] = Sg_Intern(sg__rc.d5[257]); /* make-weak-eqv-hashtable */
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[257]), &extlib_make_weak_eqv_hashtable__STUB);
+  SG_PROCEDURE_NAME(&extlib_make_weak_eqv_hashtable__STUB) = sg__rc.d5[257];
+  sg__rc.d5[259] = SG_MAKE_STRING("weak-hashtable?");
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[259]), &extlib_weak_hashtableP__STUB);
+  SG_PROCEDURE_NAME(&extlib_weak_hashtableP__STUB) = sg__rc.d5[259];
+  sg__rc.d5[260] = SG_MAKE_STRING("weak-hashtable-ref");
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[260]), &extlib_weak_hashtable_ref__STUB);
+  SG_PROCEDURE_NAME(&extlib_weak_hashtable_ref__STUB) = sg__rc.d5[260];
+  SG_PROCEDURE_NAME(&extlib_weak_hashtable_setX__STUB) = sg__rc.d5[261];
   Sg_SetterSet(SG_PROCEDURE(&extlib_weak_hashtable_ref__STUB), SG_PROCEDURE(&extlib_weak_hashtable_setX__STUB), TRUE);
-  sg__rc.d5[247] = SG_MAKE_STRING("weak-hashtable-set!");
-  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[247]), &extlib_weak_hashtable_setX__STUB);
-  SG_PROCEDURE_NAME(&extlib_weak_hashtable_setX__STUB) = sg__rc.d5[247];
-  sg__rc.d5[248] = SG_MAKE_STRING("weak-hashtable-delete!");
-  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[248]), &extlib_weak_hashtable_deleteX__STUB);
-  SG_PROCEDURE_NAME(&extlib_weak_hashtable_deleteX__STUB) = sg__rc.d5[248];
-  sg__rc.d5[249] = SG_MAKE_STRING("weak-hashtable-keys-list");
-  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[249]), &extlib_weak_hashtable_keys_list__STUB);
-  SG_PROCEDURE_NAME(&extlib_weak_hashtable_keys_list__STUB) = sg__rc.d5[249];
-  sg__rc.d5[250] = SG_MAKE_STRING("weak-hashtable-values-list");
-  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[250]), &extlib_weak_hashtable_values_list__STUB);
-  SG_PROCEDURE_NAME(&extlib_weak_hashtable_values_list__STUB) = sg__rc.d5[250];
-  sg__rc.d5[251] = SG_MAKE_STRING("weak-hashtable-copy");
-  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[251]), &extlib_weak_hashtable_copy__STUB);
-  SG_PROCEDURE_NAME(&extlib_weak_hashtable_copy__STUB) = sg__rc.d5[251];
-  sg__rc.d5[252] = SG_MAKE_STRING("microsecond");
-  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[252]), &extlib_microsecond__STUB);
-  SG_PROCEDURE_NAME(&extlib_microsecond__STUB) = sg__rc.d5[252];
-  sg__rc.d5[253] = SG_MAKE_STRING("immediate?");
-  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[253]), &extlib_immediateP__STUB);
-  SG_PROCEDURE_NAME(&extlib_immediateP__STUB) = sg__rc.d5[253];
-  sg__rc.d5[254] = SG_MAKE_STRING("get-mac-address");
-  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[254]), &extlib_get_mac_address__STUB);
-  SG_PROCEDURE_NAME(&extlib_get_mac_address__STUB) = sg__rc.d5[254];
-  sg__rc.d5[255] = SG_MAKE_STRING("uname");
-  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[255]), &extlib_uname__STUB);
-  SG_PROCEDURE_NAME(&extlib_uname__STUB) = sg__rc.d5[255];
+  sg__rc.d5[261] = SG_MAKE_STRING("weak-hashtable-set!");
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[261]), &extlib_weak_hashtable_setX__STUB);
+  SG_PROCEDURE_NAME(&extlib_weak_hashtable_setX__STUB) = sg__rc.d5[261];
+  sg__rc.d5[262] = SG_MAKE_STRING("weak-hashtable-delete!");
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[262]), &extlib_weak_hashtable_deleteX__STUB);
+  SG_PROCEDURE_NAME(&extlib_weak_hashtable_deleteX__STUB) = sg__rc.d5[262];
+  sg__rc.d5[263] = SG_MAKE_STRING("weak-hashtable-keys-list");
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[263]), &extlib_weak_hashtable_keys_list__STUB);
+  SG_PROCEDURE_NAME(&extlib_weak_hashtable_keys_list__STUB) = sg__rc.d5[263];
+  sg__rc.d5[264] = SG_MAKE_STRING("weak-hashtable-values-list");
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[264]), &extlib_weak_hashtable_values_list__STUB);
+  SG_PROCEDURE_NAME(&extlib_weak_hashtable_values_list__STUB) = sg__rc.d5[264];
+  sg__rc.d5[265] = SG_MAKE_STRING("weak-hashtable-copy");
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[265]), &extlib_weak_hashtable_copy__STUB);
+  SG_PROCEDURE_NAME(&extlib_weak_hashtable_copy__STUB) = sg__rc.d5[265];
+  sg__rc.d5[266] = SG_MAKE_STRING("weak-hashtable-shrink");
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[266]), &extlib_weak_hashtable_shrink__STUB);
+  SG_PROCEDURE_NAME(&extlib_weak_hashtable_shrink__STUB) = sg__rc.d5[266];
+  sg__rc.d5[267] = SG_MAKE_STRING("microsecond");
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[267]), &extlib_microsecond__STUB);
+  SG_PROCEDURE_NAME(&extlib_microsecond__STUB) = sg__rc.d5[267];
+  sg__rc.d5[268] = SG_MAKE_STRING("immediate?");
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[268]), &extlib_immediateP__STUB);
+  SG_PROCEDURE_NAME(&extlib_immediateP__STUB) = sg__rc.d5[268];
+  sg__rc.d5[269] = SG_MAKE_STRING("get-mac-address");
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[269]), &extlib_get_mac_address__STUB);
+  SG_PROCEDURE_NAME(&extlib_get_mac_address__STUB) = sg__rc.d5[269];
+  sg__rc.d5[270] = SG_MAKE_STRING("uname");
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[270]), &extlib_uname__STUB);
+  SG_PROCEDURE_NAME(&extlib_uname__STUB) = sg__rc.d5[270];
+  sg__rc.d5[271] = SG_MAKE_STRING("gc");
+  Sg_InsertBinding(lib, Sg_Intern(sg__rc.d5[271]), &extlib_gc__STUB);
+  SG_PROCEDURE_NAME(&extlib_gc__STUB) = sg__rc.d5[271];
 }

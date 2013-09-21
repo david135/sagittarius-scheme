@@ -55,7 +55,7 @@ SET(HAVE_ALLOCA_EXITCODE "Failed to run alloca"
   CACHE STRING "Result from TRY_RUN" FORCE)
 IF (HAVE_ALLOCA_H)
   # for now it is simple as much as possible.
-  CHECK_C_SOURCE_RUNS("
+  CHECK_C_SOURCE_COMPILES("
 #include <alloca.h>
 int main()
 {
@@ -143,7 +143,11 @@ ENDIF()
 
 # On Windows, if CMake works properly, the value must be this.
 IF (SAGITTARIUS_PROCESSOR STREQUAL "amd64")
-  SET(SAGITTARIUS_PROCESSOR "x86_64")
+  IF (SIZEOF_VOIDP EQUAL 4)
+    SET(SAGITTARIUS_PROCESSOR "i686")
+  ELSE()
+    SET(SAGITTARIUS_PROCESSOR "x86_64")
+  ENDIF()
 ENDIF()
 
 # get vendor
@@ -173,7 +177,7 @@ SET(CMAKE_INSTALL_PREFIX ${INSTALL_PREFIX} CACHE INTERNAL "Prefix prepended to i
 
 #SET(SAGITTARIUS_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}"
 #  CACHE STRING "Sagittarius release version string")
-SET(SAGITTARIUS_VERSION "0.4.8" CACHE STRING "Sagittarius release version string" FORCE)
+SET(SAGITTARIUS_VERSION "0.4.9.1" CACHE STRING "Sagittarius release version string" FORCE)
 
 SET(SAGITTARIUS_LIB_SUFFIX ${SAGITTARIUS_LIB_SUFFIX}
   "lib/${SAGITTARIUS_NAME}")
@@ -263,8 +267,13 @@ ELSEIF(MSVC)
     ENDIF(${flag_var} MATCHES "/MDd")
   ENDFOREACH(flag_var)
   ADD_DEFINITIONS("-D_CRT_SECURE_NO_WARNINGS")
-  SET(CMAKE_C_FLAGS "/arch:AVX ${CMAKE_C_FLAGS}")
-  SET(CMAKE_CXX_FLAGS "/arch:AVX ${CMAKE_CXX_FLAGS}")
+  #SET(CMAKE_C_FLAGS "/arch:AVX ${CMAKE_C_FLAGS}")
+  #SET(CMAKE_CXX_FLAGS "/arch:AVX ${CMAKE_CXX_FLAGS}")
+  IF(NOT (MSVC_VERSION LESS 1700))
+    SET(CMAKE_C_FLAGS "/D_USING_V110_SDK71 ${CMAKE_C_FLAGS}")
+    SET(CMAKE_CXX_FLAGS "/D_USING_V110_SDK71 ${CMAKE_CXX_FLAGS}")
+  ENDIF()
+
 ELSEIF(WATCOM)
   # watcom's default alignment is 4, so we need to specify it.
   SET(CMAKE_C_FLAGS "-ox ${CMAKE_C_FLAGS}")
@@ -554,6 +563,14 @@ ADD_CUSTOM_TARGET(doc
   -L${PROJECT_SOURCE_DIR}/ext/time -D${PROJECT_BINARY_DIR}/build 
   gendoc --output=${PROJECT_BINARY_DIR}/doc/sagittarius-ref.html
   --style=lib/style.css --javascript=lib/tools.js sagittarius-ref.scrbl
+  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/doc)
+
+ADD_CUSTOM_TARGET(online-doc
+  COMMAND ${PROJECT_BINARY_DIR}/build/sash
+  -L${PROJECT_SOURCE_DIR}/lib -L${PROJECT_SOURCE_DIR}/sitelib
+  -L${PROJECT_SOURCE_DIR}/ext/time -D${PROJECT_BINARY_DIR}/build 
+  gendoc --output=${PROJECT_BINARY_DIR}/doc/sagittarius-online-ref.html
+  --style=lib/style.css --separate=2 sagittarius-ref.scrbl
   WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/doc)
 
 INSTALL(FILES ${PROJECT_BINARY_DIR}/doc/sagittarius-ref.html

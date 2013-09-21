@@ -2,7 +2,7 @@
 /*
  * reader.c
  *
- *   Copyright (c) 2010  Takashi Kato <ktakashi@ymail.com>
+ *   Copyright (c) 2010-2013  Takashi Kato <ktakashi@ymail.com>
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -953,6 +953,10 @@ SgObject read_hash_bang(SgPort *port, SgChar c, dispmacro_param *param,
       }
       if (ustrcmp(tag->value, "no-overwrite") == 0) {
 	SG_VM_SET_FLAG(Sg_VM(), SG_NO_OVERWRITE);
+	return NULL;
+      }
+      if (ustrcmp(tag->value, "overwrite") == 0) {
+	SG_VM_UNSET_FLAG(Sg_VM(), SG_NO_OVERWRITE);
 	return NULL;
       }
       if (ustrcmp(tag->value, "fold-case") == 0) {

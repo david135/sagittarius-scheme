@@ -901,16 +901,19 @@
       (make-p1env (car maybe-library) '())))
 
 ;; pass1 utilities
-(define (global-eq? var sym p1env)
+(define (global-eq? var sym p1env . maybe-library)
   (and (variable? var)
        (let ((v (p1env-lookup p1env var LEXICAL)))
 	 (and (identifier? v)
 	      (eq? (id-name v) sym)
-	      ;;(null? (id-envs v))
 	      (cond ((find-binding (id-library v) sym #f)
 		     => (lambda (gloc)
 			  (let ((s (gloc-ref gloc)))
 			    (and (syntax? s)
+				 (or (null? maybe-library)
+				     (and-let* ((lib (gloc-library gloc)))
+				       (eq? (library-name lib)
+					    (car maybe-library))))
 				 (eq? (syntax-name s) sym)))))
 		    (else #f))))))
 
@@ -1044,12 +1047,13 @@
 (define-pass1-syntax (unquote-splicing form p1env) :null
   (syntax-error "invalid expression" (unwrap-syntax form) (car form)))
 
-(define .list  	(global-id 'list))
-(define .cons 	(global-id 'cons))
-(define .cons* 	(global-id 'cons*))
-(define .append (global-id 'append))
-(define .quote  (global-id 'quote))
-(define .vector (global-id 'vector))
+(define .list  	 (global-id 'list))
+(define .cons 	 (global-id 'cons))
+(define .cons* 	 (global-id 'cons*))
+(define .append  (global-id 'append))
+(define .append! (global-id 'append!))
+(define .quote   (global-id 'quote))
+(define .vector  (global-id 'vector))
 (define .list->vector (global-id 'list->vector))
 
 (define (pass1/quasiquote form nest p1env)
@@ -1307,7 +1311,7 @@
        ($undef)))
     (- (syntax-error "malformed define-syntax" form))))
 
-(define-pass1-syntax (let-syntax form p1env) :null
+(define (pass1/let-syntax form p1env slice?)
   (smatch form
     ((- ((name trans-spec) ___) body ___)
      (let* ((trans (imap2 (lambda (n x)
@@ -1318,13 +1322,18 @@
 			  name trans-spec))
 	    ;; macro must be lexical. see pass1
 	    (newenv (p1env-extend p1env ($map-cons-dup name trans) LEXICAL)))
-       (if (vm-r6rs-mode?)
+       (if slice?
 	   ($seq (imap (lambda (e) (pass1 e newenv)) body))
 	   (pass1/body body newenv))))
     (else
      (syntax-error "malformed let-syntax" form))))
 
-(define-pass1-syntax (letrec-syntax form p1env) :null
+(define-pass1-syntax (let-syntax form p1env) :null
+  (pass1/let-syntax form p1env #t))
+(define-pass1-syntax (let-syntax form p1env) :r7rs
+  (pass1/let-syntax form p1env #f))
+
+(define (pass1/letrec-syntax form p1env slice?)
   (smatch form
     ((- ((name trans-spec) ___) body ___)
      (let* ((newenv (p1env-extend p1env
@@ -1336,11 +1345,16 @@
 			     x (p1env-add-name newenv (variable-name n))))
 			  name trans-spec)))
        (ifor-each2 set-cdr! (cdar (p1env-frames newenv)) (append trans trans))
-       (if (vm-r6rs-mode?)
+       (if slice?
 	   ($seq (imap (lambda (e) (pass1 e newenv)) body))
 	   (pass1/body body newenv))))
     (-
      (syntax-error "malformed letrec-syntax" form))))
+
+(define-pass1-syntax (letrec-syntax form p1env) :null
+  (pass1/letrec-syntax form p1env #t))
+(define-pass1-syntax (letrec-syntax form p1env) :r7rs
+  (pass1/letrec-syntax form p1env #f))
 
 ;; 'rename' procedure - we just return a resolved identifier
 (define (er-rename symid p1env dict)
@@ -1732,7 +1746,11 @@
 				   vars tmps defaults)
 			    ,@body))
 		    ((,null?. (,cdr. ,argvar))
-		     (,error. 'let-keywords "keyword list not even" ,argvar))
+		     ,(if (and restvar (not (boolean? restvar)))
+			  `(,loop (,cdr. ,argvar)
+				  (,.append! ,restvar ,argvar)
+				  ,@tmps)
+			  `(,error. 'let-keywords "keyword list not even" ,argvar)))
 		    (,_else
 		     (,_case (,car. ,argvar)
 			     ,@(imap (lambda (key)
@@ -2701,18 +2719,38 @@
 
 (define (pass1/cond-expand clauses form p1env)
   (define (process-clause clauses)
-    (define (cond-library? x) (eq? (identifier->symbol x) 'library))
-    (define (cond-and/or? x) (memq (identifier->symbol x) '(and or)))
-    (define (cond-not? x) (eq? (identifier->symbol x) 'not))
-    (define (cond-else? x)
-      (and (variable? x)
-	   (eq? (identifier->symbol x) 'else)))
-    (define (check-cond-features req type)
-      (case type
-	((or)	 
-	 (not (null? (lset-intersection eq? req (cond-features)))))
-	((and)
-	 (null? (lset-difference eq? req (cond-features))))))
+    (define (cond-keyword? x)
+      (memq (identifier->symbol x) '(and or not library)))
+    (define (cond-else? x) 
+      (and (variable? x) (eq? (identifier->symbol x) 'else)))
+
+    (define (fulfill? req)
+      (cond ((identifier? req) (fulfill? (identifier->symbol req)))
+	    ((symbol? req) (memq req (cond-features)))
+	    ((not (pair? req))
+	     (syntax-error "invalid cond-expand feature-id" req))
+	    (else
+	     (case (unwrap-syntax (car req))
+	       ((and) 	  (fulfill-and (cdr req)))
+	       ((or)  	  (fulfill-or (cdr req)))
+	       ((not) 	  (fulfill-not (cadr req)))
+	       ((library) (fulfill-library (cdr req)))
+	       (else
+		(syntax-error "invalid cond-expand feature expression" req))))))
+
+    (define (fulfill-and reqs)
+      (if (null? reqs)
+	  #t
+	  (let ((c1 (fulfill? (car reqs))))
+	    (and c1 (fulfill-and (cdr reqs))))))
+    (define (fulfill-or reqs)
+      (if (null? reqs)
+	  #f
+	  (let ((c1 (fulfill? (car reqs))))
+	    (or c1 (fulfill-or (cdr reqs))))))
+    (define (fulfill-not req)
+      (if (fulfill? req) #f #t))
+    (define (fulfill-library reqs) (find-library (car reqs) #f))
 
     (smatch clauses
       (() (syntax-error "unfulfilled cond-expand" form))
@@ -2720,21 +2758,8 @@
        (unless (null? rest)
 	 (syntax-error "'else' clauses followed by more clauses" form))
        (pass1 `(,begin. ,@body) p1env))
-      (((((? cond-library? -) name) body ___) . rest)
-       (if (find-library name #f)
-	   (pass1 `(,begin. ,@body) p1env)
-	   (process-clause (cdr clauses))))
-      (((((? cond-not? -) req) body ___) . rest)
-       (if (member (identifier->symbol req) (cond-features))
-	   (process-clause (cdr clauses))
-	   (pass1 `(,begin. ,@body) p1env)))
-      (((((? cond-and/or? c) . req) body ___) . rest)
-       (cond ((check-cond-features req c)
-	      (pass1 `(,begin. ,@body) p1env))
-	     (else
-	      (process-clause (cdr clauses)))))
-      (((feature-id body ___) . rest)
-       (if (member (identifier->symbol feature-id) (cond-features))
+      (((condition body ___) . rest)
+       (if (fulfill? condition)
 	   (pass1 `(,begin. ,@body) p1env)
 	   (process-clause (cdr clauses))))
       (- (syntax-error "malformed cond-expand" form)))
@@ -2814,9 +2839,8 @@
 				 (else (acons 'rec def intmacros)))))
 		      (pass1/body-rec rest intdefs intmacros p1env))))
 		 ;; 11.18 binding constructs for syntactic keywords
-		 ((and (vm-r6rs-mode?)
-		       (or (global-eq? head 'let-syntax p1env)
-			   (global-eq? head 'letrec-syntax p1env)))
+		 ((or (global-eq? head 'let-syntax p1env 'null)
+		      (global-eq? head 'letrec-syntax p1env 'null))
 		  (receive (defs body)
 		      (smatch (caar exprs)
 			((- ((name trans-spec) ___) body ___)
@@ -3246,9 +3270,22 @@
 ;;   need to run pass2 for all the call sites of the lvar to analyze
 ;;   its usage.
 (define (pass2/$LET iform penv tail?)
-  (let ((lvars ($let-lvars iform))
-	(inits (imap (lambda (init) (pass2/rec init penv #f))
-		     ($let-inits iform))))
+  ;; taken from Gauche's fix...
+  (define (process-inits lvars inits)
+    (let loop ((lvars lvars) (inits inits)
+	       (new-lvars '()) (new-inits '()))
+      (cond ((null? lvars) (values (reverse! new-lvars) (reverse! new-inits)))
+	    ((and-let* ((lv (car lvars))
+			( (zero? (lvar-ref-count lv)) )
+			( (zero? (lvar-set-count lv)) )
+			( (has-tag? (car inits) $LAMBDA) )
+			( (eq? ($lambda-flag (car inits)) 'used) ))
+	       (loop (cdr lvars) (cdr inits) new-lvars new-inits)))
+	    (else
+	     (loop (cdr lvars) (cdr inits)
+		   (cons (car lvars) new-lvars)
+		   (cons (pass2/rec (car inits) penv #f) new-inits))))))
+  (receive (lvars inits) (process-inits ($let-lvars iform) ($let-inits iform))
     (ifor-each2 (lambda (lv in) (lvar-initval-set! lv in)) lvars inits)
     (let ((obody (pass2/rec ($let-body iform) penv tail?)))
       (ifor-each2 pass2/optimize-closure lvars inits)
@@ -3330,8 +3367,7 @@
 				SMALL_LAMBDA_SIZE)
 			     (pass2/local-call-inliner lvar lambda-node
 						       locals))))))
-	(pass2/local-call-optimizer lvar lambda-node)
-	)))
+	(pass2/local-call-optimizer lvar lambda-node))))
 
 ;; Classify the calls into categories. TAIL-REC call is classified as
 ;; REC if the call is across the closure boundary.
@@ -3495,7 +3531,8 @@
 	       (cond
 		((vector? result)
 		 ;; directory inlineable case.
-		 ($call-proc-set! iform result)
+		 ;;($call-proc-set! iform result)
+		 ($lambda-flag-set! result 'used)
 		 (pass2/rec (expand-inlined-procedure 
 			     ($*-src iform) result args) penv tail?))
 		(else
@@ -3583,7 +3620,8 @@
 	 ;; (let ((lref (lambda ...))) body)
 	 (cond ((pass2/self-recursing? initval penv)
 		(if tail? 'tail-rec 'rec))
-	       ((= (lvar-ref-count lvar) 1)
+	       ((and (= (lvar-ref-count lvar) 1)
+		     (= (lvar-set-count lvar) 0))
 		;; I can inline this lambda directly.
 		(lvar-ref--! lvar)
 		(lvar-initval-set! lvar ($undef))

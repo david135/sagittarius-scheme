@@ -1,8 +1,8 @@
-;;; -*- Scheme -*-
+;;; -*- mode:scheme; coding:utf-8; -*-
 ;;;
 ;;; tlv.scm - TLV parser
 ;;;
-;;;   Copyright (c) 2010-2012  Takashi Kato  <ktakashi@ymail.com>
+;;;   Copyright (c) 2010-2013  Takashi Kato  <ktakashi@ymail.com>
 ;;;
 ;;;   Redistribution and use in source and binary forms, with or without
 ;;;   modification, are permitted provided that the following conditions
@@ -38,8 +38,12 @@
 	    ;; utilities
 	    dump-tlv
 	    tlv->bytevector
-	    ->tlv
+	    ->tlv make-tlv-unit
 	    read-tlv
+
+	    ;; for exptension
+	    ;; it's actually BER length reader
+	    (rename read-length read-ber-length)
 
 	    ;; for compatibility
 	    (rename (write-emv-tlv write-tlv))
@@ -72,8 +76,7 @@
 	(format p "#<tlv :tag ~x :components ~a>"
 		(tlv-tag o) (tlv-components o))))
 
-  (define (make-tlv-unit tag data)
-    (make <tlv> :tag tag :length (bytevector-length data) :data data))
+  (define (make-tlv-unit tag data) (make <tlv> :tag tag :data data))
 
   (define (make-generic-tlv-parser tag-reader length-reader object-builder)
     (define (parse-tlv-object-list in in-indefinite?)
@@ -275,11 +278,11 @@
 	    (else
 	     ;; NOTE: #xFFFF: length = 3
 	     ;; EMV tlv accepts maximum 4 bytes length but we don't check it
-	     (let1 length-bits (+ (div (bitwise-length len) 8) 1)
+	     (let1 length-bits (div (bitwise-length len) 8)
 	       (put-u8 out (+ #x80 length-bits))
 	       (do ((i length-bits (- i 1)))
-		   ((< i 0))
-		 (put-u8 out (bitwise-and #xFF (ashr len (* i 8)))))))))
+		   ((= i 0))
+		 (put-u8 out (bitwise-and #xFF (ashr len (* (- i 1) 8)))))))))
     (apply generic-tlv-writer tlv write-tag write-length opts))
 
   (define (read-tlv in :optional (parser (make-emv-tlv-parser)))
