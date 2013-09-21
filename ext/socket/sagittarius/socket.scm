@@ -2,7 +2,7 @@
 ;;;
 ;;; socket.scm - socket library
 ;;;  
-;;;   Copyright (c) 2000-2011  Takashi Kato  <ktakashi@ymail.com>
+;;;   Copyright (c) 2010-2013  Takashi Kato  <ktakashi@ymail.com>
 ;;;   
 ;;;   Redistribution and use in source and binary forms, with or without
 ;;;   modification, are permitted provided that the following conditions
@@ -35,7 +35,8 @@
 	    shutdown-output-port
 	    socket?
 	    make-socket
-	    socket-port
+	    socket-port socket-input-port socket-output-port
+	    shutdown-port shutdown-input-port shutdown-output-port
 	    
 	    socket-setsockopt!
 	    socket-getsockopt
@@ -45,8 +46,8 @@
 	    socket-error-message
 
 	    socket-accept
-	    socket-send
-	    socket-recv
+	    socket-send socket-sendto
+	    socket-recv socket-recvfrom
 	    socket-shutdown
 	    socket-close
 	    socket-fd
@@ -105,7 +106,9 @@
 
 	    ;; addrinfo
 	    addrinfo? make-addrinfo make-hint-addrinfo get-addrinfo
-	    next-addrinfo
+	    next-addrinfo addrinfo-sockaddr
+	    ;; sockaddr
+	    sockaddr?
 	    ;; socket-info
 	    socket-peer
 	    socket-name
@@ -140,6 +143,7 @@
       info))
 
   (define (next-addrinfo info) (slot-ref info 'next))
+  (define (addrinfo-sockaddr info) (slot-ref info 'addr))
 
   (define (create-socket info)
     (make-socket (slot-ref info 'family) (slot-ref info 'socktype)
@@ -162,10 +166,10 @@
       (let loop ((socket (create-socket info)) (info info))
 	(define (retry info)
 	  (let ((next (slot-ref info 'next)))
-	    (unless next
-	      (assertion-violation 'make-client-socket "no next addrinfo"
-				   node service))
-	    (loop (create-socket next) next)))
+	    (if next
+		(loop (create-socket next) next)
+		(assertion-violation 'make-client-socket "no next addrinfo"
+				     node service))))
 	(or (and-let* (( socket )
 		       ( info ))
 	      (socket-connect! socket info))
@@ -188,10 +192,10 @@
       (let loop ((socket (create-socket info)) (info info))
 	(define (retry info)
 	  (let ((next (slot-ref info 'next)))
-	    (unless next
-	      (assertion-violation 'make-server-socket 
-				   "no next addrinfo" service))
-	    (loop (create-socket next) next)))
+	    (if next
+		(loop (create-socket next) next)
+		(assertion-violation 'make-server-socket 
+				     "no next addrinfo" service))))
 
 	(or (and-let* (( socket )
 		       ( info )

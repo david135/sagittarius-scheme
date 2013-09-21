@@ -87,7 +87,7 @@ set(VERSION "${PACKAGE_VERSION}")
 # long double? what's the hell is it!?
 set(HAVE_LONG_DOUBLE 0)
 
-set(arch ${CMAKE_SYSTEM_PROCESSOR} CACHE STRING "system architecture")
+set(arch ${SAGITTARIUS_PROCESSOR} CACHE STRING "system architecture")
 set(host ${CMAKE_SYSTEM_NAME} CACHE STRING "system name")
 
 # for now we do not support that much
@@ -122,11 +122,17 @@ elseif (${arch} STREQUAL "x86_64")
   set(TARGETDIR "x86")
   if (${host} MATCHES "darwin.*")
     set(TARGET "X86_DARWIN")
-  elseif (CYGWIN)
+  elseif (CYGWIN OR WIN32)
     set(TARGET "X86_WIN64")
   else ()
     set(TARGET "X86_64")
   endif()
+endif()
+
+if (${TARGET} STREQUAL "X86_DARWIN")
+# It may be on all x86_64 architectures HAVE_LONG_DOUBLE must be 1, mustn't it?
+#if (${arch} STREQUAL "x86_64")
+  set(HAVE_LONG_DOUBLE 1)
 endif()
 
 if (${TARGETDIR} STREQUAL "unknown")

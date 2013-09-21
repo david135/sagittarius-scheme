@@ -68,6 +68,10 @@
 	    *cipher-suites*
 	    ;; socket conversion
 	    socket->tls-socket
+
+	    ;; hello extension helper
+	    make-hello-extension
+	    make-server-name-indication
 	    )
     (import (rnrs)
 	    (core errors)
@@ -134,7 +138,10 @@
      (closed?        :init-value #f)
      (session-encrypted? :init-value #f)
      ;; all handshake messages without record layer...
-     (messages :init-form (open-output-bytevector))))
+     (messages :init-form (open-output-bytevector))
+     ;; for multiple messages in one record
+     (buffer   :init-value #f)
+     (last-record-type :init-value #f)))
 
   (define-class <tls-client-session> (<tls-session>)
     ((signature-algorithm :init-value #f)
@@ -215,7 +222,7 @@
 	(bytevector-u16-set! bv i (caar ciphers) 'big))
       bv))
 
-  (define (make-client-hello socket :optional (extension #f) :rest ignore)
+  (define (make-client-hello socket :optional (extension '()) :rest ignore)
     (let* ((version (negotiated-version socket))
 	   (session (~ socket 'session))
 	   (random-bytes (read-random-bytes (~ socket 'prng) 28))
@@ -223,15 +230,13 @@
 	   (session-id (make-variable-vector 1 (~ session 'session-id)))
 	   (cipher-suite (make-variable-vector 2 (make-cipher-suites socket)))
 	   (compression-methods (make-variable-vector 1 (~ session 'methods)))
-	   (hello (apply make-tls-client-hello
-			 :version version
-			 :random random
-			 :session-id session-id
-			 :cipher-suites cipher-suite
-			 :compression-methods compression-methods
-			 (if extension
-			     (list :extensions extension)
-			     '()))))
+	   (hello (make-tls-client-hello
+		   :version version
+		   :random random
+		   :session-id session-id
+		   :cipher-suites cipher-suite
+		   :compression-methods compression-methods
+		   :extensions extension)))
       (set! (~ session 'client-random) random)
       (make-tls-handshake *client-hello* hello)))
 
@@ -296,6 +301,8 @@
 	   (session-verify (tls-finished-data finish))
 	   (verify (finish-message-hash session label messages)))
       ;; verify message again
+      ;;(display messages) (newline)
+      ;;(dump-all-handshake-messages messages (is-dh? session) (~ session 'version))
       #;
       (when restore-message? 
 	(put-bytevector (~ session 'messages) messages))
@@ -325,6 +332,7 @@
 
   (define (%tls-server-handshake socket)
     (define (process-client-hello! hello)
+      ;;(display (tls-packet->bytevector hello)) (newline)
       (unless (<= *tls-version-1.0*  (~ hello 'version) *tls-version-1.2*)
 	(tls-error 'tls-server-handshake
 		   "non supported TLS version" *protocol-version*
@@ -334,14 +342,14 @@
       (let* ((vv (~ hello 'cipher-suites))
 	     (bv (~ vv 'value))
 	     (len (bytevector-length bv))
-	     (have-key? (~ socket 'private-key))
+	     (has-key? (~ socket 'private-key))
 	     (suppoting-suites *cipher-suites*))
 	(let loop ((i 0))
 	  (cond ((>= i len)
 		 (tls-error 'tls-server-handshake "no cipher"
 			    *handshake-failure*))
 		((and-let* ((spec (bytevector-u16-ref bv i 'big))
-			    ( (or have-key? 
+			    ( (or has-key? 
 				  (memv spec *dh-key-exchange-algorithms*)) ))
 		   (assv spec suppoting-suites))
 		 => (^s
@@ -380,12 +388,16 @@
 			  (integer->bytevector (mod-expt +dh-g+ a prime)))
 			 (implementation-restriction-violation 
 			  'send-server-key-exchange 
-			  "DH_RSA is not supported yet"))
-		     )
+			  "DH_RSA is not supported yet")))
 	     (signature (hash (lookup-hash (~ socket 'session)) 
 			      (tls-packet->bytevector params))))
 	(set! (~ socket 'session 'params) params)
 	(set! (~ socket 'session 'a) a)
+#;
+	(display (tls-packet->bytevector 	 
+		  (make-tls-handshake *server-key-echange*
+		    (make-tls-server-key-exchange params signature))))
+;;	(newline)
 	(tls-socket-send-inner socket
 	 (make-tls-handshake *server-key-echange*
 	  (make-tls-server-key-exchange params signature))
@@ -577,6 +589,7 @@
 				  (cipher-suites *cipher-suites*)
 				  (certificates '())
 				  (private-key #f)
+				  (hello-extensions '())
 				  :allow-other-keys opt)
     (let* ((raw-socket (apply make-client-socket server service opt))
 	   (socket (%make-tls-client-socket raw-socket
@@ -587,8 +600,20 @@
 					    :certificates certificates
 					    :private-key private-key)))
       (if handshake
-	  (tls-client-handshake socket)
+	  (tls-client-handshake socket 
+	   ;; user might want to use own SNI so do like this for now.
+	   :hello-extensions (if (null? hello-extensions)
+				 (list (make-server-name-indication 
+					(list server)))
+				 hello-extensions))
 	  socket)))
+
+  (define (make-hello-extension type data)
+    (make-tls-extension type (make-variable-vector 2 data)))
+
+  (define (make-server-name-indication names)
+    (let1 names (map (^n (make-tls-server-name *host-name* n)) names)
+      (make-tls-extension *server-name* (make-tls-server-name-list names))))
 
   (define (socket->tls-socket socket :key (client-socket #t)
 			      :allow-other-keys opt)
@@ -607,12 +632,12 @@
 	       ;; TODO I'm not sure this is correct or not
 	       (hash algo handshake-messages)))))
 
-  (define (tls-client-handshake socket)
+  (define (tls-client-handshake socket :key (hello-extensions '()))
     (guard (e (else (handle-error socket e)))
-      (%tls-client-handshake socket)
+      (%tls-client-handshake socket hello-extensions)
       socket))
 
-  (define (%tls-client-handshake socket)
+  (define (%tls-client-handshake socket hello-extensions)
     (define (process-server-hello socket sh)
       (let1 session (~ socket 'session)
 	(set! (~ session 'session-id) (~ sh 'session-id))
@@ -782,7 +807,7 @@
 				   *unexpected-message* o)))
 		 (loop (read-record socket 0)))))))
     
-    (let ((hello (make-client-hello socket))
+    (let ((hello (make-client-hello socket hello-extensions))
 	  (session (~ socket 'session)))
       (tls-socket-send-inner socket hello 0 *handshake* #f)
       (wait-and-process-server socket)
@@ -812,6 +837,7 @@
       ;; finish
       (let* ((out (~ session 'messages))
 	     (handshake-messages (get-output-bytevector out)))
+	;;(display handshake-messages) (newline)
 	;; add message again
 	;;(put-bytevector out handshake-messages)
 	(tls-socket-send-inner socket
@@ -824,10 +850,11 @@
 
   (define (dump-all-handshake-messages msg dh? v)
     (let1 in (open-bytevector-input-port msg)
-      (let loop ((o (read-handshake in dh? v)))
-	(when o
-	  (display o) (newline)
-	  (loop (read-handshake in dh? v))))))
+      (let loop ()
+	(let-values (((_ o) (read-handshake in dh? v)))
+	  (when o
+	    (display o) (newline)
+	    (loop))))))
 
   ;; internals
   (define-constant *master-secret-label* (string->utf8 "master secret"))
@@ -943,61 +970,78 @@
 	       (put-bytevector p buf)
 	       (loop (+ read-length len) (- diff len))))))))
 
-    (let* ((raw-socket (~ socket 'raw-socket))
-	   ;; the first 5 octets must be record header
-	   (buf (socket-recv raw-socket 5 flags)))
-      (unless (= (bytevector-length buf) 5)
-	(tls-error 'read-record "invalid record header" *unexpected-message* 
-		   buf))
-      (or
-       (and-let* ((type (bytevector-u8-ref buf 0))
-		  (version (bytevector-u16-ref buf 1 'big))
-		  (size-bv (bytevector-copy buf 3))
-		  (size    (bytevector->integer size-bv))
-		  (message (recv-n size raw-socket))
-		  (session (~ socket 'session)))
-	 (unless (= size (bytevector-length message))
-	   (tls-error 'read-record
-		      "given size and actual data size is different"
-		      *unexpected-message*
-		      size (bytevector-length message)))
-	 (when (~ session 'session-encrypted?)
-	   ;; okey now we are in the secured session
-	   (set! message (decrypt-data session message type))
-	   ;; we finally read all message from the server now is the time to
-	   ;; maintain read sequence number
-	   (set! (~ session 'read-sequence) (+ (~ session 'read-sequence) 1)))
-	 (cond ((= type *handshake*)
-		;; for Finish message
-		(let1 type (bytevector-u8-ref message 0)
-		  (when (and (not (= type *finished*))
-			     (not (= type *hello-request*)))
-		    (put-bytevector (~ session 'messages) message))
-		  ;; save client finished
-		  ;; FIXME this is really ugly ...
-		  (when (and (is-a? session <tls-server-session>)
-			     (= type *finished*))
-		    (set! (~ session 'client-finished) message)))
-		(read-handshake (open-bytevector-input-port message)
-				(is-dh? session)
-				(~ session 'version)))
-	       ((= type *alert*)
-		(let1 alert (read-alert (open-bytevector-input-port message))
-		  (cond ((= *close-notify* (~ alert 'description))
-			 ;; session closed
-			 (set! (~ session 'closed?) #t)
-			 ;; user wants application data
-			 #vu8())
-			(else alert))))
-	       ((= type *change-cipher-spec*)
-		(read-change-cipher-spec (open-bytevector-input-port message)))
-	       ((= type *application-data*)
-		;; we can simply return the message
-		message)
-	       (else
-		(tls-error 'read-record "not supported yet" 
-			   *unexpected-message* type))))
-       #vu8())))
+    ;; todo what if the record has more than 1 application data?
+    (define (read-record-rec session type in)
+      (set! (~ session 'last-record-type) type)
+      (rlet1 record (cond ((= type *handshake*)
+			   (let-values (((message record)
+					 (read-handshake in (is-dh? session)
+							 (~ session 'version))))
+			     ;; for Finish message
+			     (let1 type (bytevector-u8-ref message 0)
+			       (when (and (not (= type *finished*))
+					  (not (= type *hello-request*)))
+				 (put-bytevector (~ session 'messages) message))
+			       ;; save client finished
+			       ;; FIXME this is really ugly ...
+			       (when (and (is-a? session <tls-server-session>)
+					  (= type *finished*))
+				 (set! (~ session 'client-finished) message)))
+			     record))
+			  ((= type *alert*)
+			   (let1 alert (read-alert in)
+			     (cond ((= *close-notify* (~ alert 'description))
+				    ;; session closed
+				    (set! (~ session 'closed?) #t)
+				    ;; user wants application data
+				    #vu8())
+				   (else alert))))
+			  ((= type *change-cipher-spec*)
+			   (read-change-cipher-spec in))
+			  (else
+			   (tls-error 'read-record "not supported yet" 
+				      *unexpected-message* type)))
+	(if (eof-object? (lookahead-u8 in))
+	    (set! (~ session 'buffer) #f)
+	    (set! (~ session 'buffer) in))))
+
+    (let1 session (~ socket 'session)
+      (if (~ session 'buffer)
+	  ;; there are still something to read in the buffer
+	  ;; TODO does this happen after handshake?
+	  (read-record-rec session
+			   (~ session 'last-record-type) 
+			   (~ session 'buffer))
+	  ;; analyse the record
+	  (let* ((raw-socket (~ socket 'raw-socket))
+		 ;; the first 5 octets must be record header
+		 (buf (socket-recv raw-socket 5 flags)))
+	    (unless (= (bytevector-length buf) 5)
+	      (tls-error 'read-record "invalid record header"
+			 *unexpected-message* buf))
+	    (or
+	     (and-let* ((type (bytevector-u8-ref buf 0))
+			(version (bytevector-u16-ref buf 1 'big))
+			(size-bv (bytevector-copy buf 3))
+			(size    (bytevector->integer size-bv))
+			(message (recv-n size raw-socket)))
+	       (unless (= size (bytevector-length message))
+		 (tls-error 'read-record
+			    "given size and actual data size is different"
+			    *unexpected-message*
+			    size (bytevector-length message)))
+	       (when (~ session 'session-encrypted?)
+		 ;; okey now we are in the secured session
+		 (set! message (decrypt-data session message type))
+		 ;; we finally read all message from the server now is the
+		 ;; time to maintain read sequence number
+		 (set! (~ session 'read-sequence)
+		       (+ (~ session 'read-sequence) 1)))
+	       (if (= type *application-data*)
+		   message
+		   (let1 in (open-bytevector-input-port message)
+		     (read-record-rec session type in))))
+	     #vu8())))))
 
   (define (read-variable-vector in n)
     (let* ((size (bytevector->integer (get-bytevector-n in n)))
@@ -1035,9 +1079,14 @@
 	  (make-tls-extension type data)))
       (and-let* ((size (get-bytevector-n in 2))
 		 ( (bytevector? size) )
-		 (len (bytevector->integer size)))
-	(do ((i 0 (+ i 1)) (exts '() (cons (read-extension in) exts)))
-	    ((= i len)) (make-tls-extensions (reverse! exts)))))
+		 (len (bytevector->integer size))
+		 (bv  (get-bytevector-n in len)))
+	(call-with-port (open-bytevector-input-port bv)
+	  (lambda (in)
+	    (let loop ((exts '()))
+	      (if (eof-object? (lookahead-u8 in))
+		  exts
+		  (loop (cons (read-extension in) exts))))))))
 
     (define (read-client-hello in)
       (let* ((version (bytevector->integer (get-bytevector-n in 2)))
@@ -1137,37 +1186,43 @@
 
     (define (read-finished in) (make-tls-finished (get-bytevector-all in)))
 
-    (and-let* ((type (get-u8 in))
-	       ( (integer? type) )
-	       (size (bytevector->integer (get-bytevector-n in 3)))
-	       (body (get-bytevector-n in size)))
-      (unless (or (zero? size) (= size (bytevector-length body)))
-	(tls-error 'read-handshake
-		   "given size and actual data size is different"
-		   *unexpected-message*
-		   size))
-      (cond ((= type *hello-request*) (make-tls-hello-request))
-	    ((= type *client-hello*)
-	     (read-client-hello (open-bytevector-input-port body)))
-	    ((= type *server-hello*)
-	     (read-server-hello (open-bytevector-input-port body)))
-	    ((= type *certificate*)
-	     (read-certificate (open-bytevector-input-port body)))
-	    ((= type *server-key-echange*)
-	     (read-server-key-exchange (open-bytevector-input-port body)))
-	    ((= type *server-hello-done*)
-	     (make-tls-server-hello-done))
-	    ((= type *client-key-exchange*)
-	     (read-client-key-exchange (open-bytevector-input-port body)))
-	    ((= type *certificate-request*)
-	     (read-certificate-request (open-bytevector-input-port body)))
-	    ((= type *certificate-verify*)
-	     (read-certificate-verify (open-bytevector-input-port body)))
-	    ((= type *finished*)
-	     (read-finished (open-bytevector-input-port body)))
-	    (else
-	     (tls-error 'read-handshake
-			"not supported" *unexpected-message* type)))))
+    (or
+     (and-let* ((type (get-u8 in))
+		( (integer? type) )
+		(size (bytevector->integer (get-bytevector-n in 3)))
+		(body (get-bytevector-n in size)))
+       (unless (or (zero? size) (= size (bytevector-length body)))
+	 (tls-error 'read-handshake
+		    "given size and actual data size is different"
+		    *unexpected-message* size))
+       (let1 record
+	   (cond ((= type *hello-request*) (make-tls-hello-request))
+		 ((= type *client-hello*)
+		  (read-client-hello (open-bytevector-input-port body)))
+		 ((= type *server-hello*)
+		  (read-server-hello (open-bytevector-input-port body)))
+		 ((= type *certificate*)
+		  (read-certificate (open-bytevector-input-port body)))
+		 ((= type *server-key-echange*)
+		  (read-server-key-exchange (open-bytevector-input-port body)))
+		 ((= type *server-hello-done*)
+		  (make-tls-server-hello-done))
+		 ((= type *client-key-exchange*)
+		  (read-client-key-exchange (open-bytevector-input-port body)))
+		 ((= type *certificate-request*)
+		  (read-certificate-request (open-bytevector-input-port body)))
+		 ((= type *certificate-verify*)
+		  (read-certificate-verify (open-bytevector-input-port body)))
+		 ((= type *finished*)
+		  (read-finished (open-bytevector-input-port body)))
+		 (else
+		  (tls-error 'read-handshake
+			     "not supported" *unexpected-message* type)))
+	 (let1 bv (make-bytevector 4)
+	   (bytevector-u32-set! bv 0 size (endianness big))
+	   (bytevector-u8-set! bv 0 type)
+	   (values (bytevector-append bv body) record))))
+     (values #vu8() #f)))
 
   (define (lookup-cipher&keysize session)
     (and-let* ((suite (assv (~ session 'cipher-suite) *cipher-suites*)))
@@ -1433,7 +1488,7 @@
   (define (tls-socket-info socket)
     (socket-info (~ socket 'raw-socket)))
   (define (tls-socket-info-values socket :key (type 'peer))
-    (socket-info-values (~ socket 'raw-socket) type))
+    (socket-info-values (~ socket 'raw-socket) :type type))
 
   ;; to make call-with-socket available for tls-socket
   (define-method socket-close ((o <tls-socket>))
