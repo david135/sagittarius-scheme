@@ -1,0 +1,44 @@
+# Sagittarius extensions -*- CMake -*-
+# 
+INCLUDE_DIRECTORIES(${SAGITTARIUS_INCLUDE_DIR})
+# It seems no problem (probably), always to use built sash binary whether there's installed sash
+SET(HOST_SASH ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/sash)
+SET(GENSTUB
+  ${GENSTUB}
+  ${HOST_SASH}
+  -L${CMAKE_CURRENT_SOURCE_DIR}/../lib
+  -L${CMAKE_CURRENT_SOURCE_DIR}/../sitelib
+  ${CMAKE_CURRENT_SOURCE_DIR}/genstub)
+
+IF(${LINK_BOEHM_GC})
+  # temporary solution for VC
+  IF(MSVC)
+    ADD_DEFINITIONS(-DGC_NOT_DLL)
+  ENDIF()
+ENDIF()
+
+INSTALL(FILES ${CMAKE_CURRENT_SOURCE_DIR}/addstub.cmake
+  DESTINATION "${SAGITTARIUS_CURRENT_SHARE}/cmake")
+
+# testing preparetion
+IF (NOT EXISTS ${PROJECT_BINARY_DIR}/ext)
+  FILE(COPY ${PROJECT_SOURCE_DIR}/ext/all-tests.scm
+    DESTINATION ${PROJECT_BINARY_DIR}/ext/)
+ENDIF()
+
+# make dummy resource file
+SET(EXT_TEST_RESOURCE_FILE "${PROJECT_BINARY_DIR}/ext/.sagittarius-exttestrc")
+FILE(WRITE ${EXT_TEST_RESOURCE_FILE} "${CMAKE_CURRENT_SOURCE_DIR}\n")
+
+ADD_SUBDIRECTORY(zlib zlib)
+ADD_SUBDIRECTORY(threads threads)
+ADD_SUBDIRECTORY(time time)
+ADD_SUBDIRECTORY(socket socket)
+#ADD_SUBDIRECTORY(regex regex)
+# for now we don't support ffi on BB10
+IF (NOT ${SAGITTARIUS_OS} STREQUAL "qnx")
+  ADD_SUBDIRECTORY(ffi ffi)
+ENDIF()
+ADD_SUBDIRECTORY(process process)
+ADD_SUBDIRECTORY(crypto crypto)
+ADD_SUBDIRECTORY(odbc odbc)
