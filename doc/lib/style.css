@@ -1,0 +1,265 @@
+/* -*- mode: css; coding: utf-8 -*- */
+/* CSS from  http://css-eblog.com/csstechnique/position-fixed-forie6.html */
+* html, * html body {
+    height: 100%;
+    overflow-y: hidden;
+    overflow-x: auto;
+}
+
+* html #sagittarius-doc-wrapper {
+    overflow: auto;
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+/* end */
+
+h1.title {
+    font-size: xx-large;
+}
+
+h2.section {
+    font-size: xx-large;
+}
+
+h3.subsection {
+    font-size: x-large;
+}
+
+h4.subsubsection {
+    font-size: large;
+}
+
+h5.sub-section {
+    font-size: large;
+}
+
+span.section-number:after {
+    content: ".";
+}
+
+span.section-number {
+    margin-right: 5px;
+}
+
+div.desc {
+    padding-top: 5px;
+    padding-left: 50px;
+}
+
+div.define {
+    font-size: medium;
+}
+
+span.define-category {
+    text-decoration: underline;
+    font-size: large;
+}
+
+span.define-category:after {
+    content: ":";
+}
+
+span.name {
+    font-family: monospace;
+    font-weight: bold;
+}
+
+span.args {
+    font-style: italic;
+}
+
+/* table of contents style */
+ul.section, ul.sub-section, ul.sub-sub-section, ul.sub-sub-sub-section {
+    list-style-type: none;
+}
+
+pre.snipet {
+    position: relative;
+}
+
+span.snipet-code {
+    display: inline-block;
+    width: 50%;
+}
+
+span.snipet-arrow {
+    display: inline-block;
+    width: 5%;
+}
+
+span.snipet-result {
+    display: inline-block;
+    width: 20%;
+}
+
+/* tools.js */
+a.closed {
+    background-image: url("trees.png");
+    background-position: 0 0px;
+    height: 13px;
+    width: 13px;
+    display: inline-block;
+}
+
+a.opened {
+    background-image: url("trees.png");
+    background-position: -13px 0px;
+    height: 13px;
+    width: 13px;
+    display: inline-block;
+}
+
+a.closedAll {
+    background-image: url("trees.png");
+    background-position: 0 0px;
+    height: 13px;
+    width: 13px;
+    display: inline-block;
+}
+
+a.closedAll:after {
+    margin-left: 13px;
+    content: "open";
+}
+
+a.openedAll {
+    background-image: url("trees.png");
+    background-position: -13px 0px;
+    height: 13px;
+    width: 13px;
+    display: inline-block;
+}
+a.openedAll:after {
+    margin-left: 13px;
+    content: "close";
+}
+
+a.no-child {
+    background-image: url("trees.png");
+    background-position: -26px 0px;
+    height: 13px;
+    width: 13px;
+    display: inline-block;
+}
+
+/* index table */
+div#index-table {
+    width: 100%;
+}
+
+div.index-letters:before {
+    content: "Jump to: ";
+}
+
+div.index-letters {
+    width: 100%;
+    padding-bottom: 10px;
+    font-weight: bold;
+    font-size: x-large;
+}
+
+a.index-letter {
+    display: inline-block;
+    width: 15px;
+    font-family: monospace;
+}
+
+div.index-table-fragment {
+    border-top: 2px groove;
+    padding-top: 5px;
+    padding-bottom: 10px;
+    width: 100%;
+}
+
+span.index-title-letter {
+    font-size: x-large;
+    font-weight: bold;
+    font-family: monospace;
+}
+
+table.index-table {
+    margin-left: 10px;
+    width: 100%;
+}
+
+td.index-name {
+    font-family: monospace;
+    width: 50%;
+}
+
+td.index-section {
+    width: 50%;
+}
+
+/* navigator */
+div.navigator {
+    background-color: #eeeeee;
+    position: fixed !important;
+    position: absolute;
+    top: 0px;
+    right: 0px;
+    border: 1px solid;
+}
+
+a.navigator:before {
+    content: "[ ";
+    color: black;
+    text-decoration: none;
+}
+
+a.navigator:after {
+    content: " ]";
+    color: black;
+    text-decoration: none;
+}
+
+a.navigator {
+    display: inline-block;
+    padding-left: 5px;
+    padding-right: 5px;
+}
+
+/* online document */
+section {
+    clear: both;
+}
+div.prev-next {
+    witdh: 100%;
+    position: relative;
+    padding: 10px;
+    
+}
+a.prev {
+    float: left;
+    width: 33%;
+    display: block;
+    text-align: left;
+}
+/* prev has padding */
+span.prev {
+    float: left;
+    margin-left: 33%;
+    display: block;
+    border: 1px solid;
+}
+
+a.next {
+    float: right;
+    width: 33%;
+    display: block;
+    text-align: right;
+}
+a.top {
+    width: 33%;
+    float: left;
+    display: block;
+    text-align: center;
+}
+hr {
+    clear: both;
+}
+
+ul.child-content {
+    list-style-type: none;
+}
